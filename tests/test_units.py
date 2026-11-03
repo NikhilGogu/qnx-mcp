@@ -4,16 +4,23 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shlex
+import stat
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from qnx_mcp.crash import _source_context
 from qnx_mcp.parsers import elf_info, parse_diagnostics, parse_mi_output, parse_pidin, parse_slog2
-from qnx_mcp.target import validate_mkqnximage_options
-from qnx_mcp.util import Config, QnxMcpError, check_remote_path, check_target_name, file_lock, quote_argv, run
+from qnx_mcp.target import Target, list_targets, parse_leases, validate_mkqnximage_options
+from qnx_mcp.util import (
+    CURRENT_CALL, CallContext, Config, QnxMcpError, check_host_path, check_remote_path, check_target_name, file_lock, private_dir,
+    quote_argv, run,
+)
 
 GCC_JSON = ('[{"kind": "error", "column-origin": 1, "children": [{"kind": "note", "locations": [{"caret": {"line": 1, "file": "bad.c", '
             '"column": 22}}], "message": "each undeclared identifier is reported only once"}], "locations": [{"caret": {"line": 1, '
@@ -167,3 +174,113 @@ def test_elf_info_on_host_binary():
     info = elf_info("/bin/ls")
     assert info and info["arch"] == "x86_64" and info["qnx"] is False
     assert elf_info(__file__) is None
+
+
+def test_allowlist_fails_closed():
+    for env in ({"HOME": "/tmp"}, {"HOME": "/tmp", "QNX_MCP_ALLOW_TARGETS": " , "}):
+        with pytest.raises(QnxMcpError) as e:
+            check_target_name(Config.from_env(env), "tb")
+        assert e.value.code == "target_not_allowed" and "QNX_MCP_ALLOW_TARGETS" in e.value.hint
+    assert check_target_name(Config.from_env({"HOME": "/tmp", "QNX_MCP_ALLOW_TARGETS": "*"}), "anything") == "anything"
+
+
+def test_fullmatch_rejects_trailing_newline():
+    cfg = Config.from_env({"HOME": "/tmp", "QNX_MCP_ALLOW_TARGETS": "*"})
+    for bad in ("tb\n", "tb2\n"):
+        with pytest.raises(QnxMcpError):
+            check_target_name(cfg, bad)
+    for bad in ("/tmp/x\n", "/tmp/./x", "/tmp/x/.."):
+        with pytest.raises(QnxMcpError):
+            check_remote_path(bad)
+    with pytest.raises(QnxMcpError):
+        validate_mkqnximage_options(["--hostname=dev1\n"])
+
+
+def test_leases_ignore_expired_and_prefer_newest():
+    now = 1_000_000
+    mac = "52:54:00:aa:bb:cc"
+    leases = json.dumps([
+        {"ip-address": "192.168.122.90", "mac-address": mac, "expiry-time": now - 10},
+        {"ip-address": "192.168.122.91", "mac-address": mac.upper(), "expiry-time": now + 100},
+        {"ip-address": "192.168.122.92", "mac-address": mac, "expiry-time": now + 500},
+        {"ip-address": "not-an-ip", "mac-address": mac, "expiry-time": now + 900},
+        {"ip-address": "192.168.122.93", "mac-address": "52:54:00:00:00:01", "expiry-time": now + 900},
+        {"ip-address": "192.168.122.94", "mac-address": mac, "expiry-time": 0},
+    ])
+    assert parse_leases(leases, mac, now) == ["192.168.122.94", "192.168.122.92", "192.168.122.91"]
+    assert parse_leases("garbage", mac, now) == []
+
+
+def test_mi_parser_flags_malformed_untokened_and_duplicates():
+    mi = parse_mi_output('6^done,stack=[frame={level="0"\n^done\n7^done,a="1"\n7^done,a="2"\n&"warning: x\\n"\nnoise\n')
+    assert mi["results"]["6"]["malformed"] is True
+    assert mi["untokened"] == [{"class": "done"}] and "1" not in mi["results"]
+    assert mi["duplicates"] == ["7"] and mi["results"]["7"]["a"] == "1"
+    assert mi["log"] == ["warning: x\n"] and mi["unparsed"] == ["noise"]
+
+
+def test_run_bounds_output():
+    r = run(["bash", "-c", "head -c 3000000 /dev/zero; echo err >&2"], timeout=20, max_output=1 << 20)
+    assert len(r.stdout) == 1 << 20 and r.stdout_total == 3000000 and r.truncated and r.err == "err\n"
+
+
+def test_cancel_kills_running_process():
+    ctx = CallContext()
+    out: dict = {}
+
+    def work():
+        tok = CURRENT_CALL.set(ctx)
+        try:
+            run(["sleep", "30"], timeout=60)
+        except QnxMcpError as e:
+            out["code"] = e.code
+        finally:
+            CURRENT_CALL.reset(tok)
+
+    th = threading.Thread(target=work)
+    t0 = time.monotonic()
+    th.start()
+    time.sleep(0.5)
+    ctx.cancel()
+    th.join(10)
+    assert out.get("code") == "cancelled" and time.monotonic() - t0 < 5
+
+
+def test_private_dir_mode_and_symlink_refusal(tmp_path: Path):
+    d = private_dir(tmp_path / "a" / "b")
+    assert stat.S_IMODE(os.stat(d).st_mode) == 0o700 and stat.S_IMODE(os.stat(tmp_path / "a").st_mode) == 0o700
+    (tmp_path / "link").symlink_to(tmp_path / "a")
+    with pytest.raises(QnxMcpError):
+        private_dir(tmp_path / "link")
+
+
+def test_symlinked_target_is_refused(tmp_path: Path):
+    other = tmp_path / "elsewhere" / "t0"
+    (other / "local").mkdir(parents=True)
+    (other / "local" / "options").write_text("OPT_ARCH='x86_64'\n")
+    (tmp_path / "targets").mkdir()
+    (tmp_path / "targets" / "tb3").symlink_to(other)
+    cfg = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "state"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*"})
+    with pytest.raises(QnxMcpError) as e:
+        Target(cfg, "tb3")
+    assert e.value.code == "target_not_allowed"
+    assert list_targets(cfg) == []
+
+
+def test_workspace_confines_host_paths(tmp_path: Path):
+    ws = (tmp_path / "ws").resolve()
+    ws.mkdir()
+    (ws / "a.c").write_text("x\n")
+    (tmp_path / "secret.c").write_text("s\n")
+    (ws / "link.c").symlink_to(tmp_path / "secret.c")
+    (ws / "notes.txt").write_text("t\n")
+    cfg = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_WORKSPACE": str(ws), "QNX_MCP_ALLOW_TARGETS": "*"})
+    assert check_host_path(cfg, str(ws / "a.c"), "f") == ws / "a.c"
+    for p in (tmp_path / "secret.c", ws / "link.c"):
+        with pytest.raises(QnxMcpError) as e:
+            check_host_path(cfg, str(p), "f")
+        assert e.value.code == "path_not_allowed"
+    assert _source_context(cfg, str(ws / "a.c"), 1)[0]["text"] == "x"
+    assert _source_context(cfg, str(ws / "link.c"), 1) is None  # DWARF path pointing outside the workspace
+    assert _source_context(cfg, str(ws / "notes.txt"), 1) is None  # not a C/C++ source

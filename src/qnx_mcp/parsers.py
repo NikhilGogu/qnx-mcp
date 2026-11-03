@@ -146,7 +146,8 @@ class MIParseError(ValueError):
 
 
 def _mi_cstring(s: str, i: int) -> tuple[str, int]:
-    assert s[i] == '"'
+    if i >= len(s) or s[i] != '"':
+        raise MIParseError(f"expected a c-string at {i}")
     i += 1
     buf = []
     esc = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "e": "\x1b"}
@@ -215,55 +216,79 @@ def _mi_value(s: str, i: int) -> tuple[Any, int]:
 
 
 def _mi_result(s: str, i: int) -> tuple[str, Any, int]:
-    j = s.index("=", i)
-    key = s[i:j]
+    j = s.find("=", i)
+    if j <= i or not re.fullmatch(r"[A-Za-z0-9_-]+", s[i:j]):
+        raise MIParseError(f"expected name=value at {i}")
+    if j + 1 >= len(s):
+        raise MIParseError("value missing at end of record")
     v, k = _mi_value(s, j + 1)
-    return key, v, k
+    return s[i:j], v, k
 
 
 def parse_mi_results(body: str) -> dict[str, Any]:
-    """Parse the `a=..,b=..` part of an MI record into a dict."""
+    """Parse the `a=..,b=..` part of an MI record into a dict (raises MIParseError when malformed)."""
     res: dict[str, Any] = {}
     i = 0
-    while i < len(body):
-        k, v, i = _mi_result(body, i)
-        res[k] = v
-        if i < len(body) and body[i] == ",":
-            i += 1
+    try:
+        while i < len(body):
+            k, v, i = _mi_result(body, i)
+            res[k] = v
+            if i < len(body):
+                if body[i] != ",":
+                    raise MIParseError(f"expected ',' at {i}")
+                i += 1
+    except IndexError:
+        raise MIParseError("record ends in the middle of a value") from None
     return res
 
 
-_MI_RECORD = re.compile(r"^(?P<token>\d*)(?P<kind>[\^*+=])(?P<cls>[a-z-]+)(?:,(?P<body>.*))?$")
+_MI_RECORD = re.compile(r"(?P<token>\d*)(?P<kind>[\^*+=])(?P<cls>[a-z-]+)(?:,(?P<body>.*))?")
 
 
 def parse_mi_output(text: str) -> dict[str, Any]:
-    """Split GDB/MI output into result records by token, console text and async records."""
+    """Split GDB/MI output into result records by token, stream records and async records.
+
+    A result record whose body does not parse is kept as {"class": ..., "malformed": True}
+    so callers can refuse it instead of treating it as an empty success. Results without
+    a token are kept apart from tokened ones, and a token seen twice is reported.
+    """
     results: dict[str, dict[str, Any]] = {}
+    untokened: list[dict[str, Any]] = []
+    duplicates: list[str] = []
     console: list[str] = []
+    log: list[str] = []
     asyncs: list[dict[str, Any]] = []
-    for line in text.splitlines():
+    unparsed: list[str] = []
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
         if not line or line.startswith("(gdb)"):
             continue
         if line[0] in "~@&":
-            if len(line) > 1 and line[1] == '"':
-                try:
-                    console.append(_mi_cstring(line, 1)[0])
-                except (MIParseError, IndexError):
-                    console.append(line[1:])
+            try:
+                textv = _mi_cstring(line, 1)[0]
+            except MIParseError:
+                unparsed.append(line[:200])
+                continue
+            (log if line[0] == "&" else console).append(textv)
             continue
-        m = _MI_RECORD.match(line)
+        m = _MI_RECORD.fullmatch(line)
         if not m:
+            unparsed.append(line[:200])
             continue
         try:
-            body = parse_mi_results(m.group("body")) if m.group("body") else {}
-        except (MIParseError, ValueError, IndexError):
-            body = {"_unparsed": m.group("body")}
-        rec = {"class": m.group("cls"), **body}
-        if m.group("kind") == "^":
-            results[m.group("token") or str(len(results))] = rec
-        else:
+            rec = {"class": m.group("cls"), **(parse_mi_results(m.group("body")) if m.group("body") else {})}
+        except MIParseError as e:
+            rec = {"class": m.group("cls"), "malformed": True, "parse_error": str(e), "raw": (m.group("body") or "")[:300]}
+        if m.group("kind") != "^":
             asyncs.append(rec)
-    return {"results": results, "console": console, "async": asyncs}
+        elif not m.group("token"):
+            untokened.append(rec)
+        elif m.group("token") in results:
+            duplicates.append(m.group("token"))
+        else:
+            results[m.group("token")] = rec
+    return {"results": results, "untokened": untokened, "duplicates": duplicates, "console": console, "log": log,
+            "async": asyncs, "unparsed": unparsed}
 
 
 # ---------------------------------------------------------------- pidin
@@ -390,6 +415,7 @@ def elf_info(path: str) -> dict[str, Any] | None:
                 p_offset, _, _, p_filesz = struct.unpack_from(end + "IIII", data, off + 4)
             interp = data[p_offset : p_offset + p_filesz].rstrip(b"\0").decode("ascii", "replace")
     names: list[str] = []
+    build_id = None
     try:
         def sh(idx: int) -> tuple[int, int, int]:
             off = e_shoff + idx * e_shentsize
@@ -402,8 +428,12 @@ def elf_info(path: str) -> dict[str, Any] | None:
         _, str_off, str_size = sh(e_shstrndx)
         strtab = data[str_off : str_off + str_size]
         for i in range(e_shnum):
-            n_off = sh(i)[0]
+            n_off, s_off, s_size = sh(i)
             names.append(strtab[n_off : strtab.index(b"\0", n_off)].decode("ascii", "replace"))
+            if names[-1] == ".note.gnu.build-id":
+                for owner, ntype, desc in _notes(data[s_off : s_off + s_size], end):
+                    if owner == b"GNU" and ntype == 3:  # NT_GNU_BUILD_ID
+                        build_id = desc.hex()
     except (struct.error, ValueError, IndexError):
         pass
     return {
@@ -412,5 +442,45 @@ def elf_info(path: str) -> dict[str, Any] | None:
         "interpreter": interp,
         "qnx": None if interp is None else ("ldqnx" in interp),
         "debug_info": ".debug_info" in names,
+        "build_id": build_id,
         "size": len(data),
     }
+
+
+def _notes(blob: bytes, end: str) -> list[tuple[bytes, int, bytes]]:
+    """Generic ELF note records (namesz, descsz, type, name, desc; 4-byte aligned)."""
+    out = []
+    i = 0
+    while i + 12 <= len(blob):
+        namesz, descsz, ntype = struct.unpack_from(end + "III", blob, i)
+        name_end = i + 12 + namesz
+        desc_start = i + 12 + ((namesz + 3) & ~3)
+        desc_end = desc_start + descsz
+        if desc_end > len(blob):
+            break
+        out.append((blob[i + 12 : name_end].rstrip(b"\0"), ntype, blob[desc_start:desc_end]))
+        i = desc_start + ((descsz + 3) & ~3)
+    return out
+
+
+def core_note_bytes(path: str, limit: int = 16 << 20) -> bytes | None:
+    """Concatenated PT_NOTE segments of an ELF core file (generic ELF program headers only)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+            if len(head) < 64 or head[:4] != b"\x7fELF" or head[4] != 2:
+                return None
+            end = "<" if head[5] == 1 else ">"
+            (e_phoff,) = struct.unpack_from(end + "Q", head, 32)
+            e_phentsize, e_phnum = struct.unpack_from(end + "HH", head, 54)
+            f.seek(e_phoff)
+            ph = f.read(e_phentsize * e_phnum)
+            out = bytearray()
+            for n in range(e_phnum):
+                p_type, _, p_offset, _, _, p_filesz = struct.unpack_from(end + "IIQQQQ", ph, n * e_phentsize)
+                if p_type == 4 and p_filesz <= limit - len(out):
+                    f.seek(p_offset)
+                    out += f.read(p_filesz)
+            return bytes(out)
+    except (OSError, struct.error):
+        return None

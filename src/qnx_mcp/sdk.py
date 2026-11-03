@@ -9,11 +9,12 @@ import os
 import shutil
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import Config, QnxMcpError, run, tail
+from .util import Config, QnxMcpError, check_host_path, private_dir, run, tail, within
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -77,8 +78,8 @@ def runner_binary(cfg: Config, arch: str) -> tuple[Path, str]:
     if out.is_file():
         return out, digest
     env = sdk_env(cfg)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(f".tmp{os.getpid()}")
+    private_dir(out.parent)
+    tmp = out.with_name(f".qnx-mcp-run.{uuid.uuid4().hex[:8]}.tmp")
     variant = ARCHES[check_arch(arch)][0]
     r = run(
         [sdk_tool(env, "qcc"), f"-V{variant}", "-O2", "-Wall", f'-DQMR_VERSION="{digest}"', "-o", str(tmp), str(src)],
@@ -150,9 +151,7 @@ def build(
 ) -> dict[str, Any]:
     check_arch(arch)
     variant, _, proc = ARCHES[arch]
-    root = Path(path).expanduser().resolve()
-    if not root.exists():
-        raise QnxMcpError("invalid_argument", f"path does not exist on the build host: {root}")
+    root = check_host_path(cfg, path, "path", kind="any")
     env = sdk_env(cfg)
     if root.is_file():
         sources = [str(root)] + list(sources or [])
@@ -189,6 +188,12 @@ def build(
         out_path = Path(output).expanduser() if output else root / Path(sources[0]).stem
         if not out_path.is_absolute():
             out_path = root / out_path
+        if cfg.workspace and not within(out_path.parent, cfg.workspace):
+            raise QnxMcpError("path_not_allowed", f"output {out_path} is outside the workspace", hint="Write build outputs inside QNX_MCP_WORKSPACE.")
+        for src_ in sources:
+            sp = Path(src_) if os.path.isabs(src_) else root / src_
+            if cfg.workspace and not within(sp, cfg.workspace):
+                raise QnxMcpError("path_not_allowed", f"source {sp} is outside the workspace", hint="Use sources inside QNX_MCP_WORKSPACE.")
         argv = [sdk_tool(env, "q++" if is_cxx else "qcc"), f"-V{variant}{'_cxx' if is_cxx else ''}", "-fdiagnostics-format=json"]
         argv += list(cflags) if cflags is not None else ["-g", "-O0", "-Wall"]
         argv += ["-o", str(out_path), *sources, *(ldflags or [])]
