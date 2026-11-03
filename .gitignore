@@ -1,0 +1,6 @@
+__pycache__/
+*.egg-info/
+.pytest_cache/
+build-qnx-*/
+examples/crash_demo/crash_demo
+*.core

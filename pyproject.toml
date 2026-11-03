@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qnx-mcp"
+version = "0.1.0"
+description = "MCP server giving AI coding agents structured, safe tools for QNX OS 8.0 targets"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["mcp>=2.3,<3", "pydantic>=2.7"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+qnx-mcp = "qnx_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+qnx_mcp = ["runner/*.c"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["target: needs a running QNX target (QNX_MCP_E2E_TARGET)", "sdk: needs the QNX SDP on this host"]
