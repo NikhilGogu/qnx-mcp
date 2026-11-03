@@ -55,6 +55,7 @@ class Config:
     ssh_key: Path
     leases: Path
     workspace: tuple[Path, ...] = ()
+    trust_first_use: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -72,6 +73,7 @@ class Config:
             ssh_key=Path(env.get("QNX_MCP_SSH_KEY", str(home / ".ssh" / "id_ed25519"))),
             leases=Path(env.get("QNX_MCP_DHCP_LEASES", "/var/lib/libvirt/dnsmasq/virbr0.status")),
             workspace=workspace,
+            trust_first_use=env.get("QNX_MCP_TRUST_FIRST_USE", "") == "1",
         )
 
     def allowed(self, name: str) -> bool:
@@ -113,12 +115,13 @@ def check_target_name(cfg: Config, name: str) -> str:
 
 
 def check_remote_path(path: str, what: str = "remote path") -> str:
-    parts = (path or "").split("/")
-    if not isinstance(path, str) or not REMOTE_PATH_RE.fullmatch(path) or ".." in parts or "." in parts[1:]:
+    """Absolute, normalised (no empty, '.' or '..' components, no trailing '/'), safe characters only."""
+    parts = path.split("/")[1:] if isinstance(path, str) else [""]
+    if not isinstance(path, str) or not REMOTE_PATH_RE.fullmatch(path) or any(c in ("", ".", "..") for c in parts):
         raise QnxMcpError(
             "invalid_argument",
             f"unsafe {what} {path!r}",
-            hint="Use an absolute path made of letters, digits and . _ + - / only, without '.' or '..' components.",
+            hint="Use a normalised absolute path (letters, digits and . _ + - / only; no '//', '.', '..' or trailing '/').",
         )
     return path
 
@@ -228,6 +231,16 @@ _ACTIVE: set[subprocess.Popen] = set()
 _ACTIVE_LOCK = threading.Lock()
 
 
+@contextlib.contextmanager
+def uncancellable() -> Iterator[None]:
+    """For bounded clean-up after a failure or cancellation: commands inside are not tied to the call."""
+    token = CURRENT_CALL.set(None)
+    try:
+        yield
+    finally:
+        CURRENT_CALL.reset(token)
+
+
 def check_cancelled() -> None:
     ctx = CURRENT_CALL.get()
     if ctx is not None and ctx.cancelled:
@@ -271,27 +284,49 @@ class ProcResult:
     def truncated(self) -> bool:
         return self.stdout_total > len(self.stdout) or self.stderr_total > len(self.stderr)
 
+    def streamed_over(self, cap: int) -> bool:
+        return self.stdout_total > cap
+
 
 def _kill_group(p: subprocess.Popen) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(p.pid, signal.SIGKILL)
 
 
-def _drain(stream: Any, cap: int, box: list) -> None:
-    """Read a pipe to EOF, keeping at most cap bytes (the rest is counted, not stored)."""
-    kept = bytearray()
-    total = 0
-    try:
-        while True:
-            chunk = stream.read1(65536) if hasattr(stream, "read1") else stream.read(65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if len(kept) < cap:
-                kept += chunk[: cap - len(kept)]
-    except (OSError, ValueError):
-        pass
-    box[0], box[1] = bytes(kept), total
+class _Drain:
+    """Reads one pipe to EOF in a thread, keeping at most cap bytes (the rest is counted, not stored).
+    Data is available at any time, so a reader that never sees EOF still yields what arrived."""
+
+    def __init__(self, stream: Any, cap: int, sink: Any = None):
+        self.kept = bytearray()
+        self.total = 0
+        self.cap = cap
+        self.sink = sink  # file object: stream into it instead of memory, stop at cap
+        self.exceeded = False
+        self.thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
+        self.thread.start()
+
+    def _run(self, stream: Any) -> None:
+        try:
+            while True:
+                chunk = stream.read1(65536)
+                if not chunk:
+                    break
+                self.total += len(chunk)
+                if self.sink is not None:
+                    room = self.cap - (self.total - len(chunk))
+                    if room > 0:
+                        self.sink.write(chunk[:room])
+                    if self.total > self.cap:
+                        self.exceeded = True
+                        break
+                elif len(self.kept) < self.cap:
+                    self.kept += chunk[: self.cap - len(self.kept)]
+        except (OSError, ValueError):
+            pass
+
+    def data(self) -> bytes:
+        return bytes(self.kept)
 
 
 def run(
@@ -304,15 +339,19 @@ def run(
     log_path: Path | None = None,
     max_output: int = 8 << 20,
     hold_stdin: bool = False,
+    stdout_file: Any = None,
 ) -> ProcResult:
     """Run argv (never through a shell) with a hard timeout and bounded output capture.
 
     The child gets its own session so that on timeout or cancellation the whole process
     group (ssh, make, compilers...) is killed. Each of stdout and stderr keeps at most
-    max_output bytes; the rest is drained and counted (ProcResult.truncated). With
-    log_path, output goes to that file instead (for mkqnximage --run, which leaves QEMU
-    running in the background). hold_stdin keeps the child's stdin open until it exits,
-    so a remote qnx-mcp-run -S notices when this process kills ssh.
+    max_output bytes; the rest is drained and counted (ProcResult.truncated). If the child
+    exits but something it started keeps the pipes open, the group is killed after 2 s and
+    the output that arrived is returned. With stdout_file, stdout is streamed into that file
+    and the command is killed as soon as it exceeds max_output bytes (ProcResult.truncated).
+    With log_path, output goes to that file instead (for mkqnximage --run, which leaves QEMU
+    running in the background on purpose, so its group is not killed). hold_stdin keeps the
+    child's stdin open until it exits, so a remote qnx-mcp-run -S notices when ssh is killed.
     """
     check_cancelled()
     argv = [str(a) for a in argv]
@@ -339,42 +378,49 @@ def run(
                 ctx.procs.add(p)
                 if ctx.cancelled:
                     _kill_group(p)
-        boxes: list[list] = []
-        threads: list[threading.Thread] = []
-        for stream in (p.stdout, p.stderr):
-            box: list = [b"", 0]
-            boxes.append(box)
-            if stream is not None:
-                th = threading.Thread(target=_drain, args=(stream, max_output, box), daemon=True)
-                th.start()
-                threads.append(th)
-        if p.stdin is not None:
-            if input is not None:
-                def feed() -> None:
+        drains = [] if log_f else [_Drain(p.stdout, max_output, stdout_file), _Drain(p.stderr, max_output)]
+        if p.stdin is not None and input is not None:
+            def feed() -> None:
+                with contextlib.suppress(OSError, ValueError):
+                    p.stdin.write(input)
+                    p.stdin.flush()
+                if not hold_stdin:
                     with contextlib.suppress(OSError, ValueError):
-                        p.stdin.write(input)
-                        p.stdin.flush()
-                    if not hold_stdin:
-                        with contextlib.suppress(OSError, ValueError):
-                            p.stdin.close()
-                threading.Thread(target=feed, daemon=True).start()
+                        p.stdin.close()
+            threading.Thread(target=feed, daemon=True).start()
         timed_out = False
-        try:
-            p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(p)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                p.wait(timeout=5)
+        deadline = start + timeout
+        while True:
+            try:
+                p.wait(timeout=0.05 if drains and stdout_file is not None else max(0.0, deadline - time.monotonic()))
+                break
+            except subprocess.TimeoutExpired:
+                if drains and drains[0].exceeded:
+                    _kill_group(p)  # streamed output went over the cap: stop the transfer now
+                elif time.monotonic() >= deadline:
+                    timed_out = True
+                    _kill_group(p)
+                else:
+                    continue
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    p.wait(timeout=5)
+                break
         if p.stdin is not None:
             with contextlib.suppress(OSError, ValueError):
                 p.stdin.close()
-        # A grandchild may hold the pipes after the child exits; do not wait for it forever.
-        for th in threads:
-            th.join(timeout=2)
-        out, out_total = boxes[0][0], boxes[0][1]
-        err, err_total = (boxes[1][0], boxes[1][1]) if len(boxes) > 1 else (b"", 0)
-        res = ProcResult(argv, None if timed_out else p.returncode, out, err, timed_out, time.monotonic() - start, out_total, err_total)
+        grace = time.monotonic() + 2  # one shared grace period, not one per pipe
+        for d in drains:
+            d.thread.join(timeout=max(0.0, grace - time.monotonic()))
+        if any(d.thread.is_alive() for d in drains):
+            _kill_group(p)  # descendants still hold the pipes: kill them, keep what arrived
+            for d in drains:
+                d.thread.join(timeout=1)
+        out = drains[0].data() if drains else b""
+        err = drains[1].data() if drains else b""
+        res = ProcResult(argv, None if timed_out else p.returncode, out, err, timed_out, time.monotonic() - start,
+                         drains[0].total if drains else 0, drains[1].total if drains else 0)
+        if drains and stdout_file is not None and drains[0].exceeded:
+            res.stdout_total = max(res.stdout_total, max_output + 1)
     finally:
         if log_f:
             log_f.close()
