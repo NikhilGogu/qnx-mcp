@@ -203,7 +203,7 @@ Type this prompt into your agent:
 What qnx tools do you have? Run environment_check and tell me if anything needs fixing.
 ```
 
-The agent should list 17 tools (`target_create`, `build`, `deploy_and_run`, `get_crash`, `processes`, `logs` and so on), call `environment_check` and report that every required check passes.
+The agent should list 19 tools (`target_create`, `build`, `deploy_and_run`, `get_crash`, `processes`, `logs` and so on), call `environment_check` and report that every required check passes.
 
 ---
 
