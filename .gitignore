@@ -5,3 +5,5 @@ build-qnx-*/
 examples/crash_demo/crash_demo
 *.core
 examples/crash_demo/crash
+codelab/examples/sensor/sensor
+codelab/examples/hub/hub

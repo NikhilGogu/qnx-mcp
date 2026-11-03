@@ -1,0 +1,23 @@
+# Copyright 2026 The qnx-mcp authors
+# SPDX-License-Identifier: Apache-2.0
+# Bench recording, IMU and barometer, one reading per line: channel,raw
+accel_x,14
+accel_y,-5
+accel_z,1003
+gyro_z,31
+baro,101318
+accel_x,9
+accel_y,-9
+accel_z,1001
+gyro_z,612
+baro,101322
+accel_x,17
+accel_y,-6
+accel_z,1004
+gyro_z,-40
+baro,101325
+accel_x,11
+accel_y,-8
+accel_z,1002
+gyro_z,12
+baro,101327
