@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from jsonschema.validators import validator_for
@@ -122,3 +125,15 @@ def test_destroy_refuses_symlinked_target(tmp_path: Path):
             assert err and data["error"]["code"] == "target_not_allowed", data
     run_async(go())
     assert (real / "local" / "options").is_file()
+
+
+def test_check_cli_reports_failures_with_fixes(tmp_path: Path):
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "missing-qnxsdp-env.sh"),
+           **_env(tmp_path, allow="")}
+    p = subprocess.run([sys.executable, "-m", "qnx_mcp.server", "--check"], env=env, capture_output=True, text=True, timeout=60)
+    lines = p.stdout.splitlines()
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert any(line.startswith("FAIL  qnx_sdp") for line in lines)
+    assert any(line.startswith("FAIL  allowlist") for line in lines)
+    assert any("fix: Set QNX_MCP_ALLOW_TARGETS" in line for line in lines)
+    assert lines[-1].startswith("environment_check: FAILED")

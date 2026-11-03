@@ -759,5 +759,7 @@ def environment_check(cfg: Config) -> dict[str, Any]:
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")
     add("targets_dir", True, str(cfg.targets_dir))
     add("workspace", True, ", ".join(str(w) for w in cfg.workspace) if cfg.workspace else "not set: host paths are not confined (set QNX_MCP_WORKSPACE to confine them)")
-    optional = ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb")
-    return {"ok": all(c["ok"] for c in checks if c["check"] not in optional), "checks": checks}
+    for c in checks:
+        if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):
+            c["optional"] = True
+    return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks}

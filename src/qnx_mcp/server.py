@@ -750,11 +750,25 @@ def _envelope_schemas() -> None:
 _envelope_schemas()
 
 
+def check_cli() -> int:
+    """`qnx-mcp --check`: environment_check for a person at a terminal, before any agent is connected."""
+    r = ops.environment_check(CFG)
+    for c in r["checks"]:
+        status = "ok" if c["ok"] else "warn" if c.get("optional") else "FAIL"
+        print(f"{status:4}  {c['check']:24}  {c['detail']}")
+        if c.get("fix"):
+            print(f"{'':4}  {'':24}  fix: {c['fix']}")
+    print("environment_check: ok" if r["ok"] else "environment_check: FAILED, see the fixes above")
+    return 0 if r["ok"] else 1
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
         print(f"qnx-mcp {__version__}")
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        sys.exit(check_cli())
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # runs atexit: no host child outlives the server
     try:
         private_dir(CFG.state_dir)  # cores, logs and run records stay readable by this user only
