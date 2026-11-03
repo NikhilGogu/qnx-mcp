@@ -101,15 +101,24 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
         note = core_read(str(core), lo, hi - lo) if 0 < hi - lo <= 4096 else None
         core_bid = gnu_build_id(note) if note else None
     bin_bid = bin_info.get("build_id")
+    remote = bool(rec and rec.get("remote_binary"))
     ev = {
-        "source": "run_record" if rec else "manual", "binary_sha256": bin_sha, "binary_build_id": bin_bid,
+        "source": "remote_run" if remote else "run_record" if rec else "manual", "binary_sha256": bin_sha, "binary_build_id": bin_bid,
         "core_executable": exe, "core_pid": core_pid, "core_build_id": core_bid,
         "build_id_match": (core_bid == bin_bid) if core_bid and bin_bid else None,
-        "executable_match": (exe == rec["remote_path"]) if rec else None,
+        "executable_match": (exe in (rec["remote_path"], rec.get("remote_real_path"))) if rec else None,
         "pid_match": (core_pid == rec.get("pid")) if rec else None,
         "core_sha256": info["sha256"], "core_size": info["size"],
     }
+    if remote:
+        # The program came from the target: the host binary is only trusted if its build ID matches the core's,
+        # or if it is byte for byte the file that was started (SHA-256 taken on the target before the run).
+        ev["target_binary_sha256"] = rec.get("binary_sha256")
+        ev["same_file_as_target"] = bin_sha == rec.get("binary_sha256")
     problems = []
+    if remote and ev["build_id_match"] is None and not ev["same_file_as_target"]:
+        problems.append(f"cannot tell whether {binary.name} is the build of {rec['remote_path']} that crashed: it is not the same file and "
+                        + ("the binary has no GNU build ID" if not bin_bid else "the core holds no build ID note"))
     if rec is not None:
         if not ev["executable_match"]:
             problems.append(f"the core names executable {exe!r}, the run deployed {rec['remote_path']}")
@@ -148,8 +157,8 @@ def get_crash(
     t = Target(cfg, target)
     if not 1 <= max_frames <= 256 or not 0 <= locals_frames <= 16 or not 1 <= max_core_mb <= 4096:
         raise QnxMcpError("invalid_argument", "max_frames must be 1-256, locals_frames 0-16, max_core_mb 1-4096")
-    if core_path or binary:
-        if run_id or not (core_path and binary):
+    if core_path:
+        if run_id or not binary:
             raise QnxMcpError("invalid_argument", "pass either run_id, or both core_path and binary", hint="Omit everything to analyse the newest crashed run.")
         remote_core = check_remote_path(core_path, "core_path")
         local_bin = check_host_path(cfg, binary, "binary")
@@ -163,9 +172,19 @@ def get_crash(
             raise QnxMcpError("core_not_found", "no crashed run with a core file is recorded" + (f" for {run_id}" if run_id else " for this target"),
                               hint="Run the program with deploy_and_run first, or pass core_path and binary explicitly.")
         remote_core = check_remote_path(rec["core_path"], "core_path")
-        local_bin = Path(rec["binary_snapshot"])
-        if not local_bin.is_file():
-            raise QnxMcpError("core_not_found", f"the binary snapshot of run {rec['run_id']} was pruned", hint="Rerun the program to get a fresh crash.")
+        if rec.get("remote_binary"):
+            if not binary:
+                raise QnxMcpError("invalid_argument", f"run {rec['run_id']} started {rec['remote_path']}, a program that was already on the target, "
+                                  "so qnx-mcp has no copy of it to read symbols from",
+                                  hint=f"Call get_crash with run_id={rec['run_id']!r} and binary=<host path of the unstripped build of that program>.")
+            local_bin = check_host_path(cfg, binary, "binary")
+        else:
+            if binary:
+                raise QnxMcpError("invalid_argument", f"run {rec['run_id']} deployed a host binary; get_crash uses the snapshot taken at deploy time",
+                                  hint="Omit binary; pass core_path and binary only for a core that no run produced.")
+            local_bin = Path(rec["binary_snapshot"])
+            if not local_bin.is_file():
+                raise QnxMcpError("core_not_found", f"the binary snapshot of run {rec['run_id']} was pruned", hint="Rerun the program to get a fresh crash.")
         dl_dir = private_dir(runs_dir(t) / rec["run_id"] / "cores" / uuid.uuid4().hex[:12])
 
     limit = max_core_mb << 20
@@ -195,7 +214,7 @@ def get_crash(
 
     bin_info = elf_info(str(local_bin)) or {}
     bin_sha = _sha256_file(local_bin)
-    if rec is not None and bin_sha != rec.get("binary_sha256"):
+    if rec is not None and not rec.get("remote_binary") and bin_sha != rec.get("binary_sha256"):
         raise QnxMcpError("core_mismatch", f"the binary snapshot of run {rec['run_id']} no longer has the SHA-256 that was deployed",
                           hint="The snapshot in the server state was modified; rerun the program.")
 
@@ -323,6 +342,6 @@ def get_crash(
         "core_path_target": remote_core,
         "core_path_local": str(core),
         "binary": str(local_bin),
-        "binary_original": (rec or {}).get("binary", str(local_bin)),
+        "binary_original": (rec or {}).get("binary") or str(local_bin),
         "gdb_warnings": warnings,
     }

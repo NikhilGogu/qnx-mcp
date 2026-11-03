@@ -1,6 +1,6 @@
 # Copyright 2026 The qnx-mcp authors
 # SPDX-License-Identifier: Apache-2.0
-"""Target operations: deploy and run (one-shot and background), file transfer, processes, logs, environment checks."""
+"""Target operations: deploy and run (one-shot and background), file transfer and listing, processes, logs, environment checks."""
 
 from __future__ import annotations
 
@@ -34,6 +34,10 @@ INLINE_TEXT = 64 << 10
 WRITE_ROOTS = ("/tmp", "/data")
 IN_FLIGHT = ("starting", "running")
 POLL_MAX_KB = 1024
+LIST_MAX = 1000
+STOP_ROOTS = ("/tmp", "/data")
+SYSTEM_DIRS = ("/proc/boot", "/bin", "/sbin", "/usr", "/system")
+STOP_SIGNALS = ("TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "KILL")
 _sha_cache: dict[tuple[str, int, int], str] = {}
 _sha_lock = threading.Lock()
 
@@ -180,7 +184,7 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     if prune:
         flight = _in_flight(t)
         keep_runs = [x for r in flight for x in ("-p", r["run_id"])] + [x for d in mkdirs if d.startswith(f"{REMOTE_ROOT}/runs/") for x in ("-p", os.path.basename(d))]
-        keep_apps = [x for r in flight if r.get("remote_path") for x in ("-p", r["remote_path"].split("/")[-2])]
+        keep_apps = [x for r in flight if (r.get("remote_path") or "").startswith(f"{REMOTE_ROOT}/apps/") for x in ("-p", r["remote_path"].split("/")[-2])]
         keep_apps += [x for f in files if f[1].startswith(f"{REMOTE_ROOT}/apps/") for x in ("-p", f[1].split("/")[-2])]
         ver = quote_argv([f"qnx-mcp-run {digest}"])
         parts.append(f"if test \"$(\"$R\" -V 2>/dev/null)\" = {ver}; then "
@@ -244,7 +248,21 @@ def _discard_unrecorded(t: Target, rid: str) -> Any:
         raise
 
 
-def _staged(cfg: Config, t: Target, binary: str, rid: str) -> tuple[Path, Path, str, dict[str, Any], str]:
+def _in_managed_dir(path: str) -> bool:
+    return path == REMOTE_ROOT or path.startswith(REMOTE_ROOT + "/")
+
+
+def _program(cfg: Config, t: Target, binary: str | None, remote_binary: str | None, rid: str) -> dict[str, Any]:
+    """What a run starts: a snapshot of a host binary (uploaded content-addressed), or a program already on the target."""
+    if (binary is None) == (remote_binary is None):
+        raise QnxMcpError("invalid_argument", "pass exactly one of binary (a host path) and remote_binary (a path on the target)",
+                          hint="Use binary for something you built, remote_binary for a program installed on the target.")
+    if remote_binary is not None:
+        remote = check_remote_path(remote_binary, "remote_binary")
+        if _in_managed_dir(remote):
+            raise QnxMcpError("path_not_allowed", f"remote_binary may not be inside {REMOTE_ROOT}: {remote}",
+                              hint="Run your own builds with binary=<host path>; remote_binary is for programs installed on the target.")
+        return {"remote_binary": True, "binary": None, "binary_snapshot": None, "binary_sha256": None, "build_id": None, "remote_path": remote}
     local = check_host_path(cfg, binary, "binary")
     if not REMOTE_NAME_RE.fullmatch(local.name):
         raise QnxMcpError("invalid_argument", f"binary file name {local.name!r} has unsupported characters", hint="Use letters, digits, '.', '_', '+' and '-'.")
@@ -253,7 +271,58 @@ def _staged(cfg: Config, t: Target, binary: str, rid: str) -> tuple[Path, Path, 
     except BaseException:
         shutil.rmtree(runs_dir(t) / rid, ignore_errors=True)
         raise
-    return local, snap, sha, info, f"{REMOTE_ROOT}/apps/{sha[:16]}/{local.name}"
+    return {"remote_binary": False, "binary": str(local), "binary_snapshot": str(snap), "binary_sha256": sha, "build_id": info.get("build_id"),
+            "remote_path": f"{REMOTE_ROOT}/apps/{sha[:16]}/{local.name}", "size": info["size"]}
+
+
+def _runner_refusal(text: str) -> tuple[str, str | None, dict[str, Any]] | None:
+    """(usage_error, errno text, whole report) when the runner refused a request, else None."""
+    with contextlib.suppress(ValueError):
+        res = json.loads(text.strip())
+        if isinstance(res, dict) and res.get("runner") == "qnx-mcp-run" and "usage_error" in res:
+            return res["usage_error"], res.get("error"), res
+    return None
+
+
+def _install_program(t: Target, ip: str, prog: dict[str, Any], remote_run: str) -> str:
+    """Upload the runner (and a host binary); for a target program, check it exists, is executable and is
+    outside qnx-mcp's directory (by real path), and record its SHA-256. Returns the runner's path."""
+    if not prog["remote_binary"]:
+        return prepare(t, ip, [(Path(prog["binary_snapshot"]), prog["remote_path"], prog["binary_sha256"], prog["size"], "0755")], [remote_run], prune=True)
+    runner = prepare(t, ip, [], [remote_run], prune=True)
+    remote = prog["remote_path"]
+    r = t.ssh([runner, "-H", remote, "-x", REMOTE_ROOT], timeout=60, what="remote_binary check", ip=ip, check=False)
+    refused = _runner_refusal(r.out)
+    if refused:
+        msg, err, _ = refused
+        if "own directory" in msg:
+            raise QnxMcpError("path_not_allowed", f"{remote} resolves into {REMOTE_ROOT}", hint="remote_binary is for programs installed on the target, not qnx-mcp's files.")
+        if msg == "open" and err == "No such file or directory":
+            raise QnxMcpError("file_not_found", f"{remote} does not exist on {t.name}", hint="Check the path with file_list or processes (path column).")
+        raise QnxMcpError("invalid_argument", f"{remote} cannot be run: {msg}" + (f" ({err})" if err else ""), hint="remote_binary must name an executable regular file.")
+    info = _parse_runner(r.out, "remote_binary check")
+    if not info.get("executable"):
+        raise QnxMcpError("invalid_argument", f"{remote} is not executable (mode {info.get('mode')})",
+                          hint="Copy it again with file_put and mode='0755', or name the installed executable.")
+    prog.update(binary_sha256=info["sha256"], remote_real_path=info["real_path"], remote_size=info["size"])
+    return runner
+
+
+def _program_argv(prog: dict[str, Any]) -> list[str]:
+    """Runner options before '--': a target program is checked again just before it starts."""
+    return ["-x", REMOTE_ROOT] if prog["remote_binary"] else []
+
+
+def _record_fields(prog: dict[str, Any]) -> dict[str, Any]:
+    keys = ("binary", "binary_snapshot", "binary_sha256", "build_id", "remote_path", "remote_binary", "remote_real_path")
+    return {k: prog.get(k) for k in keys}
+
+
+def _crash_step(target: str, rid: str, rec: dict[str, Any]) -> str:
+    if rec.get("remote_binary"):
+        return (f"call get_crash with target={target!r}, run_id={rid!r} and binary=<host path of the unstripped build of {rec['remote_path']}>; "
+                "the program came from the target, so qnx-mcp holds no copy of it to read symbols from")
+    return f"call get_crash with target={target!r} and run_id={rid!r} for a source-level backtrace"
 
 
 def _finish_record(rec: dict[str, Any], res: dict[str, Any]) -> None:
@@ -264,35 +333,39 @@ def _finish_record(rec: dict[str, Any], res: dict[str, Any]) -> None:
 def deploy_and_run(
     cfg: Config,
     target: str,
-    binary: str,
+    binary: str | None = None,
     args: list[str] | None = None,
     timeout_s: float = 30,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
     max_output_kb: int = 64,
     core_wait_s: float = 15,
+    remote_binary: str | None = None,
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = [str(a) for a in (args or [])]
     opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096)
     rid = new_run_id()
-    local, snap, sha, info, remote_bin = _staged(cfg, t, binary, rid)
+    prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
         ip = t.require_ip()
         remote_run = f"{REMOTE_ROOT}/runs/{rid}"
-        runner = prepare(t, ip, [(snap, remote_bin, sha, info["size"], "0755")], [remote_run], prune=True)
+        runner = _install_program(t, ip, prog, remote_run)
         rec: dict[str, Any] = {
-            "run_id": rid, "target": target, "kind": "oneshot", "state": "running", "binary": str(local), "binary_snapshot": str(snap),
-            "binary_sha256": sha, "build_id": info.get("build_id"), "remote_path": remote_bin, "remote_run_dir": remote_run,
+            "run_id": rid, "target": target, "kind": "oneshot", "state": "running", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
         }
         save_record(t, rec)
-        argv = [runner, "-S", *opts, "-R", remote_run, "--", remote_bin, *args]
+        argv = [runner, "-S", *opts, *_program_argv(prog), "-R", remote_run, "--", prog["remote_path"], *args]
         try:
             r = t.ssh(argv, timeout=timeout_s + core_wait_s + 30, what="deploy_and_run", ip=ip, check=False, hold_stdin=True,
                       max_output=12 * max_output_kb * 1024 + (1 << 20))  # JSON escaping can grow a byte to 6, two streams
             if r.truncated:
                 raise QnxMcpError("runner_failed", "the runner's report was larger than its budget and was cut off")
+            refused = _runner_refusal(r.out) if prog["remote_binary"] else None
+            if refused:
+                raise QnxMcpError("path_not_allowed" if "own directory" in refused[0] else "invalid_argument",
+                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint="It changed after the check; name an executable outside /tmp/qnx-mcp.")
             res = _parse_runner(r.out, "deploy_and_run")
         except BaseException as e:
             rec.update(state="failed", error=getattr(e, "code", type(e).__name__))
@@ -304,11 +377,12 @@ def deploy_and_run(
     for k in ("runner", "version"):
         res.pop(k, None)
     result: dict[str, Any] = {
-        "ok": True, "run_id": rid, "target": target, "outcome": _outcome(res), "binary": str(local), "binary_sha256": sha,
-        "build_id": info.get("build_id"), "remote_path": remote_bin, "args": args, "started_at": rec["started_at"], **res,
+        "ok": True, "run_id": rid, "target": target, "outcome": _outcome(res), "binary": prog["binary"], "binary_sha256": prog["binary_sha256"],
+        "build_id": prog["build_id"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"], "args": args,
+        "started_at": rec["started_at"], **res,
     }
     if result.get("core_path"):
-        result["next_step"] = f"call get_crash with target={target!r} and run_id={rid!r} for a source-level backtrace"
+        result["next_step"] = _crash_step(target, rid, rec)
     elif res.get("core_expected"):
         result["next_step"] = f"no core reported (dumper={res.get('dumper')}); check target_status.dumper_running"
     if res.get("stdout_truncated") or res.get("stderr_truncated"):
@@ -322,33 +396,38 @@ def deploy_and_run(
 def run_start(
     cfg: Config,
     target: str,
-    binary: str,
+    binary: str | None = None,
     args: list[str] | None = None,
     timeout_s: float = 600,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
     max_output_kb: int = 1024,
     core_wait_s: float = 15,
+    remote_binary: str | None = None,
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = [str(a) for a in (args or [])]
     opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536)
     rid = new_run_id()
-    local, snap, sha, info, remote_bin = _staged(cfg, t, binary, rid)
+    prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
         ip = t.require_ip()
         remote_run = f"{REMOTE_ROOT}/runs/{rid}"
-        runner = prepare(t, ip, [(snap, remote_bin, sha, info["size"], "0755")], [remote_run], prune=True)
+        runner = _install_program(t, ip, prog, remote_run)
         rec: dict[str, Any] = {
-            "run_id": rid, "target": target, "kind": "background", "state": "starting", "binary": str(local), "binary_snapshot": str(snap),
-            "binary_sha256": sha, "build_id": info.get("build_id"), "remote_path": remote_bin, "remote_run_dir": remote_run,
+            "run_id": rid, "target": target, "kind": "background", "state": "starting", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
             "deadline": time.time() + timeout_s,
         }
         save_record(t, rec)  # ownership is on disk before anything is launched
         _reconcile_starts(t, ip, exclude=rid)
         try:
-            r = t.ssh([runner, "-B", remote_run, *opts, "-R", remote_run, "--", remote_bin, *args], timeout=30, what="run_start", ip=ip, check=False)
+            r = t.ssh([runner, "-B", remote_run, *opts, *_program_argv(prog), "-R", remote_run, "--", prog["remote_path"], *args],
+                      timeout=30, what="run_start", ip=ip, check=False)
+            refused = _runner_refusal(r.out) if prog["remote_binary"] else None
+            if refused:
+                raise QnxMcpError("path_not_allowed" if "own directory" in refused[0] else "invalid_argument",
+                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint="It changed after the check; name an executable outside /tmp/qnx-mcp.")
             res = _parse_runner(r.out, "run_start")
             if not res.get("started"):
                 raise QnxMcpError("runner_failed", f"background run did not start: {res.get('error')}")
@@ -363,7 +442,8 @@ def run_start(
         save_record(t, rec)
     return {
         "ok": True, "run_id": rid, "target": target, "state": "running", "pid": res.get("pid"), "runner_pid": res.get("runner_pid"),
-        "binary": str(local), "binary_sha256": sha, "remote_path": remote_bin, "args": args, "deadline_s": timeout_s,
+        "binary": prog["binary"], "binary_sha256": prog["binary_sha256"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"],
+        "args": args, "deadline_s": timeout_s,
         "next_step": f"call run_poll with run_id={rid!r} for output (pass back stdout_next/stderr_next as offsets); run_stop ends it",
     }
 
@@ -451,7 +531,7 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
         result["outcome"] = _outcome(status)
         result["result"] = {k: v for k, v in status.items() if k not in ("runner", "version")}
         if status.get("core_path"):
-            result["next_step"] = f"call get_crash with target={target!r} and run_id={run_id!r}"
+            result["next_step"] = _crash_step(target, run_id, rec)
     elif state == "lost":
         result["note"] = "the runner is gone without a final status (target rebooted or the run directory was removed)"
     more = out.get("next", 0) < (out.get("size") or 0) or err.get("next", 0) < (err.get("size") or 0)
@@ -648,6 +728,108 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
     if info["size"] <= INLINE_TEXT:
         with contextlib.suppress(UnicodeDecodeError, OSError):
             result["text"] = final.read_bytes().decode("utf-8")
+    return result
+
+
+def file_list(cfg: Config, target: str, path: str, max_entries: int = 200) -> dict[str, Any]:
+    t = Target(cfg, target)
+    remote = check_remote_path(path, "path") if path != "/" else path
+    if not 1 <= max_entries <= LIST_MAX:
+        raise QnxMcpError("invalid_argument", f"max_entries must be 1-{LIST_MAX}")
+    with t.lock(exclusive=False):
+        ip = t.require_ip()
+        runner = prepare(t, ip, [], [])
+        # a name can be 6 times longer in JSON (control bytes), a link target too
+        r = t.ssh([runner, "-l", remote, "-L", str(max_entries)], timeout=60, what="file_list", ip=ip, check=False,
+                  max_output=max_entries * (12 << 10) + (64 << 10))
+    refused = _runner_refusal(r.out)
+    if refused:
+        msg, err, _ = refused
+        if msg == "no such directory":
+            raise QnxMcpError("file_not_found", f"{remote} does not exist on {target}", hint="List its parent directory to see what is there.")
+        if msg == "not a directory":
+            raise QnxMcpError("invalid_argument", f"{remote} is not a directory", hint="Use file_get to read a file; file_list lists directories.")
+        raise QnxMcpError("remote_failed", f"cannot list {remote}: {msg} ({err})")
+    if r.truncated:
+        raise QnxMcpError("runner_failed", "the listing was larger than its budget and was cut off", hint="Lower max_entries.")
+    res = _parse_runner(r.out, "file_list")
+    entries = res.get("entries") or []
+    for e in entries:
+        if isinstance(e.get("mtime"), int):
+            e["mtime_iso"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e["mtime"]))
+    total = int(res.get("total") or 0)
+    out: dict[str, Any] = {"ok": True, "target": target, "path": remote, "real_path": res.get("real_path"), "total_entries": total,
+                           "returned": len(entries), "truncated": total > len(entries), "entries": entries}
+    if out["truncated"]:
+        out["note"] = f"only the first {len(entries)} of {total} entries by name are listed; raise max_entries (up to {LIST_MAX}) or list a subdirectory"
+    return out
+
+
+def stop_refusal(pid: int, name: str | None, path: str | None) -> str | None:
+    """Why process_stop must leave this process alone, judged from what pidin reports (None: allowed so far;
+    the runner checks again on the target through the process itself, including the real path)."""
+    if pid <= 1:
+        return "pid 1 is procnto, the QNX microkernel and process manager"
+    if (name or "").startswith("procnto") or "procnto" in os.path.basename(path or ""):
+        return "it is procnto, the QNX microkernel and process manager"
+    if not path:
+        return "pidin reports no executable path for it"
+    exe = path if path.startswith("/") else "/" + path  # pidin shows most paths without the leading '/'
+    if any(c in ("", ".", "..") for c in exe.split("/")[1:]):
+        return f"its executable path {path!r} is not a plain absolute path"
+    for d in SYSTEM_DIRS:
+        if exe == d or exe.startswith(d + "/"):
+            return f"its executable {exe} is in {d}, a system directory"
+    if exe.startswith(f"{REMOTE_ROOT}/bin/"):
+        return "it is qnx-mcp's own runner, which enforces the deadline of a run; use run_stop for runs"
+    if not any(exe.startswith(r + "/") for r in STOP_ROOTS):
+        return f"its executable {exe} is not below {' or '.join(STOP_ROOTS)}"
+    return None
+
+
+def process_stop(cfg: Config, target: str, pid: int, signal: str = "TERM", grace_s: float = 2, kill_after_grace: bool = False) -> dict[str, Any]:
+    t = Target(cfg, target)
+    if signal not in STOP_SIGNALS:
+        raise QnxMcpError("invalid_argument", f"signal must be one of {', '.join(STOP_SIGNALS)}")
+    if not 0 <= grace_s <= 60:
+        raise QnxMcpError("invalid_argument", "grace_s must be in [0, 60]")
+    hint = "process_stop only stops programs whose executable is below /tmp or /data (yours or ones installed there), never system processes."
+    if pid <= 1:
+        raise QnxMcpError("process_not_allowed", f"process {pid} is not stopped: {stop_refusal(pid, None, None)}", hint=hint)
+    with t.lock(exclusive=False):
+        ip = t.require_ip()
+        r = t.ssh(["pidin", "-p", str(pid), "-F", _PROC_FMT], timeout=30, what="pidin", ip=ip, check=False)
+        found = [p for p in parse_pidin(r.out, "") if p["pid"] == pid]
+        if not found:
+            raise QnxMcpError("process_not_found", f"no process {pid} on {target}", hint="Call processes to find the pid (it may have exited).")
+        proc = found[0]
+        why = stop_refusal(pid, proc.get("name"), proc.get("path"))
+        about = {k: proc.get(k) for k in ("pid", "ppid", "name", "path", "args")}
+        if why:
+            raise QnxMcpError("process_not_allowed", f"process {pid} ({proc.get('name')}) is not stopped: {why}", hint=hint, process=about)
+        runner = prepare(t, ip, [], [])
+        argv = [runner, "-Z", str(pid), "-q", proc["path"], "-s", "SIG" + signal, "-w", str(int(grace_s * 1000)), *(["-f"] if kill_after_grace else []),
+                *[x for root in STOP_ROOTS for x in ("-A", root)], *[x for d in (*SYSTEM_DIRS, f"{REMOTE_ROOT}/bin") for x in ("-F", d)]]
+        r = t.ssh(argv, timeout=grace_s + 30, what="process_stop", ip=ip, check=False)
+    refused = _runner_refusal(r.out)
+    if refused:
+        msg, err, rep_ = refused
+        if msg == "no such process":
+            raise QnxMcpError("process_not_found", f"process {pid} exited before it could be stopped", hint="Call processes to check.")
+        if msg.startswith("refused: "):
+            where = f" ({rep_['executable']} resolves to {rep_['real_path']})" if rep_.get("real_path") else ""
+            raise QnxMcpError("process_not_allowed", f"process {pid} ({proc.get('name')}) is not stopped: {msg[9:]}{where}" + (f" ({err})" if err else ""),
+                              hint=hint, process=about)
+        raise QnxMcpError("remote_failed", f"process_stop of {pid} failed: {msg} ({err})")
+    res = _parse_runner(r.out, "process_stop")
+    result: dict[str, Any] = {
+        "ok": True, "target": target, "pid": pid, "name": proc.get("name"), "args": proc.get("args"), "ppid": res.get("ppid"), "uid": res.get("uid"),
+        **{k: res.get(k) for k in ("executable", "real_path", "signal", "signal_sent", "already_exiting", "sigkill_sent", "exited", "waited_ms", "warnings")},
+    }
+    result["still_running"] = not res.get("exited")
+    if result["still_running"]:
+        result["next_step"] = (f"process {pid} is still running after {grace_s:g} s; call process_stop again with kill_after_grace=true "
+                               "(or signal='KILL'), or check its threads with processes(include_threads=true)")
     return result
 
 
