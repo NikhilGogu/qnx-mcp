@@ -1,0 +1,47 @@
+<!-- Source of overview.png: render the #d element at 1160x330 in a browser.
+     Copyright 2026 The qnx-mcp authors
+     SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#fff;font-family:"DejaVu Sans",Arial,sans-serif}
+.t{font-size:19px;font-weight:bold;fill:#1d2733}.s{font-size:15px;fill:#34414f}.m{font-family:"DejaVu Sans Mono",monospace;font-size:14px;fill:#34414f}
+.a{font-size:14px;fill:#1f5f99}
+</style></head><body>
+<svg id="d" xmlns="http://www.w3.org/2000/svg" width="1160" height="330" viewBox="0 0 1160 330">
+<defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f5f99"/></marker></defs>
+<rect x="10" y="40" width="280" height="250" rx="10" fill="#eef4fb" stroke="#7a9cc0" stroke-width="2"/>
+<text x="30" y="75" class="t">Your AI coding agent</text>
+<text x="30" y="105" class="s">Claude Code or Codex</text>
+<text x="30" y="140" class="s">reads the qnx-mcp skill:</text>
+<text x="30" y="162" class="s">which tool for which job</text>
+<text x="30" y="197" class="s">calls typed tools, reads JSON:</text>
+<text x="30" y="222" class="m">build  deploy_and_run</text>
+<text x="30" y="244" class="m">get_crash  processes</text>
+<text x="30" y="266" class="m">logs  run_start ...</text>
+<rect x="420" y="40" width="320" height="250" rx="10" fill="#f3f6f0" stroke="#8aa77a" stroke-width="2"/>
+<text x="440" y="75" class="t">qnx-mcp on the build host</text>
+<text x="440" y="105" class="s">Ubuntu with KVM and QEMU</text>
+<text x="440" y="140" class="s">QNX SDP 8.0: qcc, mkqnximage,</text>
+<text x="440" y="162" class="s">ntox86_64-gdb</text>
+<text x="440" y="197" class="s">enforces: target allowlist,</text>
+<text x="440" y="219" class="s">per-target lock, pinned host</text>
+<text x="440" y="241" class="s">key, deadlines, output caps</text>
+<text x="440" y="270" class="s">keeps: run records, cores</text>
+<rect x="870" y="40" width="280" height="250" rx="10" fill="#fbf4ec" stroke="#c09a6a" stroke-width="2"/>
+<text x="890" y="75" class="t">QNX OS 8.0 target</text>
+<text x="890" y="105" class="s">QEMU VM made by mkqnximage</text>
+<text x="890" y="140" class="m">qnx-mcp-run</text><text x="1000" y="140" class="s">(helper)</text>
+<text x="890" y="162" class="s">your program</text>
+<text x="890" y="197" class="m">dumper</text><text x="955" y="197" class="s">writes cores,</text>
+<text x="890" y="219" class="s">sends a pulse when done</text>
+<text x="890" y="254" class="m">slogger2  pidin</text>
+<line x1="295" y1="140" x2="414" y2="140" stroke="#1f5f99" stroke-width="2.5" marker-start="url(#h)" marker-end="url(#h)"/>
+<text x="306" y="128" class="a">MCP over stdio</text>
+<text x="314" y="162" class="a">JSON results</text>
+<line x1="745" y1="140" x2="864" y2="140" stroke="#1f5f99" stroke-width="2.5" marker-start="url(#h)" marker-end="url(#h)"/>
+<text x="770" y="128" class="a">ssh, scp</text>
+<text x="752" y="162" class="a">fixed commands</text>
+<line x1="745" y1="230" x2="864" y2="230" stroke="#1f5f99" stroke-width="2.5" marker-end="url(#h)"/>
+<text x="757" y="218" class="a">mkqnximage</text>
+<text x="757" y="252" class="a">boots QEMU</text>
+<text x="10" y="22" class="s">One conversation: the agent builds on the host, runs on the target, and reads structured results.</text>
+</svg></body></html>
