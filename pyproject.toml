@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qnx-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP server giving AI coding agents structured, safe tools for QNX OS 8.0 targets"
 readme = "README.md"
 requires-python = ">=3.10"
