@@ -189,6 +189,7 @@ class RunFields(_M):
     stderr_truncated: bool
     dumper: str = Field(description="registered/notified/notified_no_path/timeout/unavailable/not_applicable/error")
     dumper_error: str | None
+    core_ready_ms: int = Field(description="Milliseconds from the program's exit to dumper's completion pulse (-1 if no core)")
     core_path: str | None = Field(description="Core path on the target (moved into the run's directory)")
     dumper_core_path: str | None = Field(description="Path dumper reported through DCMD_DUMPER_GETPATH")
     core_move_error: str | None

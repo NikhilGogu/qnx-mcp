@@ -406,6 +406,8 @@ struct result {
     int group_clean;
     int capture_complete;
     uint64_t duration_ms;
+    uint64_t exit_at;       /* monotonic ms when the program exited */
+    long core_ready_ms;     /* from the exit to dumper's completion pulse, -1 if none */
     const char *dumper_state;
     int dumper_errno;
     int have_core;
@@ -630,6 +632,7 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
             if (done) {
                 done_at = now_ms();
                 r->duration_ms = done_at - start;
+                r->exit_at = done_at;
             }
         }
         if (done && out->fd == -1 && err->fd == -1 && exec_rd == -1) {
@@ -731,6 +734,7 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
         if (pulse.code != DUMP_PULSE_CODE || pulse.value.sival_int != r->pid) {
             continue; /* another process's dump */
         }
+        r->core_ready_ms = (long)(now_ms() - r->exit_at);
         dump_info_t info;
         memset(&info, 0, sizeof info);
         info.i.pid = r->pid;
@@ -802,7 +806,7 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     j_cstr(f, r->dumper_state);
     fputs(",\"dumper_error\":", f);
     j_cstr(f, r->dumper_errno ? strerror(r->dumper_errno) : NULL);
-    fputs(",\"core_path\":", f);
+    fprintf(f, ",\"core_ready_ms\":%ld,\"core_path\":", r->core_ready_ms);
     j_cstr(f, r->have_core ? r->core_path : NULL);
     fputs(",\"dumper_core_path\":", f);
     j_cstr(f, r->have_core ? r->dumper_core_path : NULL);
@@ -816,6 +820,7 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
 static void run_program(const struct opts *o, struct result *r, struct sink *out, struct sink *err, struct dumper *d)
 {
     memset(r, 0, sizeof *r);
+    r->core_ready_ms = -1;
     dumper_register(d);
     r->dumper_state = d->state;
     if (d->fd == -1 && d->err) {
@@ -931,6 +936,7 @@ static int mode_background(struct opts *o, const char *dir)
     struct result r;
     struct dumper d;
     memset(&r, 0, sizeof r);
+    r.core_ready_ms = -1;
     dumper_register(&d);
     r.dumper_state = d.state;
     if (d.fd == -1 && d.err) {

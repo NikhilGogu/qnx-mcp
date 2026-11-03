@@ -99,9 +99,10 @@ def test_crash_slice(tmp_path: Path):
             assert not err and r["outcome"] == "crashed" and r["signal_name"] == "SIGSEGV", r
             assert r["dumper"] == "notified" and r["core_path"] == f"/tmp/qnx-mcp/runs/{r['run_id']}/crash_demo.core", r
             assert r["dumper_core_path"].startswith("/data/var/dumper/") and r["group_clean"] and r["capture_complete"], r
+            assert 0 <= r["core_ready_ms"] < 5000, r
             assert "imu: average offset 6" in r["stdout"] and r["binary_sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest()
             _show("deploy_and_run", {k: r[k] for k in ("run_id", "outcome", "signal_name", "stdout", "dumper", "core_path", "dumper_core_path",
-                                                       "remote_path", "duration_ms", "group_clean", "next_step")})
+                                                       "remote_path", "duration_ms", "core_ready_ms", "group_clean", "next_step")})
 
             # Rebuild the same output path with different code: get_crash must still use the deployed snapshot.
             err, b2 = await c.call("build", path=str(DEMO), output=str(exe), cflags=["-g", "-O0", "-DREBUILT=1", "-fno-inline"])
