@@ -160,7 +160,7 @@ Your agent starts the server itself, as a child process that speaks MCP over std
     qnx: ~/qnx-codelab/venv/bin/qnx-mcp  - ✔ Connected
     ```
 
-2. Install the qnx-mcp skill. A skill is a Markdown file the agent reads when a task matches its description; this one says which qnx-mcp tool to use for which job and what the QNX thread states mean. It follows the same [Agent Skills](https://agentskills.io) format as QNX's [qnx-agent-skills](https://github.com/qnx/qnx-agent-skills):
+2. Install the qnx-mcp skill. A skill is a Markdown file that the agent sees by its name and description and loads when it decides a task needs it; this one says which qnx-mcp tool to use for which job and what the QNX thread states mean. It follows the same [Agent Skills](https://agentskills.io) format as QNX's [qnx-agent-skills](https://github.com/qnx/qnx-agent-skills). In our runs Claude Code listed the skill, but the agent never loaded it: the tool descriptions were enough for the tasks in this codelab. Copy it into the work directory:
 
     ```bash
     mkdir -p .claude/skills
@@ -315,7 +315,7 @@ Now ask:
 Fix only the compile error and build again.
 ```
 
-Your agent may also mention other problems it noticed in `sensor.c` and offer to fix them; ours did. Leave them for now: the next step runs the program as it is.
+Your agent may mention other problems it noticed in `sensor.c` (ours did in every run) and offer to fix them. Leave them for now: the next step runs the program as it is.
 
 Check: the build succeeds and returns one artifact, an x86_64 QNX executable with debug information and a GNU build ID:
 
@@ -446,9 +446,9 @@ Finally, `get_crash` with that `run_id` downloads the core file, checks that it 
 * In the caller's frame, `line` is `"gyro_z,31\n"` at `line_no` 7 (`channel` shows `null` because gdb does not print arrays in this mode; it holds `gyro_z`). That is a valid reading of a channel that is in the table, so the lookup failed for a name it should have found.
 * `find_calibration()` uses `bsearch()`, which only works on a table sorted by the search key, and the table lists `gyro_z` before `baro`. On QNX's C library the search for `gyro_z` ends without finding it.
 
-The input is fine and the table has every channel. Reading the source can make you suspicious: in our runs the agent noticed the unsorted table while it fixed the build, and guessed that the `baro` lookups would fail. The core file shows what did happen, because the locals of every frame are in it: this run crashed on line 7 of the input, the first `gyro_z` reading.
+The input is fine and the table has every channel. Reading the source can make you suspicious: in each of our runs the agent noticed the unsorted table while it fixed the build, but it could not say which lookups would fail (twice it guessed `baro`). The core file shows what did happen, because the locals of every frame are in it: this run crashed on line 7 of the input, the first `gyro_z` reading.
 
-Check: the agent names the unsorted table and `bsearch()` as the root cause, and the missing NULL check as the reason it crashes instead of failing cleanly.
+Check: the agent names the unsorted table and `bsearch()` as the root cause, and the missing NULL check as the reason it crashes instead of failing cleanly. Compare its details with the bullets above: in two of our runs it got one wrong, once which field is at offset 8 and once the sort order of the channel names.
 
 > aside positive
 >
