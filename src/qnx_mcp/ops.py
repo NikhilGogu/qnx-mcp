@@ -424,10 +424,11 @@ def _apply_poll(t: Target, rec: dict[str, Any], p: dict[str, Any]) -> str:
 
 def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stderr_offset: int = 0, max_kb: int = 64, wait_s: float = 0) -> dict[str, Any]:
     t = Target(cfg, target)
-    rec = _owned_background(t, run_id)
+    check_run_id(run_id)
     if stdout_offset < 0 or stderr_offset < 0 or not 1 <= max_kb <= POLL_MAX_KB or not 0 <= wait_s <= 60:
         raise QnxMcpError("invalid_argument", f"offsets must be >= 0, max_kb in [1, {POLL_MAX_KB}], wait_s in [0, 60]")
     with t.lock(exclusive=False):
+        rec = _owned_background(t, run_id)  # read inside the target lock
         ip = t.require_ip()
         deadline = time.monotonic() + wait_s
         while True:
@@ -460,10 +461,11 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
 
 def run_stop(cfg: Config, target: str, run_id: str, grace_s: float = 5) -> dict[str, Any]:
     t = Target(cfg, target)
-    rec = _owned_background(t, run_id)
+    check_run_id(run_id)
     if not 0 <= grace_s <= 60:
         raise QnxMcpError("invalid_argument", "grace_s must be in [0, 60]")
     with t.lock(exclusive=False):
+        rec = _owned_background(t, run_id)  # read inside the target lock
         ip = t.require_ip()
         # The request goes through the run's control FIFO, read only by the runner that owns the run.
         r = t.ssh([rec["runner"], "-K", rec["remote_run_dir"], "-w", str(int(grace_s * 1000))], timeout=grace_s + 30, what="run_stop", ip=ip, check=False)
