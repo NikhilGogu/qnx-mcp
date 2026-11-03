@@ -312,8 +312,10 @@ Each diagnostic has a file, line, column, severity and, for warnings, the option
 Now ask:
 
 ```text
-Fix the compile error and build again.
+Fix only the compile error and build again.
 ```
+
+Your agent may also mention other problems it noticed in `sensor.c` and offer to fix them; ours did. Leave them for now: the next step runs the program as it is.
 
 Check: the build succeeds and returns one artifact, an x86_64 QNX executable with debug information and a GNU build ID:
 
@@ -440,11 +442,11 @@ Finally, `get_crash` with that `run_id` downloads the core file, checks that it 
 ### Reading the backtrace
 
 * The fault is in `calibrate()` at `sensor.c:71`, called from `process_line()` and `read_file()`.
-* `cal` is `0x0` and the fault address is `0x8`: the program read the field at offset 8 of a NULL `struct calibration *`, which is `scale`.
+* `cal` is `0x0` and the fault address is `0x8`: the program read the field at offset 8 of a NULL `struct calibration *`, which is `scale` (the pointer `channel` takes the first 8 bytes).
 * In the caller's frame, `line` is `"gyro_z,31\n"` at `line_no` 7 (`channel` shows `null` because gdb does not print arrays in this mode; it holds `gyro_z`). That is a valid reading of a channel that is in the table, so the lookup failed for a name it should have found.
 * `find_calibration()` uses `bsearch()`, which only works on a table sorted by the search key, and the table lists `gyro_z` before `baro`. On QNX's C library the search for `gyro_z` ends without finding it.
 
-The input is fine and the table has every channel, so reading the source does not tell you that this run will crash, or where. The core file does, because the locals of every frame are in it.
+The input is fine and the table has every channel. Reading the source can make you suspicious: in our runs the agent noticed the unsorted table while it fixed the build, and guessed that the `baro` lookups would fail. The core file shows what did happen, because the locals of every frame are in it: this run crashed on line 7 of the input, the first `gyro_z` reading.
 
 Check: the agent names the unsorted table and `bsearch()` as the root cause, and the missing NULL check as the reason it crashes instead of failing cleanly.
 
