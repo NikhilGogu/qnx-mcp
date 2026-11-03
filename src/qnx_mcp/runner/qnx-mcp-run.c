@@ -13,9 +13,10 @@
  *   qnx-mcp-run -H file [-x dir]                        size, mode, SHA-256 and real path of a regular file;
  *       -x refuses a file whose real path is inside dir
  *   qnx-mcp-run -l dir -L max                           the first max entries of a directory by name (lstat)
- *   qnx-mcp-run -Z pid -q path -s SIGNAME -w grace_ms [-f] -A root... -F dir...  stop a process that qnx-mcp did
- *       not start, if its executable path is path and lies inside a root and outside every dir; -f sends SIGKILL
- *       when it has not exited after grace_ms
+ *   qnx-mcp-run -Y pid                                  identity of a process: start time (ns), executable path, flags
+ *   qnx-mcp-run -Z pid -T start_ns -q path -s SIGNAME -w grace_ms [-f] -A root... -F dir...  stop a process that
+ *       qnx-mcp did not start, if it is still the process with that start time, its executable path is path and
+ *       lies inside a root and outside every dir; -f sends SIGKILL when it has not exited after grace_ms
  *   qnx-mcp-run -X file -L max                          copy at most max bytes of a regular file to stdout (raw)
  *   qnx-mcp-run -G dir -k keep -a age_s [-p name]...    prune run or app directories that are not in use
  *   qnx-mcp-run -D rel -r root [-x dir] [-c] [-I tmp [-n]]  check, or install tmp as, root/rel without
@@ -1605,8 +1606,14 @@ static int mode_list(const char *dir, size_t max)
     }
     size_t n = 0;
     unsigned long long total = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
+    int read_errno = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *e = readdir(d);
+        if (e == NULL) {
+            read_errno = errno; /* 0 at the end of the directory, else the listing is incomplete */
+            break;
+        }
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
             continue;
         }
@@ -1635,11 +1642,16 @@ static int mode_list(const char *dir, size_t max)
         n++;
     }
     int dfd = dirfd(d);
+    /* realpath() resolves the name again; it is reported as verified only if it names the directory that was read */
+    struct stat dst, rst;
+    int verified = fstat(dfd, &dst) == 0 && stat(real, &rst) == 0 && dst.st_dev == rst.st_dev && dst.st_ino == rst.st_ino;
     j_head(stdout);
     fputs(",\"path\":", stdout);
     j_cstr(stdout, dir);
     fputs(",\"real_path\":", stdout);
     j_cstr(stdout, real);
+    printf(",\"real_path_verified\":%s,\"complete\":%s,\"read_error\":", verified ? "true" : "false", read_errno ? "false" : "true");
+    j_cstr(stdout, read_errno ? strerror(read_errno) : NULL);
     printf(",\"total\":%llu,\"entries\":[", total);
     for (size_t i = 0; i < n; i++) {
         struct stat st;
@@ -1675,11 +1687,56 @@ static int mode_list(const char *dir, size_t max)
 /* The process is opened through /proc/<pid>/ctl and inspected and signalled only through that descriptor.
  * While it is open the process entry stays (a dying process shows _NTO_PF_TERMING until it is closed), so
  * the checks and the signal apply to one process and cannot reach a later process with the same pid. */
-static int proc_exiting(int fd)
+static int g_info_errno;
+
+/* 1: exiting or a zombie, 0: running, -1: the state could not be read (never taken as an exit) */
+static int proc_state(int fd)
 {
     procfs_info info;
     memset(&info, 0, sizeof info);
-    return devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL) != EOK || (info.flags & (_NTO_PF_TERMING | _NTO_PF_ZOMBIE)) != 0;
+    int e = devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL);
+    if (e != EOK) {
+        g_info_errno = e;
+        return -1;
+    }
+    return (info.flags & (_NTO_PF_TERMING | _NTO_PF_ZOMBIE)) != 0;
+}
+
+struct exe_path {
+    procfs_debuginfo d;
+    char room[PATH_MAX + 1];
+};
+
+static int proc_exe(int fd, struct exe_path *x)
+{
+    memset(x, 0, sizeof *x);
+    return devctl(fd, DCMD_PROC_MAPDEBUG_BASE, x, sizeof *x - 1, NULL); /* the last byte stays NUL */
+}
+
+/* Checked again through the held descriptor right before each signal: the same process (start time), not
+ * critical, the same executable (an exec changes it). NULL if nothing changed. The process can still exec
+ * or change between this check and the signal; that window is not closed. */
+static const char *proc_changed(int fd, uint64_t token, const char *path)
+{
+    procfs_info info;
+    struct exe_path x;
+    memset(&info, 0, sizeof info);
+    int e = devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL);
+    if (e != EOK) {
+        g_info_errno = e;
+        return "its state could not be read";
+    }
+    if (info.start_time != token) {
+        return "its start time differs (the pid was reused, or the program called exec)";
+    }
+    if (info.crit_proc) {
+        return "it is a critical process now";
+    }
+    if ((e = proc_exe(fd, &x)) != EOK) {
+        g_info_errno = e;
+        return "its executable path could not be read";
+    }
+    return strcmp(x.d.path, path) == 0 ? NULL : "it runs a different executable now";
 }
 
 static int proc_signal(int fd, int signo)
@@ -1691,15 +1748,54 @@ static int proc_signal(int fd, int signo)
     return devctl(fd, DCMD_PROC_SIGNAL, &s, sizeof s, NULL);
 }
 
+/* 1: exited, 0: still running at the deadline, -1: the state could not be read */
 static int proc_wait_exit(int fd, uint64_t until)
 {
-    while (!proc_exiting(fd)) {
+    for (;;) {
+        int st = proc_state(fd);
+        if (st != 0) {
+            return st;
+        }
         if (now_ms() >= until) {
             return 0;
         }
         usleep(20000);
     }
-    return 1;
+}
+
+static void fail_changed(const char *why)
+{
+    static char msg[160];
+    snprintf(msg, sizeof msg, "changed: %s", why);
+    fail(msg, 0);
+}
+
+/* -Y pid: what process_stop needs to recognise the process later (the start time is its creation token). */
+static int mode_pinfo(long pid)
+{
+    char p[64];
+    snprintf(p, sizeof p, "/proc/%ld/ctl", pid);
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd == -1) {
+        fail(errno == ENOENT ? "no such process" : "open process", errno);
+    }
+    procfs_info info;
+    struct exe_path x;
+    memset(&info, 0, sizeof info);
+    int e = devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL);
+    if (e != EOK || info.pid != (pid_t)pid) {
+        fail("process information", e);
+    }
+    if ((e = proc_exe(fd, &x)) != EOK) {
+        fail("executable path", e);
+    }
+    close(fd);
+    j_head(stdout);
+    printf(",\"pid\":%ld,\"start_ns\":%llu,\"ppid\":%ld,\"critical\":%s,\"exiting\":%s,\"path\":", pid, (unsigned long long)info.start_time,
+           (long)info.parent, info.crit_proc ? "true" : "false", (info.flags & (_NTO_PF_TERMING | _NTO_PF_ZOMBIE)) ? "true" : "false");
+    j_cstr(stdout, x.d.path);
+    puts("}");
+    return 0;
 }
 
 static void refuse_exe(const char *what, const char *exe, const char *real)
@@ -1716,11 +1812,12 @@ static void refuse_exe(const char *what, const char *exe, const char *real)
     exit(2);
 }
 
-static int mode_pstop(long pid, const char *expect, const char *signame, long grace_ms, int force, char **roots, int nroots, char **forbid, int nforbid)
+static int mode_pstop(long pid, uint64_t token, const char *expect, const char *signame, long grace_ms, int force, char **roots, int nroots,
+                      char **forbid, int nforbid)
 {
     int signo = signame ? signal_number(signame) : 0;
-    if (signo <= 0 || expect == NULL || nroots == 0) {
-        fail("-Z needs -q path, -s SIGNAME and -A root", 0);
+    if (signo <= 0 || expect == NULL || nroots == 0 || token == 0) {
+        fail("-Z needs -T start_ns, -q path, -s SIGNAME and -A root", 0);
     }
     if (pid <= 1) {
         fail("refused: pid 1 is procnto", 0);
@@ -1737,13 +1834,11 @@ static int mode_pstop(long pid, const char *expect, const char *signame, long gr
     if (e != EOK || info.pid != (pid_t)pid) {
         fail("process information", e);
     }
-    struct {
-        procfs_debuginfo d;
-        char room[PATH_MAX + 1];
-    } dbg;
-    memset(&dbg, 0, sizeof dbg);
-    e = devctl(fd, DCMD_PROC_MAPDEBUG_BASE, &dbg, sizeof dbg - 1, NULL); /* the last byte stays NUL */
-    if (e != EOK) {
+    if (info.start_time != token) {
+        fail_changed("its start time differs (the pid was reused, or the program called exec)"); /* the pid was reused after discovery */
+    }
+    struct exe_path dbg;
+    if ((e = proc_exe(fd, &dbg)) != EOK) {
         fail("executable path", e);
     }
     if (strcmp(dbg.d.path, expect) != 0) {
@@ -1770,17 +1865,26 @@ static int mode_pstop(long pid, const char *expect, const char *signame, long gr
     if (!in_exe || !in_real) {
         refuse_exe("refused: the executable is outside the allowed roots", exe, real);
     }
-    int already = proc_exiting(fd), exited = already, killed = 0;
+    int st = proc_state(fd);
+    if (st < 0) {
+        fail("process information", g_info_errno);
+    }
+    int already = st == 1, exited = st, killed = 0;
+    const char *withheld = NULL, *why;
     uint64_t start = now_ms();
     if (!already) {
+        if ((why = proc_changed(fd, token, dbg.d.path)) != NULL) {
+            fail_changed(why); /* nothing was sent */
+        }
         e = proc_signal(fd, signo);
         if (e != EOK) {
             fail("signal", e);
         }
         exited = proc_wait_exit(fd, start + (uint64_t)grace_ms);
-        if (!exited && force && signo != SIGKILL) {
-            e = proc_signal(fd, SIGKILL);
-            if (e != EOK) {
+        if (exited == 0 && force && signo != SIGKILL) {
+            if ((why = proc_changed(fd, token, dbg.d.path)) != NULL) {
+                withheld = why;
+            } else if ((e = proc_signal(fd, SIGKILL)) != EOK) {
                 warn_errno("SIGKILL", e);
             } else {
                 killed = 1;
@@ -1797,8 +1901,13 @@ static int mode_pstop(long pid, const char *expect, const char *signame, long gr
     j_cstr(stdout, exe);
     fputs(",\"real_path\":", stdout);
     j_cstr(stdout, real);
-    printf(",\"signal\":\"%s\",\"already_exiting\":%s,\"signal_sent\":%s,\"sigkill_sent\":%s,\"exited\":%s,\"waited_ms\":%ld",
-           signame, already ? "true" : "false", already ? "false" : "true", killed ? "true" : "false", exited ? "true" : "false", waited);
+    printf(",\"start_ns\":%llu,\"signal\":\"%s\",\"already_exiting\":%s,\"signal_sent\":%s,\"sigkill_sent\":%s,\"exited\":%s,\"waited_ms\":%ld",
+           (unsigned long long)token, signame, already ? "true" : "false", already ? "false" : "true", killed ? "true" : "false",
+           exited == 1 ? "true" : exited == 0 ? "false" : "null", waited);
+    fputs(",\"state_error\":", stdout);
+    j_cstr(stdout, exited < 0 ? strerror(g_info_errno) : NULL);
+    fputs(",\"sigkill_withheld\":", stdout);
+    j_cstr(stdout, withheld);
     j_warnings(stdout);
     puts("}");
     return 0;
@@ -1828,13 +1937,14 @@ int main(int argc, char *argv[])
     const char *dest = NULL, *root = NULL, *forbidden = NULL, *install = NULL, *list_dir = NULL, *expect = NULL, *signame = NULL;
     char *protect[MAX_PROTECT], *roots[MAX_ROOTS], *forbid[MAX_ROOTS];
     int nprotect = 0, create = 0, no_replace = 0, nroots = 0, nforbid = 0, force = 0;
-    long stop_pid = 0;
+    long stop_pid = 0, info_pid = 0;
+    unsigned long long token = 0;
     long keep = 20, age_s = 300;
     unsigned long long out_off = 0, err_off = 0;
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -1875,6 +1985,16 @@ int main(int argc, char *argv[])
         case 'l': list_dir = optarg; break;
         case 'Z': stop_pid = num_arg(optarg, 0, LONG_MAX); break;
         case 'q': expect = optarg; break;
+        case 'Y': info_pid = num_arg(optarg, 1, LONG_MAX); break;
+        case 'T': {
+            char *end = NULL;
+            errno = 0;
+            token = strtoull(optarg, &end, 10);
+            if (errno != 0 || end == optarg || *end != '\0') {
+                fail("bad -T", 0);
+            }
+            break;
+        }
         case 's': signame = optarg; break;
         case 'f': force = 1; break;
         case 'A':
@@ -1897,8 +2017,11 @@ int main(int argc, char *argv[])
     if (list_dir != NULL) {
         return mode_list(list_dir, max_chunk);
     }
+    if (info_pid != 0) {
+        return mode_pinfo(info_pid);
+    }
     if (stop_pid != 0) {
-        return mode_pstop(stop_pid, expect, signame, o.core_wait_ms, force, roots, nroots, forbid, nforbid);
+        return mode_pstop(stop_pid, token, expect, signame, o.core_wait_ms, force, roots, nroots, forbid, nforbid);
     }
     if (cat_path != NULL) {
         return mode_cat(cat_path, max_chunk);
