@@ -1,0 +1,34 @@
+{
+ "what": "codex exec (codex-cli 0.160.0, profile astra) using qnx-mcp on the build box over ssh -T; sanitized: thread id, reasoning and local config warnings removed",
+ "command": "codex exec -p astra --skip-git-repo-check --ephemeral -c 'mcp_servers.qnx.command=\"ssh\"' -c 'mcp_servers.qnx.args=[\"-T\",\"qnx\",\"env\",\"QNX_MCP_TARGETS_DIR=/home/ubuntu/targets\",\"QNX_MCP_ALLOW_TARGETS=''tb,tb[0-9]*''\",\"/home/ubuntu/work/venv-qnx-mcp/bin/qnx-mcp\"]' -c 'mcp_servers.qnx.tool_timeout_sec=600' --json \"Call the qnx MCP tool target_status with name tb and report its state, ip and core_naming. Do not run shell commands and do not call any other tool.\"",
+ "duration_s": 18.3,
+ "events": [
+  {
+   "event": "agent_message",
+   "text": "I\u2019ll check `tb` and report its state, IP address, and core naming mode.\n"
+  },
+  {
+   "event": "mcp_tool_call",
+   "server": "qnx",
+   "tool": "target_status",
+   "arguments": {
+    "name": "tb"
+   },
+   "status": "completed",
+   "error": null,
+   "result_text": [
+    "{\"ok\":true,\"name\":\"tb\",\"state\":\"running\",\"qemu_pid\":29102,\"arch\":\"x86_64\",\"ram\":\"1G\",\"cpus\":2,\"mac\":\"52:54:00:a0:e1:2f\",\"directory\":\"/home/ubuntu/targets/tb\",\"host_key_policy\":\"image\",\"ip\":\"192.168.122.130\",\"ssh\":\"ok\",\"uname\":\"QNX noname 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64\",\"target_time\":1793723367,\"dumper_running\":true,\"dumper_args\":\"dumper -U 30:30 -d /data/var/dumper -M 1000 -D cores\",\"core_naming\":\"fixed\"}"
+   ],
+   "structured_content_present": true
+  },
+  {
+   "event": "agent_message",
+   "text": "Target `tb`:\n\n- **state:** `running`\n- **ip:** `192.168.122.130`\n- **core_naming:** `fixed`"
+  },
+  {
+   "event": "turn.completed",
+   "input_tokens": 65748,
+   "output_tokens": 196
+  }
+ ]
+}

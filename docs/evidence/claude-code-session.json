@@ -1,0 +1,102 @@
+{
+ "what": "Headless Claude Code session using qnx-mcp on the build box over ssh -T (sanitized: session ids, uuids and usage fields removed)",
+ "commands": [
+  "claude mcp add -s project qnx -- ssh -T qnx env QNX_MCP_TARGETS_DIR=/home/ubuntu/targets \"QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*'\" /home/ubuntu/work/venv-qnx-mcp/bin/qnx-mcp",
+  "claude -p \"Use the qnx MCP server. First list the names of all qnx tools you have (one line, comma separated). Then call target_status for the target named tb and report its state, ip, uname and core_naming. Do not call any other tool.\" --mcp-config .mcp.json --strict-mcp-config --allowedTools mcp__qnx__target_status --output-format stream-json --verbose --max-turns 4"
+ ],
+ "mcp_json": {
+  "mcpServers": {
+   "qnx": {
+    "type": "stdio",
+    "command": "ssh",
+    "args": [
+     "-T",
+     "qnx",
+     "env",
+     "QNX_MCP_TARGETS_DIR=/home/ubuntu/targets",
+     "QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*'",
+     "/home/ubuntu/work/venv-qnx-mcp/bin/qnx-mcp"
+    ],
+    "env": {}
+   }
+  }
+ },
+ "events": [
+  {
+   "event": "init",
+   "claude_code_version": "2.1.312",
+   "model": "claude-opus-5-5",
+   "mcp_servers": [
+    {
+     "name": "qnx",
+     "status": "connected",
+     "source": "dynamic"
+    }
+   ],
+   "qnx_tools": [
+    "mcp__qnx__build",
+    "mcp__qnx__deploy_and_run",
+    "mcp__qnx__environment_check",
+    "mcp__qnx__file_get",
+    "mcp__qnx__file_put",
+    "mcp__qnx__get_crash",
+    "mcp__qnx__logs",
+    "mcp__qnx__processes",
+    "mcp__qnx__run_poll",
+    "mcp__qnx__run_start",
+    "mcp__qnx__run_stop",
+    "mcp__qnx__target_create",
+    "mcp__qnx__target_destroy",
+    "mcp__qnx__target_list",
+    "mcp__qnx__target_start",
+    "mcp__qnx__target_status",
+    "mcp__qnx__target_stop"
+   ]
+  },
+  {
+   "event": "assistant_text",
+   "text": "build, deploy_and_run, environment_check, file_get, file_put, get_crash, logs, processes, run_poll, run_start, run_stop, target_create, target_destroy, target_list, target_start, target_status, target_stop"
+  },
+  {
+   "event": "tool_use",
+   "name": "ToolSearch",
+   "input": {
+    "query": "select:mcp__qnx__target_status",
+    "max_results": 1
+   }
+  },
+  {
+   "event": "tool_result",
+   "is_error": false,
+   "content": [
+    {
+     "type": "tool_reference",
+     "tool_name": "mcp__qnx__target_status"
+    }
+   ]
+  },
+  {
+   "event": "tool_use",
+   "name": "mcp__qnx__target_status",
+   "input": {
+    "name": "tb"
+   }
+  },
+  {
+   "event": "tool_result",
+   "is_error": false,
+   "content": "{\"ok\":true,\"name\":\"tb\",\"state\":\"running\",\"qemu_pid\":29102,\"arch\":\"x86_64\",\"ram\":\"1G\",\"cpus\":2,\"mac\":\"52:54:00:a0:e1:2f\",\"directory\":\"/home/ubuntu/targets/tb\",\"host_key_policy\":\"image\",\"ip\":\"192.168.122.130\",\"ssh\":\"ok\",\"uname\":\"QNX noname 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64\",\"target_time\":1793723315,\"dumper_running\":true,\"dumper_args\":\"dumper -U 30:30 -d /data/var/dumper -M 1000 -D cores\",\"core_naming\":\"fixed\"}"
+  },
+  {
+   "event": "assistant_text",
+   "text": "Target `tb`:\n\n- **state:** running\n- **ip:** 192.168.122.130\n- **uname:** QNX noname 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64\n- **core_naming:** fixed\n\nThe only other call was the ToolSearch that loaded `target_status`'s definition. I didn't call any other qnx tool."
+  },
+  {
+   "event": "result",
+   "is_error": false,
+   "num_turns": 3,
+   "duration_ms": 21639,
+   "terminal_reason": "completed"
+  }
+ ]
+}
