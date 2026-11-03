@@ -463,8 +463,9 @@ def _notes(blob: bytes, end: str) -> list[tuple[bytes, int, bytes]]:
     return out
 
 
-def core_note_bytes(path: str, limit: int = 16 << 20) -> bytes | None:
-    """Concatenated PT_NOTE segments of an ELF core file (generic ELF program headers only)."""
+def core_read(path: str, vaddr: int, size: int) -> bytes | None:
+    """Bytes of the process image at vaddr..vaddr+size as stored in an ELF core (generic PT_LOAD
+    program headers); None if the core does not contain all of them."""
     try:
         with open(path, "rb") as f:
             head = f.read(64)
@@ -475,12 +476,19 @@ def core_note_bytes(path: str, limit: int = 16 << 20) -> bytes | None:
             e_phentsize, e_phnum = struct.unpack_from(end + "HH", head, 54)
             f.seek(e_phoff)
             ph = f.read(e_phentsize * e_phnum)
-            out = bytearray()
             for n in range(e_phnum):
-                p_type, _, p_offset, _, _, p_filesz = struct.unpack_from(end + "IIQQQQ", ph, n * e_phentsize)
-                if p_type == 4 and p_filesz <= limit - len(out):
-                    f.seek(p_offset)
-                    out += f.read(p_filesz)
-            return bytes(out)
+                p_type, _, p_offset, p_vaddr, _, p_filesz = struct.unpack_from(end + "IIQQQQ", ph, n * e_phentsize)
+                if p_type == 1 and p_vaddr <= vaddr and vaddr + size <= p_vaddr + p_filesz:
+                    f.seek(p_offset + vaddr - p_vaddr)
+                    data = f.read(size)
+                    return data if len(data) == size else None
     except (OSError, struct.error):
         return None
+    return None
+
+
+def gnu_build_id(note: bytes, end: str = "<") -> str | None:
+    for owner, ntype, desc in _notes(note, end):
+        if owner == b"GNU" and ntype == 3:
+            return desc.hex()
+    return None
