@@ -13,10 +13,9 @@ import select
 import shlex
 import shutil
 import signal
-import socket
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .sdk import ARCHES, check_arch, sdk_env, sdk_tool
 from .util import (
@@ -111,6 +110,7 @@ def parse_leases(text: str, mac: str, now: float) -> list[str]:
 
 class Target:
     def __init__(self, cfg: Config, name: str, *, must_exist: bool = True):
+        self._moved: dict[str, str] = {}  # stale address -> address that answered after rediscovery
         self.cfg = cfg
         self.name = check_target_name(cfg, name)
         self.dir = cfg.targets_dir / name
@@ -191,32 +191,59 @@ class Target:
 
     # ------------------------------------------------------------ address
 
-    def lookup_ip(self, fallback: bool = True, getip_timeout: float = 25) -> str | None:
-        """Current IPv4 address: the only live DHCP lease for this target's MAC, or the newest one whose port 22
-        answers, else mkqnximage --getip (arp). Identity is not taken from the address: the pinned host key is
-        what proves which machine answered."""
+    def _getip(self, timeout: float) -> str | None:
+        r = run([sdk_tool(sdk_env(self.cfg), "mkqnximage"), "--getip"], timeout=timeout, env=sdk_env(self.cfg), cwd=self.dir)
+        for line in reversed(r.out.splitlines()):
+            with contextlib.suppress(ValueError):
+                return str(ipaddress.IPv4Address(line.strip()))
+        return None
+
+    def candidates(self, getip: bool, getip_timeout: float = 25) -> list[str]:
+        """Addresses to try, newest live DHCP lease for this target's MAC first, then (if asked) mkqnximage --getip
+        (arp). No port is probed: sshd on the QNX 8.0 images (OpenSSH 10) penalises connections that never
+        authenticate and then drops every connection from the host for a while."""
         mac = self.mac or ""
         if not mac:
-            return None
+            return []
         try:
             text = self.cfg.leases.read_text()
         except OSError:
             text = "[]"
         ips = parse_leases(text, mac, time.time())
-        if len(ips) == 1:
-            # No port probe for a single lease: sshd on QNX 8.0 images (OpenSSH 10) penalises connections that
-            # never attempt authentication and then drops every connection from the host for a while.
-            return ips[0]
-        for ip in ips:
-            if _tcp_open(ip, 22, 1.0):
-                return ip
-        if not fallback:
+        if getip:
+            found = self._getip(getip_timeout)
+            if found and found not in ips:
+                ips.append(found)
+        return ips
+
+    def lookup_ip(self, fallback: bool = True, getip_timeout: float = 25) -> str | None:
+        """Current IPv4 address: the newest live lease, else mkqnximage --getip. A stale lease shows up as an ssh
+        connection failure, after which the address is rediscovered and the command retried once (_run_ssh).
+        Identity is not taken from the address: the pinned host key is what proves which machine answered."""
+        if not self.mac:
             return None
-        r = run([sdk_tool(sdk_env(self.cfg), "mkqnximage"), "--getip"], timeout=getip_timeout, env=sdk_env(self.cfg), cwd=self.dir)
-        for line in reversed(r.out.splitlines()):
-            with contextlib.suppress(ValueError):
-                return str(ipaddress.IPv4Address(line.strip()))
-        return None
+        ips = self.candidates(getip=False)
+        if ips:
+            return ips[0]
+        return self._getip(getip_timeout) if fallback else None
+
+    def _run_ssh(self, make: Callable[[str], list[str]], ip: str | None, before_retry: Callable[[], None] | None = None, **kw: Any) -> ProcResult:
+        """Run an ssh or scp command line built for an address. If the connection could not be set up, so the
+        remote command never started, rediscover the address (leases and arp) and retry once at a new one."""
+        ip = ip or self.require_ip()
+        ip = self._moved.get(ip, ip)
+        r = run(make(ip), **kw)
+        if not _failed_before_command(r):
+            return r
+        new = next((c for c in self.candidates(getip=True, getip_timeout=10) if c != ip), None)
+        if new is None:
+            return r
+        if before_retry is not None:
+            before_retry()
+        r = run(make(new), **kw)
+        if not _failed_before_command(r):
+            self._moved[ip] = new
+        return r
 
     # ------------------------------------------------------------ host keys and ssh
 
@@ -318,22 +345,20 @@ class Target:
     def ssh(self, argv: Sequence[str], *, timeout: float, what: str = "remote command", ip: str | None = None,
             check: bool = True, hold_stdin: bool = False, max_output: int = 8 << 20) -> ProcResult:
         """Run argv on the target; every element is quoted for the remote shell."""
-        ip = ip or self.require_ip()
-        r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", quote_argv(argv)], timeout=timeout, hold_stdin=hold_stdin, max_output=max_output)
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
+                          max_output=max_output)
         self._classify(r, what, timeout, check)
         return r
 
     def ssh_script(self, script: str, *, timeout: float, what: str, ip: str | None = None, check: bool = True) -> ProcResult:
         """Run a fixed shell script. Callers build `script` only from constants and quote_argv()."""
-        ip = ip or self.require_ip()
-        r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", script], timeout=timeout)
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", script], ip, timeout=timeout)
         self._classify(r, what, timeout, check)
         return r
 
     def put(self, local: Path, remote: str, *, timeout: float, ip: str | None = None) -> None:
         check_remote_path(remote)
-        ip = ip or self.require_ip()
-        r = run(["scp", "-q", "-p", *self._ssh_opts(), str(local), f"root@{ip}:{remote}"], timeout=timeout)
+        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"root@{a}:{remote}"], ip, timeout=timeout)
         self._classify(r, f"copy to {remote}", timeout, check=False)
         if r.returncode != 0:
             raise QnxMcpError("deploy_failed", f"scp to {self.name}:{remote} failed", stderr=tail(r.err, 800))
@@ -342,10 +367,12 @@ class Target:
         """Stream exactly `size` bytes of a remote regular file into a new local file (the caller
         creates it in a private directory and verifies the hash). The cap holds during the transfer."""
         check_remote_path(remote)
-        ip = ip or self.require_ip()
         with open(local, "xb") as f:
-            r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
-                    timeout=timeout, max_output=size, stdout_file=f)
+            def restart() -> None:
+                f.seek(0)
+                f.truncate()
+            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
+                              ip, before_retry=restart, timeout=timeout, max_output=size, stdout_file=f)
         self._classify(r, f"copy from {remote}", timeout, check=False)
         if r.returncode != 0 or r.streamed_over(size):
             raise QnxMcpError("copy_failed", f"copy of {self.name}:{remote} failed (exit {r.returncode})", stderr=tail(r.err, 800))
@@ -369,8 +396,7 @@ class Target:
             use_getip = time.monotonic() >= next_getip
             if use_getip:
                 next_getip = time.monotonic() + 10
-            ip = self.lookup_ip(fallback=use_getip, getip_timeout=8)
-            if ip:
+            for ip in self.candidates(getip=use_getip, getip_timeout=8):  # authenticated attempts only, no port probes
                 r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", "true"], timeout=10)
                 if r.returncode == 0:
                     return ip
@@ -537,6 +563,7 @@ class Target:
                       "else echo dumper=no; fi")
             try:
                 r = self.ssh_script(script, timeout=20, what="status probe", ip=ip)
+                st["ip"] = self._moved.get(ip, ip)
                 lines = r.out.splitlines()
                 if len(lines) < 3 or not lines[1].strip().isdigit() or lines[2] not in ("dumper=yes", "dumper=no"):
                     raise QnxMcpError("remote_failed", "status probe output was not recognised", stdout=tail(r.out, 400))
@@ -567,11 +594,13 @@ def list_targets(cfg: Config) -> list[dict[str, Any]]:
     return out
 
 
-def _tcp_open(host: str, port: int, timeout: float) -> bool:
-    with contextlib.suppress(OSError):
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    return False
+_BEFORE_COMMAND = ("ssh: connect to host", "Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED", "kex_exchange_identification")
+
+
+def _failed_before_command(r: ProcResult) -> bool:
+    """ssh (or scp) exit 255 with an error from connection setup: the remote command did not start, so a retry
+    cannot run it twice. A session that broke later ('Connection to ... closed') is never retried."""
+    return r.returncode == 255 and not r.timed_out and any(m in r.err for m in _BEFORE_COMMAND)
 
 
 def gdb_for(arch: str) -> str:
