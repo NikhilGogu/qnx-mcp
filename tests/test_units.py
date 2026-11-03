@@ -14,8 +14,11 @@ from pathlib import Path
 
 import pytest
 
+import struct
+
 from qnx_mcp.crash import _source_context
-from qnx_mcp.parsers import elf_info, parse_diagnostics, parse_mi_output, parse_pidin, parse_slog2
+from qnx_mcp.ops import _install, _write_root
+from qnx_mcp.parsers import core_read, elf_info, gnu_build_id, parse_diagnostics, parse_mi_output, parse_pidin, parse_slog2
 from qnx_mcp.target import Target, list_targets, parse_leases, validate_mkqnximage_options
 from qnx_mcp.util import (
     CURRENT_CALL, CallContext, Config, QnxMcpError, check_host_path, check_remote_path, check_target_name, file_lock, private_dir,
@@ -284,3 +287,81 @@ def test_workspace_confines_host_paths(tmp_path: Path):
     assert _source_context(cfg, str(ws / "a.c"), 1)[0]["text"] == "x"
     assert _source_context(cfg, str(ws / "link.c"), 1) is None  # DWARF path pointing outside the workspace
     assert _source_context(cfg, str(ws / "notes.txt"), 1) is None  # not a C/C++ source
+
+
+@pytest.mark.parametrize("path", ["/tmp//qnx-mcp/bin/x", "/tmp/./qnx-mcp/x", "/tmp/x/", "//tmp/x", "/tmp/a//b"])
+def test_remote_paths_must_be_normalised(path):
+    with pytest.raises(QnxMcpError) as e:
+        check_remote_path(path)
+    assert e.value.code == "invalid_argument"
+
+
+def test_write_root_refuses_managed_dir():
+    assert _write_root("/tmp/app/config.json") == ("/tmp", "app/config.json")
+    assert _write_root("/data/home/x") == ("/data", "home/x")
+    for bad in ("/tmp/qnx-mcp/bin/x", "/tmp/qnx-mcp", "/etc/passwd", "/tmp", "/datax/y"):
+        with pytest.raises(QnxMcpError) as e:
+            _write_root(bad)
+        assert e.value.code == "path_not_allowed", bad
+
+
+def test_run_keeps_output_when_a_descendant_holds_the_pipe(tmp_path: Path):
+    marker = tmp_path / "late"
+    t0 = time.monotonic()
+    r = run(["bash", "-c", f"echo hi; (sleep 3; touch {marker}) & exit 0"], timeout=30)
+    assert r.out == "hi\n" and r.returncode == 0 and time.monotonic() - t0 < 6, (r.out, time.monotonic() - t0)
+    time.sleep(3.5)
+    assert not marker.exists(), "descendant holding the pipe outlived run()"
+
+
+def test_run_streams_with_exact_cap(tmp_path: Path):
+    with open(tmp_path / "out", "wb") as f:
+        r = run(["head", "-c", "3000000", "/dev/zero"], timeout=20, max_output=1_000_000, stdout_file=f)
+    assert (tmp_path / "out").stat().st_size == 1_000_000 and r.streamed_over(1_000_000)
+    with open(tmp_path / "small", "wb") as f:
+        r = run(["head", "-c", "1000", "/dev/zero"], timeout=20, max_output=1000, stdout_file=f)
+    assert (tmp_path / "small").stat().st_size == 1000 and not r.streamed_over(1000)
+
+
+def test_first_use_trust_is_off_by_default(tmp_path: Path):
+    (tmp_path / "targets" / "tb4" / "local").mkdir(parents=True)
+    (tmp_path / "targets" / "tb4" / "local" / "options").write_text("OPT_ARCH='x86_64'\n")
+    env = {"HOME": str(tmp_path), "QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "state"), "QNX_MCP_ALLOW_TARGETS": "tb*"}
+    t = Target(Config.from_env(env), "tb4")
+    assert t.host_key_policy() == "unverifiable"
+    with pytest.raises(QnxMcpError) as e:
+        t._ssh_opts()
+    assert e.value.code == "host_key_missing"
+    opts = Target(Config.from_env({**env, "QNX_MCP_TRUST_FIRST_USE": "1"}), "tb4")._ssh_opts()
+    assert "StrictHostKeyChecking=accept-new" in opts and "HostKeyAlias=qnx-mcp-tb4" in opts
+
+
+def test_install_never_replaces_or_follows(tmp_path: Path):
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o755)
+    os.chmod(shared, 0o755)
+    src = tmp_path / "src"
+    src.write_bytes(b"new")
+    _install(src, shared, "a.txt", overwrite=False)
+    assert (shared / "a.txt").read_bytes() == b"new" and stat.S_IMODE(os.stat(shared).st_mode) == 0o755
+    with pytest.raises(QnxMcpError) as e:
+        _install(src, shared, "a.txt", overwrite=False)
+    assert e.value.code == "file_exists"
+    (tmp_path / "victim").write_bytes(b"keep")
+    (shared / "link").symlink_to(tmp_path / "victim")
+    with pytest.raises(QnxMcpError):
+        _install(src, shared, "link", overwrite=True)
+    assert (tmp_path / "victim").read_bytes() == b"keep" and sorted(p.name for p in shared.iterdir()) == ["a.txt", "link"]
+
+
+def test_core_read_and_build_id(tmp_path: Path):
+    bid = bytes(range(16))
+    note = struct.pack("<III", 4, len(bid), 3) + b"GNU\0" + bid
+    seg = b"\0" * 0x218 + note
+    vaddr, off = 0x5550000000, 0x1000
+    ehdr = b"\x7fELF" + bytes([2, 1, 1]) + b"\0" * 9 + struct.pack("<HHIQQQIHHHHHH", 4, 62, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    phdr = struct.pack("<IIQQQQQQ", 1, 4, off, vaddr, 0, len(seg), len(seg), 0x1000)
+    (tmp_path / "c.core").write_bytes((ehdr + phdr).ljust(off, b"\0") + seg)
+    got = core_read(str(tmp_path / "c.core"), vaddr + 0x218, len(note))
+    assert got == note and gnu_build_id(got) == bid.hex()
+    assert core_read(str(tmp_path / "c.core"), vaddr + len(seg) - 4, 16) is None

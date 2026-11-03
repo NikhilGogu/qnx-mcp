@@ -78,6 +78,8 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/etc/passwd"}, "path_not_allowed"),
                 ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp/qnx-mcp/bin/x"}, "path_not_allowed"),
                 ("file_get", {"target": "tb9", "remote_path": "/tmp/$(id)"}, "invalid_argument"),
+                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp//qnx-mcp/bin/x"}, "invalid_argument"),
+                ("run_poll", {"target": "tb9", "run_id": "r-000000000000", "max_kb": 4096}, "invalid_argument"),
                 ("target_destroy", {"name": "tb9", "confirm": "tb8"}, "invalid_argument"),
                 ("target_destroy", {"name": "t0", "confirm": "t0"}, "target_not_allowed"),
                 ("build", {"path": "/nonexistent/dir"}, "invalid_argument"),

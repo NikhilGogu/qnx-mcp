@@ -19,10 +19,14 @@ from pathlib import Path
 import pytest
 
 from helpers import mcp_client, run_async
+from qnx_mcp import ops
+from qnx_mcp.target import Target
+from qnx_mcp.util import Config, QnxMcpError
 
 TARGET = os.environ.get("QNX_MCP_E2E_TARGET")
 pytestmark = pytest.mark.skipif(not TARGET, reason="set QNX_MCP_E2E_TARGET to a running target")
 DEMO = Path(__file__).resolve().parents[1] / "examples" / "crash_demo"
+STATE = Path(os.environ.get("QNX_MCP_STATE_DIR", str(Path.home() / ".qnx-mcp" / "state")))
 
 ECHOARGS = '#include <stdio.h>\nint main(int c, char **v){ for (int i = 1; i < c; i++) printf("[%s]\\n", v[i]); return 7; }\n'
 HANG = '#include <unistd.h>\n#include <stdio.h>\nint main(void){ puts("start"); fflush(stdout); for (;;) sleep(1); }\n'
@@ -117,9 +121,9 @@ def test_crash_slice(tmp_path: Path):
             assert cr["fault_address"] == "0x0" and cr["signal_name"] == "SIGSEGV" and cr["si_code_name"].startswith("SEGV_MAPERR")
             assert any(v["name"] == "s" for v in ff["locals"]) and any(v["name"] == "index" for v in ff["locals"])
             pv = cr["provenance"]
-            assert pv["verified"] and pv["build_id_in_core"] is True and pv["deployed_path_in_core"] is True, pv
+            assert pv["verified"] and pv["build_id_match"] is True and pv["executable_match"] is True and pv["pid_match"] is True, pv
+            assert pv["core_build_id"] == art["build_id"] and pv["core_executable"] == r["remote_path"] and pv["core_pid"] == r["pid"], pv
             assert pv["binary_sha256"] == r["binary_sha256"] and pv["binary_build_id"] == art["build_id"], pv
-            assert pv["core_pid"] == r["pid"] and pv["pid_matches_run"] is True, pv
             assert sum(t["faulting"] for t in cr["threads"]) == 1 and all(t.get("frames") for t in cr["threads"]), cr["threads"]
             _show("get_crash", {"summary": cr["summary"], "fault_address": cr["fault_address"], "faulting_instruction": cr["faulting_instruction"],
                                 "frames": [{k: f[k] for k in ("level", "function", "file", "line", "address")} for f in cr["frames"]],
@@ -130,6 +134,18 @@ def test_crash_slice(tmp_path: Path):
             err, mm = await c.call("get_crash", target=TARGET, core_path=r["core_path"], binary=str(exe))
             assert err and mm["error"]["code"] == "core_mismatch", mm
             _show("get_crash with a rebuilt binary", mm)
+            # A binary without a build ID cannot be matched to a core outside a recorded run.
+            err, nb = await c.call("build", path=str(DEMO), output=str(tmp_path / "nobid"), ldflags=["-Wl,--build-id=none"])
+            assert not err and nb["artifacts"][0]["build_id"] is None, nb
+            err, mm2 = await c.call("get_crash", target=TARGET, core_path=r["core_path"], binary=nb["artifacts"][0]["path"])
+            assert err and mm2["error"]["code"] == "core_mismatch" and "no GNU build ID" in mm2["error"]["message"], mm2
+            # A modified snapshot of the deployed binary is refused.
+            snap = Path(r["binary_snapshot"]) if "binary_snapshot" in r else next((STATE / "targets" / TARGET / "runs" / r["run_id"] / "bin").iterdir())
+            orig = snap.read_bytes()
+            snap.write_bytes(orig + b"\0")
+            err, tam = await c.call("get_crash", target=TARGET, run_id=r["run_id"])
+            snap.write_bytes(orig)
+            assert err and tam["error"]["code"] == "core_mismatch" and "snapshot" in tam["error"]["message"], tam
 
             err, ok_run = await c.call("deploy_and_run", target=TARGET, binary=art["path"], args=["0"], timeout_s=20)
             assert not err and ok_run["outcome"] == "exited" and ok_run["exit_code"] == 0 and ok_run["core_path"] is None, ok_run
@@ -249,7 +265,7 @@ def test_background_runs_and_inspection(tmp_path: Path):
             err, p2 = await c.call("run_poll", target=TARGET, run_id=rid, stdout_offset=p1["stdout_next"])
             assert not err and p2["stdout_offset"] == p1["stdout_next"] and "tick 0\n" not in p2["stdout"] and p2["stdout"], p2
             err, sp = await c.call("run_stop", target=TARGET, run_id=rid)
-            assert not err and sp["was_running"] and sp["state"] == "finished" and sp["outcome"] == "stopped", sp
+            assert not err and sp["was_running"] and sp["acknowledged"] and sp["state"] == "finished" and sp["outcome"] == "stopped", sp
             assert sp["result"]["runner_stopped_by"] == "SIGTERM" and sp["result"]["group_clean"], sp
             err, p3 = await c.call("run_poll", target=TARGET, run_id=rid, stdout_offset=p2["stdout_next"])
             assert not err and p3["state"] == "finished" and p3["outcome"] == "stopped", p3
@@ -318,3 +334,121 @@ def test_processes_and_logs():
             assert not err and lg["returned"] >= 1 and all("sshd" in e["process"] for e in lg["entries"]), lg
             _show("logs process=sshd since_s=3600 limit=3", lg)
     run_async(go())
+
+
+NOISE = r'''#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+int main(void)
+{
+    static char buf[1 << 20];
+    memset(buf, 1, sizeof buf);               /* control characters: 6 bytes each once JSON-escaped */
+    fwrite(buf, 1, sizeof buf, stdout);
+    fwrite(buf, 1, sizeof buf, stderr);
+    fflush(NULL);
+    sleep(30);
+    return 0;
+}
+'''
+
+
+def test_poll_budget_for_escaped_output(tmp_path: Path):
+    """Finding I: two streams of control characters expand 6x each in JSON."""
+    async def go():
+        async with mcp_client({}) as c:
+            exe = await _build(c, tmp_path, "noise", NOISE)
+            err, rs = await c.call("run_start", target=TARGET, binary=exe, timeout_s=60, max_output_kb=1024)
+            assert not err, rs
+            for _ in range(20):
+                err, p = await c.call("run_poll", target=TARGET, run_id=rs["run_id"], max_kb=1024, wait_s=1)
+                assert not err, p
+                if p["stdout_size"] == 1 << 20 and p["stderr_size"] == 1 << 20:
+                    break
+            err, p = await c.call("run_poll", target=TARGET, run_id=rs["run_id"], max_kb=1024)
+            assert not err and p["stdout_next"] == 1 << 20 and p["stderr_next"] == 1 << 20 and p["stdout"] == "\x01" * (1 << 20), {k: p[k] for k in ("stdout_next", "stderr_next")}
+            err, sp = await c.call("run_stop", target=TARGET, run_id=rs["run_id"])
+            assert not err and sp["acknowledged"], sp
+            print(f"\n--- run_poll returned 2 x 1 MiB of control characters in one call (stdout_next={p['stdout_next']}, stderr_next={p['stderr_next']})")
+    run_async(go())
+
+
+def test_file_boundaries(tmp_path: Path):
+    """Findings B, C and H: normalised destinations, no directory or symlinked-parent destinations,
+    no alias of qnx-mcp's own directory, downloads that never chmod the user's directory, and an
+    exact copy of a file that grows during the transfer."""
+    cfg = Config.from_env()
+    base = f"/tmp/qnx-mcp-test/b{os.getpid()}"
+    (tmp_path / "f.txt").write_text("x\n")
+
+    async def go():
+        async with mcp_client({}) as c:
+            err, ok = await c.call("file_put", target=TARGET, local_path=str(tmp_path / "f.txt"), remote_path=f"{base}/dir/f.txt")
+            assert not err, ok
+            for remote, code in ((f"{base}/dir", "path_not_allowed"), ("/data/var/tmp/qnx-mcp/bin/evil", "path_not_allowed"),
+                                 ("/tmp//qnx-mcp/bin/evil", "invalid_argument"), (f"{base}/lnk/f.txt", "path_not_allowed")):
+                if remote.endswith("/lnk/f.txt"):
+                    Target(cfg, TARGET).ssh(["ln", "-s", "/data/var", f"{base}/lnk"], timeout=15)
+                err, bad = await c.call("file_put", target=TARGET, local_path=str(tmp_path / "f.txt"), remote_path=remote, overwrite=True)
+                assert err and bad["error"]["code"] == code, (remote, bad)
+            err, nolink = await c.call("file_get", target=TARGET, remote_path=f"{base}/lnk/missing")
+            assert err, nolink
+            shared = tmp_path / "shared"
+            shared.mkdir()
+            os.chmod(shared, 0o755)
+            err, got = await c.call("file_get", target=TARGET, remote_path=f"{base}/dir/f.txt", local_path=str(shared / "f.txt"))
+            assert not err and (shared / "f.txt").read_text() == "x\n" and (shared.stat().st_mode & 0o777) == 0o755, got
+            # A file that keeps growing: exactly the bytes that were hashed are copied.
+            ticker = await _build(c, tmp_path, "ticker", TICKER)
+            err, rs = await c.call("run_start", target=TARGET, binary=ticker, timeout_s=30)
+            await asyncio.sleep(1.0)
+            err, grow = await c.call("file_get", target=TARGET, remote_path=f"/tmp/qnx-mcp/runs/{rs['run_id']}/stdout")
+            assert not err and grow["size"] > 0 and Path(grow["local_path"]).stat().st_size == grow["size"], grow
+            await c.call("run_stop", target=TARGET, run_id=rs["run_id"])
+            print(f"\n--- file_get of a growing file copied exactly the {grow['size']} bytes that were hashed")
+    run_async(go())
+
+
+def test_pruning_and_failed_starts(tmp_path: Path):
+    """Findings D and E, in process: a run_start whose acknowledgement is lost stops its daemon, and
+    pruning never removes the directory of a live background run or of a one-shot run in progress."""
+    cfg = Config.from_env()
+
+    async def build():
+        async with mcp_client({}) as c:
+            return await _build(c, tmp_path, "ticker", TICKER), await _build(c, tmp_path, "hang", HANG)
+    ticker, hang = run_async(build())
+
+    real = ops._parse_runner
+
+    def lose_ack(text, what):
+        if what == "run_start":
+            raise QnxMcpError("runner_failed", "simulated lost acknowledgement")
+        return real(text, what)
+
+    ops._parse_runner = lose_ack
+    try:
+        with pytest.raises(QnxMcpError):
+            ops.run_start(cfg, TARGET, ticker, timeout_s=60)
+    finally:
+        ops._parse_runner = real
+    t = Target(cfg, TARGET)
+    failed = [r for r in ops.all_records(t) if r.get("error") == "runner_failed" and r["binary"] == ticker]
+    assert failed and failed[-1]["state"] == "failed" and failed[-1]["cleanup"] == "stopped", failed[-1:]
+    assert ops.processes(cfg, TARGET, name="ticker")["returned"] == 0
+
+    bg = ops.run_start(cfg, TARGET, ticker, timeout_s=60)
+    box: dict = {}
+    import threading
+    th = threading.Thread(target=lambda: box.update(r=ops.deploy_and_run(cfg, TARGET, hang, timeout_s=6)))
+    th.start()
+    time.sleep(2.0)
+    ip = t.require_ip()
+    runner = ops.prepare(t, ip, [], [])
+    pr = ops._parse_runner(t.ssh([runner, "-G", "/tmp/qnx-mcp/runs", "-k", "0", "-a", "0"], timeout=30, ip=ip).out, "prune")
+    th.join(30)
+    assert box["r"]["outcome"] == "timeout" and box["r"]["warnings"] == [], box
+    p = ops.run_poll(cfg, TARGET, bg["run_id"])
+    assert p["state"] == "running" and p["stdout"].startswith("tick 0"), p
+    ops.run_stop(cfg, TARGET, bg["run_id"])
+    assert pr["skipped_live"] >= 2, pr
+    print(f"\n--- lost run_start acknowledgement: cleanup={failed[-1]['cleanup']}; prune with keep=0 age=0 during two live runs: {pr}")
