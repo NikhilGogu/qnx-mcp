@@ -33,3 +33,18 @@ $ slog2info -t | grep -i -E "penalt|drop"   (after a burst of tool calls, each w
 sshd[249871-1]: srclimit_penalise: 192.168.122.1/32: activating ipv4 penalty of 15.383 seconds for penalty: connections without attempting authentication
 sshd[249871-1]: drop connection #0 from [192.168.122.1]:37472 on [192.168.122.130]:22 penalty: connections without attempting authentication
 (the tool call saw: ssh_failed, "kex_exchange_identification: Connection closed by remote host")
+
+## 4. iofdinfo() cannot name an opened directory; DCMD_PROC_INFO start_time is nanoseconds since the epoch (v0.2.1)
+# probe2 opens each directory with opendir() and calls iofdinfo(dirfd, 0 and _FDINFO_FLAG_LOCALPATH, ...);
+# "pN" prints DCMD_PROC_INFO start_time of pid N.
+$ /tmp/probe2 /tmp /data/var/tmp /tmp/qnx-mcp /tmp/qnx-mcp-test/d1 /tmp/qnx-mcp-test/blink /proc/boot / /proc /dev /dev/shmem /system/bin p1 p16387; date +%s
+/tmp: iofdinfo=-1 [] (Function not implemented) local=-1 []
+/data/var/tmp: iofdinfo=-1 [] (Function not implemented) local=-1 []
+/proc/boot: iofdinfo=-1 [] (Function not implemented) local=-1 []
+/: iofdinfo=-1 [] (Function not implemented) local=-1 []
+/dev/shmem: iofdinfo=-1 [] (Function not implemented) local=-1 []
+/system/bin: iofdinfo=-1 [] (Function not implemented) local=-1 []
+(the same for /tmp/qnx-mcp, /tmp/qnx-mcp-test/d1, the link /tmp/qnx-mcp-test/blink, /proc and /dev)
+/proc/1/ctl: No error start_time=1793718763000000000
+/proc/16387/ctl: No error start_time=1793718763840745655
+1793742037
