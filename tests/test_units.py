@@ -365,3 +365,39 @@ def test_core_read_and_build_id(tmp_path: Path):
     got = core_read(str(tmp_path / "c.core"), vaddr + 0x218, len(note))
     assert got == note and gnu_build_id(got) == bid.hex()
     assert core_read(str(tmp_path / "c.core"), vaddr + len(seg) - 4, 16) is None
+
+
+@pytest.mark.parametrize("pid,name,path,allowed", [
+    (1, "procnto-smp-instr", "/proc/boot/procnto-smp-instr", False),
+    (16387, "slogger2", "proc/boot/slogger2", False),           # pidin shows most paths without the leading '/'
+    (20000, "procnto-copy", "/tmp/procnto-copy", False),
+    (20001, "slay", "/system/bin/slay", False),
+    (20002, "x", "/usr/bin/x", False),
+    (20003, "x", "/bin/x", False),
+    (20004, "x", "/sbin/x", False),
+    (20005, "qnx-mcp-run-abc", "tmp/qnx-mcp/bin/qnx-mcp-run-abc", False),
+    (20006, "x", "/etc/x", False),
+    (20007, "x", "/tmpx/x", False),                             # prefix of an allowed root, not below it
+    (20008, "x", "/tmp/../system/bin/x", False),                # traversal
+    (20009, "x", "", False),
+    (20010, "hub", "tmp/hub", True),
+    (20011, "sensord", "/data/home/svc/sensord", True),
+    (20012, "crash", "tmp/qnx-mcp/apps/9216f565e767f4b9/crash", True),
+])
+def test_stop_refusal(pid, name, path, allowed):
+    from qnx_mcp.ops import stop_refusal
+    why = stop_refusal(pid, name, path)
+    assert (why is None) == allowed, why
+
+
+def test_program_choice(tmp_path):
+    from qnx_mcp.ops import _program
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path), "QNX_MCP_STATE_DIR": str(tmp_path / "s"), "QNX_MCP_ALLOW_TARGETS": "*"})
+    for binary, remote, code in ((None, None, "invalid_argument"), ("/bin/ls", "/data/x", "invalid_argument"),
+                                 (None, "/tmp/qnx-mcp/apps/a/b", "path_not_allowed"), (None, "/tmp/./x", "invalid_argument"),
+                                 (None, "relative/x", "invalid_argument")):
+        with pytest.raises(QnxMcpError) as e:
+            _program(cfg, None, binary, remote, "r-000000000000")
+        assert e.value.code == code, (binary, remote, e.value.message)
+    prog = _program(cfg, None, None, "/data/home/svc/sensord", "r-000000000000")
+    assert prog["remote_binary"] and prog["remote_path"] == "/data/home/svc/sensord" and prog["binary"] is None
