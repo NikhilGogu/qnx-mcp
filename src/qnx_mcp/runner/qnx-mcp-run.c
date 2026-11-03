@@ -4,33 +4,44 @@
  * Copyright 2026 The qnx-mcp authors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Modes, one per invocation; every mode prints exactly one JSON object on stdout:
+ * Modes, one per invocation; every mode except -X prints exactly one JSON object on stdout:
  *   qnx-mcp-run [run options] -- program [args...]     run once and report how it ended
  *   qnx-mcp-run -B dir [run options] -- program [args]  start in the background (own session);
  *       output goes to dir/stdout and dir/stderr, the final report to dir/status.json
  *   qnx-mcp-run -P dir -O out_off -E err_off -L max     poll a background run (output from cursors)
- *   qnx-mcp-run -K dir [-w wait_ms]                     stop a background run
+ *   qnx-mcp-run -K dir [-w wait_ms]                     stop a background run through its control FIFO
  *   qnx-mcp-run -H file                                 size, mode and SHA-256 of a regular file
+ *   qnx-mcp-run -X file -L max                          copy at most max bytes of a regular file to stdout (raw)
+ *   qnx-mcp-run -G dir -k keep -a age_s [-p name]...    prune run or app directories that are not in use
+ *   qnx-mcp-run -D rel -r root [-x dir] [-c] [-I tmp [-n]]  check, or install tmp as, root/rel without
+ *       following symlinks below root; -n never replaces an existing file
  *   qnx-mcp-run -V                                      print the version
  * Run options: -t timeout_ms, -m max bytes kept per stream, -w core_wait_ms, -C cwd,
- *   -e NAME=VALUE (repeatable), -R dir (move the core file there), -S (stop the program
- *   when stdin reaches EOF, which is how the ssh client going away shows up here).
+ *   -e NAME=VALUE (repeatable), -R dir (move the core file there and lock dir/active while running),
+ *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here).
  *
- * The program runs in its own process group with stdin on /dev/null. When it exits, or at
- * the deadline, the whole group is killed, so descendants that stayed in the group do not
- * outlive the run (a descendant that calls setsid() escapes; that is not containable here).
+ * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
+ * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
+ * is killed, the core is waited for, and only then is the zombie reaped. The deadline is a timer
+ * signal, so it is enforced even if the main loop is blocked. A descendant that calls setsid() escapes
+ * the group; that is not containable here.
  *
- * Crash handling uses the dumper's client interface instead of guessing file names: before
- * the program starts we register an updateable pulse with DCMD_DUMPER_NOTIFYEVENT, so dumper
- * writes the dumped pid into the pulse value. If the program dies from a signal that dumper
- * handles, we wait (bounded) for the pulse carrying its pid and ask DCMD_DUMPER_GETPATH for
- * the exact core path. Every call to dumper is bounded with TimerTimeout.
+ * Crash handling uses the dumper's client interface instead of guessing file names: before the
+ * program starts we register an updateable pulse with DCMD_DUMPER_NOTIFYEVENT, so dumper writes the
+ * dumped pid into the pulse value. If the program dies from a signal that dumper handles, we wait
+ * (bounded) for the pulse carrying its pid and ask DCMD_DUMPER_GETPATH for the exact core path.
+ * Calls to dumper run in a helper thread with a bounded wait, and each is also bounded with
+ * TimerTimeout (the call is skipped if that cannot be set up).
  */
+#include <ctype.h>
 #include <devctl.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
@@ -53,12 +64,34 @@
 #define MAX_ENV 64
 #define MAX_WARN 16
 #define DUMPER_CALL_NS 2000000000ull
+#define DUMPER_CALL_MS 3000
+#define MAX_PROTECT 128
 #define PIPE_GRACE_MS 300
 #define GROUP_GRACE_MS 2000
 
 static volatile sig_atomic_t g_stop_signal;
+static volatile sig_atomic_t g_child; /* the program while it is not yet reaped, else 0 */
 
-static void on_stop(int signo) { g_stop_signal = signo; }
+/* Async-signal-safe: g_child is cleared before the program is reaped, so the pid is still reserved. */
+static void kill_child_async(void)
+{
+    pid_t c = (pid_t)g_child;
+    if (c > 0 && kill(-c, SIGKILL) == -1) {
+        kill(c, SIGKILL); /* no group yet (setpgid not done or failed) */
+    }
+}
+
+static void on_stop(int signo)
+{
+    g_stop_signal = signo;
+    kill_child_async();
+}
+
+static void on_deadline(int signo)
+{
+    (void)signo;
+    kill_child_async();
+}
 
 static uint64_t now_ms(void)
 {
@@ -311,24 +344,122 @@ struct dumper {
     int chid;
     int coid;
     int fd;
+    int wedged; /* a call did not return in time: make no further calls */
     const char *state;
     int err;
 };
 
-/* Bound the next blocking kernel call (devctl is a single MsgSend to dumper). */
-static void bound_next_call(int flags, uint64_t ns)
+/* Bound the next blocking kernel call. Returns 0, or -1 if the bound could not be set up, in which
+ * case the caller must not make the call. */
+static int bound_next_call(int flags, uint64_t ns)
 {
     uint64_t t = ns;
     if (TimerTimeout(CLOCK_MONOTONIC, flags, NULL, &t, NULL) == -1) {
         warn_errno("TimerTimeout", errno);
+        return -1;
     }
+    return 0;
+}
+
+/* One call to dumper, run in a helper thread so that a wedged dumper (whose channel may ignore
+ * unblock requests) cannot stall the runner: the main thread waits at most DUMPER_CALL_MS. */
+struct dcall {
+    int op; /* 0 register, 1 getpath, 2 remove */
+    int fd;
+    int coid;
+    pid_t pid;
+    int rc;
+    char path[PATH_MAX];
+    int done[2];
+};
+
+static void *dcall_main(void *arg)
+{
+    struct dcall *c = arg;
+    if (c->op == 0) {
+        int fd = open("/proc/dumper", O_RDONLY | O_CLOEXEC);
+        if (fd == -1) {
+            c->rc = errno;
+        } else {
+            struct sigevent ev;
+            SIGEV_PULSE_INIT(&ev, c->coid, sched_get_priority_max(SCHED_RR), DUMP_PULSE_CODE, -1);
+            SIGEV_MAKE_UPDATEABLE(&ev);
+            if (MsgRegisterEvent(&ev, fd) == -1) {
+                c->rc = errno;
+            } else if (bound_next_call(_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY, DUMPER_CALL_NS) != 0) {
+                c->rc = EINVAL;
+            } else {
+                c->rc = devctl(fd, DCMD_DUMPER_NOTIFYEVENT, &ev, sizeof ev, NULL);
+            }
+            if (c->rc == EOK) {
+                c->fd = fd;
+            } else {
+                close(fd);
+            }
+        }
+    } else if (bound_next_call(_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY, DUMPER_CALL_NS) != 0) {
+        c->rc = EINVAL;
+    } else if (c->op == 1) {
+        dump_info_t info;
+        memset(&info, 0, sizeof info);
+        info.i.pid = c->pid;
+        c->rc = devctl(c->fd, DCMD_DUMPER_GETPATH, &info, sizeof info, NULL);
+        info.o.dump_pathname[sizeof info.o.dump_pathname - 1] = '\0';
+        snprintf(c->path, sizeof c->path, "%s", c->rc == EOK ? info.o.dump_pathname : "");
+    } else {
+        c->rc = devctl(c->fd, DCMD_DUMPER_REMOVEEVENT, NULL, 0, NULL);
+    }
+    (void)!write(c->done[1], "x", 1);
+    return NULL;
+}
+
+/* Returns the finished call (caller frees it), or NULL if it failed to start or did not finish in time. */
+static struct dcall *dcall_run(struct dumper *d, int op, pid_t pid)
+{
+    if (d->wedged) {
+        return NULL;
+    }
+    struct dcall *c = calloc(1, sizeof *c);
+    if (c == NULL || pipe(c->done) == -1) {
+        free(c);
+        return NULL;
+    }
+    c->op = op;
+    c->fd = d->fd;
+    c->coid = d->coid;
+    c->pid = pid;
+    pthread_t th;
+    if (pthread_create(&th, NULL, dcall_main, c) != 0) {
+        close(c->done[0]);
+        close(c->done[1]);
+        free(c);
+        return NULL;
+    }
+    pthread_detach(th);
+    uint64_t end = now_ms() + DUMPER_CALL_MS;
+    for (;;) {
+        uint64_t now = now_ms();
+        struct pollfd p = {c->done[0], POLLIN, 0};
+        int n = now < end ? poll(&p, 1, (int)(end - now)) : 0;
+        if (n > 0) {
+            break;
+        }
+        if (n == 0 || errno != EINTR) {
+            d->wedged = 1; /* the helper still owns c; it is leaked on purpose */
+            warn_errno("dumper call did not return", ETIMEDOUT);
+            return NULL;
+        }
+    }
+    close(c->done[0]);
+    close(c->done[1]);
+    return c;
 }
 
 static void dumper_register(struct dumper *d)
 {
+    memset(d, 0, sizeof *d);
     d->chid = d->coid = d->fd = -1;
     d->state = "unavailable";
-    d->err = 0;
     d->chid = ChannelCreate(_NTO_CHF_FIXED_PRIORITY);
     if (d->chid == -1) {
         d->err = errno;
@@ -339,37 +470,31 @@ static void dumper_register(struct dumper *d)
         d->err = errno;
         return;
     }
-    d->fd = open("/proc/dumper", O_RDONLY | O_CLOEXEC);
-    if (d->fd == -1) {
-        d->err = errno;
+    struct dcall *c = dcall_run(d, 0, 0);
+    if (c == NULL) {
+        d->err = ETIMEDOUT;
+        d->state = "error";
         return;
     }
-    struct sigevent ev;
-    SIGEV_PULSE_INIT(&ev, d->coid, sched_get_priority_max(SCHED_RR), DUMP_PULSE_CODE, -1);
-    SIGEV_MAKE_UPDATEABLE(&ev);
-    int rc = MsgRegisterEvent(&ev, d->fd) == -1 ? errno : EOK;
-    if (rc == EOK) {
-        bound_next_call(_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY, DUMPER_CALL_NS);
-        rc = devctl(d->fd, DCMD_DUMPER_NOTIFYEVENT, &ev, sizeof ev, NULL);
+    d->err = c->rc;
+    d->fd = c->rc == EOK ? c->fd : -1;
+    free(c);
+    if (d->fd != -1) {
+        d->state = "registered";
     }
-    if (rc != EOK) {
-        d->err = rc;
-        close(d->fd);
-        d->fd = -1;
-        return;
-    }
-    d->state = "registered";
 }
 
 static void dumper_unregister(struct dumper *d)
 {
     if (d->fd != -1) {
-        bound_next_call(_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY, DUMPER_CALL_NS);
-        int rc = devctl(d->fd, DCMD_DUMPER_REMOVEEVENT, NULL, 0, NULL);
-        if (rc != EOK) {
-            warn_errno("DCMD_DUMPER_REMOVEEVENT", rc);
+        struct dcall *c = dcall_run(d, 2, 0);
+        if (c != NULL && c->rc != EOK) {
+            warn_errno("DCMD_DUMPER_REMOVEEVENT", c->rc);
         }
-        close(d->fd);
+        free(c);
+        if (!d->wedged) {
+            close(d->fd);
+        }
         d->fd = -1;
     }
 }
@@ -405,9 +530,10 @@ struct result {
     int timed_out, stopped_by, disconnected;
     int group_clean;
     int capture_complete;
+    int zombie_held;        /* exit seen with WNOWAIT: pid and group id stay reserved until reap() */
     uint64_t duration_ms;
-    uint64_t exit_at;       /* monotonic ms when the program exited */
-    long core_ready_ms;     /* from the exit to dumper's completion pulse, -1 if none */
+    uint64_t exit_at;
+    long core_ready_ms;
     const char *dumper_state;
     int dumper_errno;
     int have_core;
@@ -453,28 +579,39 @@ static void sink_read(struct sink *s)
     }
 }
 
-static void kill_group(pid_t pid, int sig)
+/* Processes other than the leader whose process group is pgid (scan of /proc). */
+static int group_members(pid_t pgid)
 {
-    /* Only used while the child is not yet reaped, so pid cannot have been reused. */
-    if (kill(-pid, sig) == -1) {
-        if (errno != ESRCH) {
-            warn_errno("kill(process group)", errno);
+    DIR *d = opendir("/proc");
+    if (d == NULL) {
+        return -1;
+    }
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (!isdigit((unsigned char)e->d_name[0])) {
+            continue;
         }
-        if (kill(pid, sig) == -1 && errno != ESRCH) {
-            warn_errno("kill(child)", errno);
+        pid_t p = (pid_t)strtol(e->d_name, NULL, 10);
+        if (p != pgid && getpgid(p) == pgid) {
+            n++;
         }
     }
+    closedir(d);
+    return n;
 }
 
-/* After the group leader is reaped: kill what is left of the group and wait until it is empty. */
-static int empty_group(pid_t pgid)
+/* Called while the exited leader is still an unreaped zombie, so the group id cannot be reused. */
+static int clean_group(pid_t pgid)
 {
     uint64_t end = now_ms() + GROUP_GRACE_MS;
     for (;;) {
-        if (kill(-pgid, SIGKILL) == -1 && errno == ESRCH) {
+        kill(-pgid, SIGKILL);
+        int n = group_members(pgid);
+        if (n == 0) {
             return 1;
         }
-        if (now_ms() >= end) {
+        if (n < 0 || now_ms() >= end) {
             return 0;
         }
         usleep(10000);
@@ -504,6 +641,7 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
         signal(SIGHUP, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
         signal(SIGINT, SIG_DFL);
+        signal(SIGALRM, SIG_DFL);
         sigset_t none;
         sigemptyset(&none);
         sigprocmask(SIG_SETMASK, &none, NULL);
@@ -537,6 +675,7 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
         (void)!write(execp[1], &e, sizeof e);
         _exit(127);
     }
+    g_child = pid; /* from here the deadline and stop handlers may signal the (unreaped) child */
     /* Both sides call setpgid so the group exists before either continues; EACCES means the
      * child already exec'd (and so already ran its own setpgid), ESRCH that it already exited. */
     if (setpgid(pid, pid) == -1 && errno != EACCES && errno != ESRCH) {
@@ -559,29 +698,27 @@ static void record_status(struct result *r, int status)
     r->signo = r->signaled ? WTERMSIG(status) : 0;
 }
 
-/* Reap the group leader (it has exited), then empty its process group. */
-static void reap(struct result *r, int use_waitid)
+/* Release the zombie. After this the pid may be reused, so nothing signals it again. */
+static void reap(struct result *r)
 {
-    if (use_waitid) {
-        kill(-r->pid, SIGKILL); /* the zombie still holds the group id, so it cannot be reused */
+    if (!r->zombie_held) {
+        return;
     }
+    g_child = 0;
     int status = 0;
     for (;;) {
         pid_t w = waitpid(r->pid, &status, 0);
-        if (w == r->pid) {
+        if (w == r->pid || (w == -1 && errno != EINTR)) {
+            if (w == -1) {
+                warn_errno("waitpid", errno);
+            }
             break;
         }
-        if (w == -1 && errno == EINTR) {
-            continue;
-        }
-        warn_errno("waitpid", errno);
-        break;
     }
-    record_status(r, status);
-    r->group_clean = empty_group(r->pid);
+    r->zombie_held = 0;
 }
 
-static void supervise(const struct opts *o, struct result *r, struct sink *out, struct sink *err, int exec_rd, uint64_t start)
+static void supervise(const struct opts *o, struct result *r, struct sink *out, struct sink *err, int exec_rd, int ctl_rd, uint64_t start)
 {
     uint64_t deadline = start + (uint64_t)o->timeout_ms;
     uint64_t done_at = 0;
@@ -594,19 +731,27 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
         uint64_t now = now_ms();
         if (!done) {
             if (!killed && now >= deadline) {
-                kill_group(r->pid, SIGKILL);
+                kill_child_async();
                 r->timed_out = killed = 1;
             } else if (!killed && g_stop_signal) {
-                kill_group(r->pid, SIGKILL);
+                kill_child_async();
                 r->stopped_by = g_stop_signal;
                 killed = 1;
             }
-            int exited = 0;
             if (use_waitid) {
                 siginfo_t si;
                 memset(&si, 0, sizeof si);
                 if (waitid(P_PID, (id_t)r->pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0) {
-                    exited = si.si_pid == r->pid;
+                    if (si.si_pid == r->pid) {
+                        /* Exit seen, zombie kept: pid and group id stay reserved while we clean up. */
+                        r->zombie_held = 1;
+                        r->exited = si.si_code == CLD_EXITED && r->exec_errno == 0;
+                        r->exit_code = si.si_code == CLD_EXITED ? si.si_status : 0;
+                        r->signaled = si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED;
+                        r->signo = r->signaled ? si.si_status : 0;
+                        r->group_clean = clean_group(r->pid);
+                        done = 1;
+                    }
                 } else if (errno != EINTR) {
                     if (errno != EINVAL && errno != ENOSYS) {
                         warn_errno("waitid", errno);
@@ -614,20 +759,21 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
                     use_waitid = 0;
                 }
             }
-            if (!use_waitid) {
+            if (!use_waitid && !done) {
+                /* Fallback: reaping releases the pid, so the group is not signalled afterwards. */
                 int status = 0;
+                g_child = 0;
                 pid_t w = waitpid(r->pid, &status, WNOHANG);
                 if (w == r->pid) {
                     record_status(r, status);
-                    r->group_clean = empty_group(r->pid);
+                    r->group_clean = 0;
                     done = 1;
                 } else if (w == -1 && errno != EINTR) {
                     warn_errno("waitpid", errno);
                     done = 1;
+                } else {
+                    g_child = r->pid;
                 }
-            } else if (exited) {
-                reap(r, 1);
-                done = 1;
             }
             if (done) {
                 done_at = now_ms();
@@ -642,14 +788,15 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
             /* Something outside the group (a setsid() escapee) still holds a pipe open. */
             break;
         }
-        struct pollfd fds[4];
-        struct sink *who[4];
+        struct pollfd fds[5];
+        struct sink *who[5];
         int nfds = 0;
         if (out->fd != -1) { fds[nfds].fd = out->fd; who[nfds] = out; nfds++; }
         if (err->fd != -1) { fds[nfds].fd = err->fd; who[nfds] = err; nfds++; }
-        int exec_slot = -1, stdin_slot = -1;
+        int exec_slot = -1, stdin_slot = -1, ctl_slot = -1;
         if (exec_rd != -1) { exec_slot = nfds; fds[nfds].fd = exec_rd; who[nfds] = NULL; nfds++; }
         if (stdin_open) { stdin_slot = nfds; fds[nfds].fd = 0; who[nfds] = NULL; nfds++; }
+        if (ctl_rd != -1 && !done) { ctl_slot = nfds; fds[nfds].fd = ctl_rd; who[nfds] = NULL; nfds++; }
         for (int i = 0; i < nfds; i++) {
             fds[i].events = POLLIN;
             fds[i].revents = 0;
@@ -680,6 +827,9 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
                 if (k == 0 || exec_got == sizeof exec_buf || (k < 0 && errno != EINTR && errno != EAGAIN)) {
                     if (exec_got == sizeof exec_buf) {
                         memcpy(&r->exec_errno, exec_buf, sizeof r->exec_errno);
+                        if (r->exited) {
+                            r->exited = 0; /* the 127 came from the failed exec, not the program */
+                        }
                     }
                     close(exec_rd);
                     exec_rd = -1;
@@ -692,6 +842,17 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
                     if (!done) {
                         r->disconnected = 1;
                         g_stop_signal = SIGHUP;
+                        kill_child_async();
+                    }
+                }
+            } else if (i == ctl_slot) {
+                char buf[64];
+                ssize_t k = read(ctl_rd, buf, sizeof buf - 1);
+                if (k > 0) {
+                    buf[k] = '\0';
+                    if (strstr(buf, "stop") != NULL) {
+                        g_stop_signal = SIGTERM;
+                        kill_child_async();
                     }
                 }
             }
@@ -705,6 +866,8 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
     if (err->fd != -1) { close(err->fd); err->fd = -1; }
 }
 
+/* Runs while the program is still an unreaped zombie (when waitid is available), so a pulse that
+ * names its pid cannot come from another process that reused the pid. */
 static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
 {
     r->dumper_state = "timeout";
@@ -714,10 +877,8 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
         if (t >= deadline) {
             break;
         }
-        uint64_t ns = (deadline - t) * 1000000ull;
         struct _pulse pulse;
-        if (TimerTimeout(CLOCK_MONOTONIC, _NTO_TIMEOUT_RECEIVE, NULL, &ns, NULL) == -1) {
-            warn_errno("TimerTimeout", errno);
+        if (bound_next_call(_NTO_TIMEOUT_RECEIVE, (deadline - t) * 1000000ull) != 0) {
             r->dumper_state = "error";
             break;
         }
@@ -735,21 +896,18 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
             continue; /* another process's dump */
         }
         r->core_ready_ms = (long)(now_ms() - r->exit_at);
-        dump_info_t info;
-        memset(&info, 0, sizeof info);
-        info.i.pid = r->pid;
-        bound_next_call(_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY, DUMPER_CALL_NS);
-        int rc = devctl(d->fd, DCMD_DUMPER_GETPATH, &info, sizeof info, NULL);
-        info.o.dump_pathname[sizeof info.o.dump_pathname - 1] = '\0';
-        if (rc != EOK || info.o.dump_pathname[0] == '\0') {
-            /* The dump happened (we got its pulse) but dumper no longer knows the path,
-             * for example because its list of recent dumps (dumper -E) was overrun. */
+        struct dcall *c = dcall_run(d, 1, r->pid);
+        if (c == NULL || c->rc != EOK || c->path[0] == '\0') {
+            /* The dump happened (we got its pulse) but dumper did not give a path, for example
+             * because its list of recent dumps (dumper -E) was overrun, or it did not answer. */
             r->dumper_state = "notified_no_path";
-            r->dumper_errno = rc;
+            r->dumper_errno = c == NULL ? ETIMEDOUT : c->rc;
+            free(c);
             break;
         }
-        snprintf(r->dumper_core_path, sizeof r->dumper_core_path, "%s", info.o.dump_pathname);
-        snprintf(r->core_path, sizeof r->core_path, "%s", info.o.dump_pathname);
+        snprintf(r->dumper_core_path, sizeof r->dumper_core_path, "%s", c->path);
+        snprintf(r->core_path, sizeof r->core_path, "%s", c->path);
+        free(c);
         r->have_core = 1;
         r->dumper_state = "notified";
         if (o->core_dir != NULL) {
@@ -816,28 +974,80 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     fputs("}\n", f);
 }
 
-/* Runs the program to completion; out/err either buffer (foreground) or write files (background). */
-static void run_program(const struct opts *o, struct result *r, struct sink *out, struct sink *err, struct dumper *d)
+static void arm_deadline(long ms)
 {
+    timer_t tid;
+    struct sigevent ev;
+    SIGEV_SIGNAL_INIT(&ev, SIGALRM);
+    struct itimerspec its;
+    memset(&its, 0, sizeof its);
+    its.it_value.tv_sec = ms / 1000;
+    its.it_value.tv_nsec = (ms % 1000) * 1000000L;
+    if (timer_create(CLOCK_MONOTONIC, &ev, &tid) == -1 || timer_settime(tid, 0, &its, NULL) == -1) {
+        warn_errno("deadline timer", errno); /* the main loop's own deadline check still applies */
+    }
+}
+
+/* Runs the program to completion; out/err either buffer (foreground) or write files (background). */
+static void run_program(const struct opts *o, struct result *r, struct sink *out, struct sink *err, int ctl_rd)
+{
+    struct dumper d;
     memset(r, 0, sizeof *r);
     r->core_ready_ms = -1;
-    dumper_register(d);
-    r->dumper_state = d->state;
-    if (d->fd == -1 && d->err) {
-        r->dumper_errno = d->err;
+    dumper_register(&d);
+    r->dumper_state = d.state;
+    if (d.fd == -1 && d.err) {
+        r->dumper_errno = d.err;
     }
     int exec_rd;
     uint64_t start = now_ms();
     r->pid = start_child(o, &out->fd, &err->fd, &exec_rd);
-    supervise(o, r, out, err, exec_rd, start);
+    arm_deadline(o->timeout_ms);
+    supervise(o, r, out, err, exec_rd, ctl_rd, start);
     if (r->signaled && dumper_signal(r->signo)) {
-        if (d->fd != -1) {
-            wait_core(o, d, r);
+        if (d.fd != -1) {
+            wait_core(o, &d, r);
         }
-    } else if (d->fd != -1) {
+    } else if (d.fd != -1) {
         r->dumper_state = "not_applicable";
     }
-    dumper_unregister(d);
+    reap(r);
+    dumper_unregister(&d);
+}
+
+static int hold_lock(const char *path)
+{
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    struct flock fl;
+    memset(&fl, 0, sizeof fl);
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    if (fd == -1 || fcntl(fd, F_SETLK, &fl) == -1) {
+        if (fd != -1) {
+            close(fd);
+        }
+        return -1;
+    }
+    return fd;
+}
+
+/* Returns the pid holding the write lock on path, 0 if none, -1 if path cannot be opened. */
+static pid_t lock_holder_of(const char *path)
+{
+    int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd == -1) {
+        return -1;
+    }
+    struct flock fl;
+    memset(&fl, 0, sizeof fl);
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    pid_t holder = -1;
+    if (fcntl(fd, F_GETLK, &fl) == 0) {
+        holder = fl.l_type == F_UNLCK ? 0 : fl.l_pid;
+    }
+    close(fd);
+    return holder;
 }
 
 /* ------------------------------------------------------------------ background runs */
@@ -869,7 +1079,7 @@ static int mode_background(struct opts *o, const char *dir)
     }
     if (daemon_pid > 0) {
         close(rp[1]);
-        int msg[3] = {0, 0, 0}; /* setup errno, child pid, lock errno */
+        int msg[2] = {0, 0}; /* setup errno, program pid */
         size_t got = 0;
         uint64_t end = now_ms() + 10000;
         while (got < sizeof msg && now_ms() < end) {
@@ -883,22 +1093,33 @@ static int mode_background(struct opts *o, const char *dir)
             }
             got += (size_t)k;
         }
+        int ok = got == sizeof msg && msg[0] == 0 && msg[1] > 0;
+        if (!ok) {
+            /* No usable report: the daemon is still our unreaped child, so killing it by pid is safe.
+             * If it got as far as starting the program, its deadline timer dies with it, so the
+             * program's group is killed here too while the daemon (its parent) is not yet reaped. */
+            if (got == sizeof msg && msg[1] > 0) {
+                kill(-msg[1], SIGKILL);
+            }
+            kill(daemon_pid, SIGKILL);
+            waitpid(daemon_pid, NULL, 0);
+        }
         j_head(stdout);
-        printf(",\"started\":%s,\"runner_pid\":%d,\"pid\":", got == sizeof msg && msg[0] == 0 ? "true" : "false", (int)daemon_pid);
-        if (got == sizeof msg && msg[1] > 0) {
+        printf(",\"started\":%s,\"runner_pid\":%d,\"pid\":", ok ? "true" : "false", (int)daemon_pid);
+        if (ok) {
             printf("%d", msg[1]);
         } else {
             fputs("null", stdout);
         }
         fputs(",\"error\":", stdout);
-        j_cstr(stdout, got < sizeof msg ? "no report from the background runner" : msg[0] ? strerror(msg[0]) : NULL);
+        j_cstr(stdout, ok ? NULL : got < sizeof msg ? "the background runner did not report; it was stopped" : strerror(msg[0] ? msg[0] : EIO));
         puts("}");
         return 0;
     }
 
     /* Background runner: own session, no ties to the ssh channel. */
     close(rp[0]);
-    int msg[3] = {0, 0, 0};
+    int msg[2] = {0, 0};
     if (setsid() == -1) {
         msg[0] = errno;
     }
@@ -911,13 +1132,22 @@ static int mode_background(struct opts *o, const char *dir)
     }
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/runner.pid", dir);
-    int lockfd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-    struct flock fl;
-    memset(&fl, 0, sizeof fl);
-    fl.l_type = F_WRLCK;
-    fl.l_whence = SEEK_SET;
-    if (lockfd == -1 || fcntl(lockfd, F_SETLK, &fl) == -1) {
+    int lockfd = hold_lock(path);
+    if (lockfd == -1) {
         msg[0] = msg[0] ? msg[0] : errno;
+    }
+    /* Control FIFO: run_stop writes "stop" here; only this runner reads it. A second (write) end
+     * stays open so poll() does not report hang-up while no stopper is connected. */
+    snprintf(path, sizeof path, "%s/ctl", dir);
+    int ctl_rd = -1, ctl_wr = -1;
+    if (mkfifo(path, 0600) == -1 && errno != EEXIST) {
+        msg[0] = msg[0] ? msg[0] : errno;
+    } else {
+        ctl_rd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        ctl_wr = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+        if (ctl_rd == -1 || ctl_wr == -1) {
+            msg[0] = msg[0] ? msg[0] : errno;
+        }
     }
     struct sink out = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
     struct sink err = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
@@ -945,6 +1175,7 @@ static int mode_background(struct opts *o, const char *dir)
     int exec_rd;
     uint64_t start = now_ms();
     r.pid = start_child(o, &out.fd, &err.fd, &exec_rd);
+    arm_deadline(o->timeout_ms);
     char pidline[64];
     int pn = snprintf(pidline, sizeof pidline, "%d %d\n", (int)getpid(), (int)r.pid);
     if (write(lockfd, pidline, (size_t)pn) != pn) {
@@ -954,7 +1185,7 @@ static int mode_background(struct opts *o, const char *dir)
     (void)!write(rp[1], msg, sizeof msg);
     close(rp[1]);
 
-    supervise(o, &r, &out, &err, exec_rd, start);
+    supervise(o, &r, &out, &err, exec_rd, ctl_rd, start);
     if (r.signaled && dumper_signal(r.signo)) {
         if (d.fd != -1) {
             wait_core(o, &d, &r);
@@ -962,41 +1193,13 @@ static int mode_background(struct opts *o, const char *dir)
     } else if (d.fd != -1) {
         r.dumper_state = "not_applicable";
     }
+    reap(&r);
     dumper_unregister(&d);
     close(out.file);
     close(err.file);
-
     write_status(dir, &r, &out, &err);
     close(lockfd); /* releases the liveness lock */
     _exit(0);
-}
-
-/* Returns the pid holding the liveness lock on dir/runner.pid, 0 if none, -1 on error. */
-static pid_t lock_holder(const char *dir, pid_t *runner, pid_t *child)
-{
-    char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/runner.pid", dir);
-    int fd = open(path, O_RDWR | O_CLOEXEC);
-    if (fd == -1) {
-        return -1;
-    }
-    char buf[64] = {0};
-    ssize_t n = read(fd, buf, sizeof buf - 1);
-    int rp = 0, cp = 0;
-    if (n > 0 && sscanf(buf, "%d %d", &rp, &cp) == 2) {
-        *runner = rp;
-        *child = cp;
-    }
-    struct flock fl;
-    memset(&fl, 0, sizeof fl);
-    fl.l_type = F_WRLCK;
-    fl.l_whence = SEEK_SET;
-    pid_t holder = -1;
-    if (fcntl(fd, F_GETLK, &fl) == 0) {
-        holder = fl.l_type == F_UNLCK ? 0 : fl.l_pid;
-    }
-    close(fd);
-    return holder;
 }
 
 static void print_chunk(const char *dir, const char *name, unsigned long long offset, size_t max)
@@ -1032,11 +1235,11 @@ static void print_chunk(const char *dir, const char *name, unsigned long long of
 
 static int mode_poll(const char *dir, unsigned long long out_off, unsigned long long err_off, size_t max)
 {
-    pid_t runner = 0, child = 0;
-    pid_t holder = lock_holder(dir, &runner, &child);
-    j_head(stdout);
-    printf(",\"alive\":%s,\"runner_pid\":%d,\"pid\":%d,\"status\":", holder > 0 ? "true" : "false", (int)runner, (int)child);
     char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/runner.pid", dir);
+    pid_t holder = lock_holder_of(path);
+    j_head(stdout);
+    printf(",\"alive\":%s,\"status\":", holder > 0 ? "true" : "false");
     snprintf(path, sizeof path, "%s/status.json", dir);
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd == -1) {
@@ -1059,40 +1262,252 @@ static int mode_poll(const char *dir, unsigned long long out_off, unsigned long 
     return 0;
 }
 
+/* Stop a background run through its control FIFO: only the runner that owns the run reads it, and
+ * no signal is sent to a pid that might have been reused. */
 static int mode_stop(const char *dir, long wait_ms)
 {
-    pid_t runner = 0, child = 0;
-    pid_t holder = lock_holder(dir, &runner, &child);
+    char path[PATH_MAX], lock[PATH_MAX];
+    snprintf(path, sizeof path, "%s/ctl", dir);
+    snprintf(lock, sizeof lock, "%s/runner.pid", dir);
     j_head(stdout);
-    if (holder <= 0) {
-        printf(",\"was_running\":false,\"forced\":false}\n");
+    int fd = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd == -1) {
+        /* ENXIO: nobody has the FIFO open, so the runner is gone */
+        printf(",\"was_running\":false,\"acknowledged\":false}\n");
         return 0;
     }
-    if (runner <= 0) {
-        runner = holder; /* started a moment ago and has not written runner.pid yet */
+    if (write(fd, "stop\n", 5) != 5) {
+        warn_errno("write ctl", errno);
     }
-    if (holder != runner) {
-        fputs(",\"was_running\":true,\"error\":\"lock holder does not match runner.pid\"}\n", stdout);
-        return 0;
-    }
-    int forced = 0;
-    if (kill(runner, SIGTERM) == -1 && errno != ESRCH) {
-        warn_errno("kill(runner)", errno);
-    }
+    close(fd);
     uint64_t end = now_ms() + (uint64_t)(wait_ms > 0 ? wait_ms : 0);
-    while (lock_holder(dir, &runner, &child) == holder && now_ms() < end) {
+    while (lock_holder_of(lock) > 0 && now_ms() < end) {
         usleep(20000);
     }
-    if (lock_holder(dir, &runner, &child) == holder) {
-        /* The runner did not finish in time: kill the program's group, then the runner. */
-        if (child > 0) {
-            kill(-child, SIGKILL);
-        }
-        kill(holder, SIGKILL);
-        forced = 1;
-    }
-    printf(",\"was_running\":true,\"forced\":%s", forced ? "true" : "false");
+    printf(",\"was_running\":true,\"acknowledged\":%s", lock_holder_of(lock) > 0 ? "false" : "true");
     j_warnings(stdout);
+    puts("}");
+    return 0;
+}
+
+/* ------------------------------------------------------------------ maintenance and files */
+
+static int rm_entry(const char *p, const struct stat *st, int flag, struct FTW *ftw)
+{
+    (void)st;
+    (void)flag;
+    (void)ftw;
+    return remove(p) == 0 || errno == ENOENT ? 0 : -1;
+}
+
+struct dent {
+    char name[NAME_MAX + 1];
+    time_t mtime;
+};
+
+static int newest_first(const void *a, const void *b)
+{
+    const struct dent *x = a, *y = b;
+    return x->mtime < y->mtime ? 1 : x->mtime > y->mtime ? -1 : strcmp(x->name, y->name);
+}
+
+/* Remove subdirectories of dir beyond the newest `keep`, except those younger than age_s, those named
+ * in protect[], and those whose runner.pid or active file is locked by a live runner. */
+static int mode_prune(const char *dir, long keep, long age_s, char **protect, int nprotect)
+{
+    DIR *d = opendir(dir);
+    j_head(stdout);
+    if (d == NULL) {
+        printf(",\"removed\":0,\"skipped_live\":0}\n");
+        return 0;
+    }
+    size_t cap = 64, n = 0;
+    struct dent *v = malloc(cap * sizeof *v);
+    struct dirent *e;
+    while (v != NULL && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        char p[PATH_MAX];
+        struct stat st;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (lstat(p, &st) == -1 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        if (n == cap) {
+            struct dent *nv = realloc(v, (cap *= 2) * sizeof *v);
+            if (nv == NULL) {
+                break;
+            }
+            v = nv;
+        }
+        snprintf(v[n].name, sizeof v[n].name, "%s", e->d_name);
+        v[n].mtime = st.st_mtime;
+        n++;
+    }
+    closedir(d);
+    if (v != NULL) {
+        qsort(v, n, sizeof *v, newest_first);
+    }
+    int removed = 0, live = 0;
+    time_t now = time(NULL);
+    for (size_t i = (size_t)keep; v != NULL && i < n; i++) {
+        int skip = now - v[i].mtime < age_s;
+        for (int j = 0; !skip && j < nprotect; j++) {
+            skip = strcmp(protect[j], v[i].name) == 0;
+        }
+        char p[PATH_MAX];
+        snprintf(p, sizeof p, "%s/%s/runner.pid", dir, v[i].name);
+        if (!skip && lock_holder_of(p) > 0) {
+            skip = 1;
+            live++;
+        }
+        snprintf(p, sizeof p, "%s/%s/active", dir, v[i].name);
+        if (!skip && lock_holder_of(p) > 0) {
+            skip = 1;
+            live++;
+        }
+        if (skip) {
+            continue;
+        }
+        snprintf(p, sizeof p, "%s/%s", dir, v[i].name);
+        if (nftw(p, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0) {
+            removed++;
+        }
+    }
+    free(v);
+    printf(",\"removed\":%d,\"skipped_live\":%d}\n", removed, live);
+    return 0;
+}
+
+/* Copy at most max bytes of a regular file to stdout, raw (the one mode whose output is not JSON). */
+static int mode_cat(const char *path, size_t max)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    struct stat st;
+    if (fd == -1 || fstat(fd, &st) == -1 || !S_ISREG(st.st_mode)) {
+        return 3;
+    }
+    char buf[65536];
+    size_t left = max;
+    while (left > 0) {
+        ssize_t k = read(fd, buf, left < sizeof buf ? left : sizeof buf);
+        if (k == 0) {
+            break;
+        }
+        if (k < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return 4;
+        }
+        for (ssize_t off = 0; off < k;) {
+            ssize_t w = write(1, buf + off, (size_t)(k - off));
+            if (w < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return 5;
+            }
+            off += w;
+        }
+        left -= (size_t)k;
+    }
+    return 0;
+}
+
+/* Walk from root to the parent of root/rel without following symlinks below root (root itself may be
+ * a system link such as /tmp -> /data/var/tmp). Returns a descriptor of the parent directory. */
+static int open_parent(const char *root, const char *rel, int create, char *base, size_t baselen, char *real, size_t reallen)
+{
+    if (realpath(root, real) == NULL) {
+        fail("bad root", errno);
+    }
+    int fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd == -1) {
+        fail("open root", errno);
+    }
+    char buf[PATH_MAX];
+    snprintf(buf, sizeof buf, "%s", rel);
+    char *save = NULL, *comp = strtok_r(buf, "/", &save);
+    while (comp != NULL) {
+        char *next = strtok_r(NULL, "/", &save);
+        if (next == NULL) {
+            snprintf(base, baselen, "%s", comp);
+            return fd;
+        }
+        if (strcmp(comp, ".") == 0 || strcmp(comp, "..") == 0) {
+            fail("bad path component", 0);
+        }
+        int nfd = openat(fd, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (nfd == -1 && errno == ENOENT && create) {
+            if (mkdirat(fd, comp, 0755) == -1 && errno != EEXIST) {
+                fail("mkdir", errno);
+            }
+            nfd = openat(fd, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        }
+        if (nfd == -1) {
+            fail("a parent directory is a symlink or not a directory", errno);
+        }
+        close(fd);
+        fd = nfd;
+        size_t l = strlen(real);
+        snprintf(real + l, reallen - l, "/%s", comp);
+        comp = next;
+    }
+    fail("empty destination", 0);
+    return -1;
+}
+
+static void check_forbidden(const char *real_parent, const char *base, const char *forbidden)
+{
+    char forb[PATH_MAX], full[PATH_MAX];
+    if (forbidden == NULL || realpath(forbidden, forb) == NULL) {
+        return;
+    }
+    size_t fl = strlen(forb);
+    snprintf(full, sizeof full, "%s/%s", real_parent, base);
+    if (strcmp(full, forb) == 0 || (strncmp(full, forb, fl) == 0 && full[fl] == '/')) {
+        fail("destination is inside qnx-mcp's own directory", 0);
+    }
+}
+
+/* -D dest: check (and with -c create the parents of) a file_put destination; -I tmp: install tmp
+ * (in the same directory) as dest, with -n refusing to replace an existing file. */
+static int mode_dest(const char *root, const char *rel, const char *forbidden, int create, const char *install, int no_replace)
+{
+    char base[NAME_MAX + 1], real[PATH_MAX];
+    int dfd = open_parent(root, rel, create, base, sizeof base, real, sizeof real);
+    check_forbidden(real, base, forbidden);
+    struct stat st;
+    int exists = fstatat(dfd, base, &st, AT_SYMLINK_NOFOLLOW) == 0;
+    if (exists && S_ISDIR(st.st_mode)) {
+        fail("destination is a directory", 0);
+    }
+    if (exists && S_ISLNK(st.st_mode)) {
+        fail("destination is a symlink", 0);
+    }
+    if (exists && !S_ISREG(st.st_mode)) {
+        fail("destination is not a regular file", 0);
+    }
+    if (install != NULL) {
+        struct stat ts;
+        if (strchr(install, '/') != NULL || fstatat(dfd, install, &ts, AT_SYMLINK_NOFOLLOW) == -1 || !S_ISREG(ts.st_mode)) {
+            fail("temporary file missing", errno);
+        }
+        if (no_replace) {
+            if (linkat(dfd, install, dfd, base, 0) == -1) {
+                fail(errno == EEXIST ? "destination exists" : "link", errno);
+            }
+            unlinkat(dfd, install, 0);
+        } else if (renameat(dfd, install, dfd, base) == -1) {
+            fail("rename", errno);
+        }
+    }
+    close(dfd);
+    j_head(stdout);
+    printf(",\"exists\":%s,\"installed\":%s,\"real_parent\":", exists ? "true" : "false", install ? "true" : "false");
+    j_cstr(stdout, real);
     puts("}");
     return 0;
 }
@@ -1117,12 +1532,16 @@ int main(int argc, char *argv[])
     o.timeout_ms = 30000;
     o.core_wait_ms = 10000;
     o.max_bytes = 65536;
-    const char *bg_dir = NULL, *poll_dir = NULL, *stop_dir = NULL, *hash_path = NULL;
+    const char *bg_dir = NULL, *poll_dir = NULL, *stop_dir = NULL, *hash_path = NULL, *prune_dir = NULL, *cat_path = NULL;
+    const char *dest = NULL, *root = NULL, *forbidden = NULL, *install = NULL;
+    char *protect[MAX_PROTECT];
+    int nprotect = 0, create = 0, no_replace = 0;
+    long keep = 20, age_s = 300;
     unsigned long long out_off = 0, err_off = 0;
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:V")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nV")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -1140,9 +1559,25 @@ int main(int argc, char *argv[])
         case 'P': poll_dir = optarg; break;
         case 'O': out_off = (unsigned long long)num_arg(optarg, 0, LONG_MAX); break;
         case 'E': err_off = (unsigned long long)num_arg(optarg, 0, LONG_MAX); break;
-        case 'L': max_chunk = (size_t)num_arg(optarg, 1, 16L << 20); break;
+        case 'L': max_chunk = (size_t)num_arg(optarg, 1, LONG_MAX); break;
         case 'K': stop_dir = optarg; break;
         case 'H': hash_path = optarg; break;
+        case 'G': prune_dir = optarg; break;
+        case 'k': keep = num_arg(optarg, 0, 100000); break;
+        case 'a': age_s = num_arg(optarg, 0, 86400L * 365); break;
+        case 'p':
+            if (nprotect == MAX_PROTECT) {
+                fail("too many -p", 0);
+            }
+            protect[nprotect++] = optarg;
+            break;
+        case 'X': cat_path = optarg; break;
+        case 'D': dest = optarg; break;
+        case 'r': root = optarg; break;
+        case 'x': forbidden = optarg; break;
+        case 'c': create = 1; break;
+        case 'I': install = optarg; break;
+        case 'n': no_replace = 1; break;
         case 'V': printf("qnx-mcp-run %s\n", QMR_VERSION); return 0;
         default: fail("unknown option", 0);
         }
@@ -1150,11 +1585,23 @@ int main(int argc, char *argv[])
     if (hash_path != NULL) {
         return mode_hash(hash_path);
     }
+    if (cat_path != NULL) {
+        return mode_cat(cat_path, max_chunk);
+    }
     if (poll_dir != NULL) {
         return mode_poll(poll_dir, out_off, err_off, max_chunk);
     }
     if (stop_dir != NULL) {
         return mode_stop(stop_dir, o.core_wait_ms);
+    }
+    if (prune_dir != NULL) {
+        return mode_prune(prune_dir, keep, age_s, protect, nprotect);
+    }
+    if (dest != NULL) {
+        if (root == NULL) {
+            fail("-D needs -r root", 0);
+        }
+        return mode_dest(root, dest, forbidden, create, install, no_replace);
     }
     if (optind >= argc) {
         fail("missing program", 0);
@@ -1167,6 +1614,10 @@ int main(int argc, char *argv[])
     if (sigaction(SIGHUP, &sa, NULL) == -1 || sigaction(SIGTERM, &sa, NULL) == -1 || sigaction(SIGINT, &sa, NULL) == -1) {
         fail("sigaction", errno);
     }
+    sa.sa_handler = on_deadline;
+    if (sigaction(SIGALRM, &sa, NULL) == -1) {
+        fail("sigaction", errno);
+    }
     signal(SIGPIPE, SIG_IGN);
 
     if (bg_dir != NULL) {
@@ -1174,14 +1625,23 @@ int main(int argc, char *argv[])
         return mode_background(&o, bg_dir);
     }
 
+    int active = -1;
+    if (o.core_dir != NULL) {
+        /* While this lock is held, pruning never removes the run's directory. */
+        char p[PATH_MAX];
+        snprintf(p, sizeof p, "%s/active", o.core_dir);
+        active = hold_lock(p);
+        if (active == -1) {
+            warn_errno("lock run directory", errno);
+        }
+    }
     struct sink out = {-1, malloc(o.max_bytes + 1), -1, o.max_bytes, 0, 0, 0};
     struct sink err = {-1, malloc(o.max_bytes + 1), -1, o.max_bytes, 0, 0, 0};
     if (out.buf == NULL || err.buf == NULL) {
         fail("out of memory", ENOMEM);
     }
     struct result r;
-    struct dumper d;
-    run_program(&o, &r, &out, &err, &d);
+    run_program(&o, &r, &out, &err, -1);
     print_result(stdout, &r, &out, &err, 1);
     return 0;
 }
