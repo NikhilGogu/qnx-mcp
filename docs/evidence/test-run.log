@@ -4,7 +4,7 @@ cachedir: .pytest_cache
 rootdir: /home/ubuntu/work/qnx-mcp
 configfile: pyproject.toml
 plugins: anyio-4.16.0
-collecting ... collected 48 items
+collecting ... collected 62 items
 
 test_units.py::test_gcc_json_diagnostics PASSED
 test_units.py::test_text_and_linker_diagnostics PASSED
@@ -38,15 +38,26 @@ test_units.py::test_cancel_kills_running_process PASSED
 test_units.py::test_private_dir_mode_and_symlink_refusal PASSED
 test_units.py::test_symlinked_target_is_refused PASSED
 test_units.py::test_workspace_confines_host_paths PASSED
+test_units.py::test_remote_paths_must_be_normalised[/tmp//qnx-mcp/bin/x] PASSED
+test_units.py::test_remote_paths_must_be_normalised[/tmp/./qnx-mcp/x] PASSED
+test_units.py::test_remote_paths_must_be_normalised[/tmp/x/] PASSED
+test_units.py::test_remote_paths_must_be_normalised[//tmp/x] PASSED
+test_units.py::test_remote_paths_must_be_normalised[/tmp/a//b] PASSED
+test_units.py::test_write_root_refuses_managed_dir PASSED
+test_units.py::test_run_keeps_output_when_a_descendant_holds_the_pipe PASSED
+test_units.py::test_run_streams_with_exact_cap PASSED
+test_units.py::test_first_use_trust_is_off_by_default PASSED
+test_units.py::test_install_never_replaces_or_follows PASSED
+test_units.py::test_core_read_and_build_id PASSED
 test_mcp_offline.py::test_tools_have_descriptions_schemas_and_annotations PASSED
 test_mcp_offline.py::test_error_results_match_declared_schemas PASSED
 test_mcp_offline.py::test_unset_allowlist_refuses_everything PASSED
 test_mcp_offline.py::test_destroy_refuses_symlinked_target PASSED
 test_build_sdk.py::test_cmake_project 
-cmake: ['/usr/bin/cmake', '-S', '/tmp/pytest-of-ubuntu/pytest-30/test_cmake_project0', '-B'] -> /tmp/pytest-of-ubuntu/pytest-30/test_cmake_project0/build-qnx-x86_64/hello | warning: /tmp/pytest-of-ubuntu/pytest-30/test_cmake_project0/main.c 4 9 unused variable 'unused'
+cmake: ['/usr/bin/cmake', '-S', '/tmp/pytest-of-ubuntu/pytest-36/test_cmake_project0', '-B'] -> /tmp/pytest-of-ubuntu/pytest-36/test_cmake_project0/build-qnx-x86_64/hello | warning: /tmp/pytest-of-ubuntu/pytest-36/test_cmake_project0/main.c 4 9 unused variable 'unused'
 PASSED
 test_build_sdk.py::test_make_project 
-make: error diag {'file': '/tmp/pytest-of-ubuntu/pytest-30/test_make_project0/main.c', 'line': 4, 'column': 5, 'severity': 'error', 'message': "'undeclared' undeclared (first use in this function)", 'function': 'main'}
+make: error diag {'file': '/tmp/pytest-of-ubuntu/pytest-36/test_make_project0/main.c', 'line': 4, 'column': 5, 'severity': 'error', 'message': "'undeclared' undeclared (first use in this function)", 'function': 'main'}
 PASSED
 test_build_sdk.py::test_aarch64_cross_build PASSED
 test_slice_e2e.py::test_crash_slice 
@@ -73,11 +84,11 @@ test_slice_e2e.py::test_crash_slice
   "-O0",
   "-Wall",
   "-o",
-  "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo",
+  "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo",
   "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c"
  ],
  "artifact": {
-  "path": "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo",
+  "path": "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo",
   "arch": "x86_64",
   "type": "shared-object-or-pie",
   "interpreter": "/usr/lib/ldqnx-64.so.2",
@@ -90,46 +101,46 @@ test_slice_e2e.py::test_crash_slice
 
 --- deploy_and_run
 {
- "run_id": "r-c348570a404b",
+ "run_id": "r-1680de50d5cd",
  "outcome": "crashed",
  "signal_name": "SIGSEGV",
  "stdout": "imu: average offset 6\n",
  "dumper": "notified",
- "core_path": "/tmp/qnx-mcp/runs/r-c348570a404b/crash_demo.core",
+ "core_path": "/tmp/qnx-mcp/runs/r-1680de50d5cd/crash_demo.core",
  "dumper_core_path": "/data/var/dumper/crash_demo.core",
  "remote_path": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
- "duration_ms": 63,
+ "duration_ms": 44,
  "core_ready_ms": 0,
  "group_clean": true,
- "next_step": "call get_crash with target='tb' and run_id='r-c348570a404b' for a source-level backtrace"
+ "next_step": "call get_crash with target='tb' and run_id='r-1680de50d5cd' for a source-level backtrace"
 }
 
 --- get_crash
 {
  "summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in read_calibration at /home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c:21; stack: read_calibration() <- average_offset() <- main(). Fault address 0x0 means a NULL pointer dereference.",
  "fault_address": "0x0",
- "faulting_instruction": "=> 0x29802798b1 <read_calibration+32>:\tmov    (%rax),%eax",
+ "faulting_instruction": "=> 0x52c64838b1 <read_calibration+32>:\tmov    (%rax),%eax",
  "frames": [
   {
    "level": 0,
    "function": "read_calibration",
    "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
    "line": 21,
-   "address": "0x00000029802798b1"
+   "address": "0x00000052c64838b1"
   },
   {
    "level": 1,
    "function": "average_offset",
    "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
    "line": 28,
-   "address": "0x00000029802798e2"
+   "address": "0x00000052c64838e2"
   },
   {
    "level": 2,
    "function": "main",
    "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
    "line": 46,
-   "address": "0x00000029802799ca"
+   "address": "0x00000052c64839ca"
   }
  ],
  "crash_line_source": [
@@ -143,7 +154,7 @@ test_slice_e2e.py::test_crash_slice
   {
    "name": "s",
    "type": "const struct sensor *",
-   "value": "0x13c1e10b68",
+   "value": "0x3c26d9aab8",
    "arg": true
   },
   {
@@ -157,18 +168,20 @@ test_slice_e2e.py::test_crash_slice
   "source": "run_record",
   "binary_sha256": "9216f565e767f4b9c1aa9ccf4f3c0249fbe7f4b6c51f1c4588dc358f59d72cc5",
   "binary_build_id": "c65158d019120da0f95c3df1a466d88b",
-  "build_id_in_core": true,
-  "deployed_path_in_core": true,
-  "core_sha256": "7d36e1a15d74538abff05370deb44361e84ae39d283834edb891f32e0a564b93",
+  "core_executable": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
+  "core_pid": 66793494,
+  "core_build_id": "c65158d019120da0f95c3df1a466d88b",
+  "build_id_match": true,
+  "executable_match": true,
+  "pid_match": true,
+  "core_sha256": "6d8b429c2a05427be39f2f1803e016bf701eb3110ea0f96609067d9b80a38147",
   "core_size": 1658880,
-  "verified": true,
-  "core_pid": 38207510,
-  "pid_matches_run": true
+  "verified": true
  },
  "threads": [
   {
    "id": "1",
-   "target_id": "pid 38207510 tid 1",
+   "target_id": "pid 66793494 tid 1",
    "name": null,
    "state": "stopped",
    "faulting": true,
@@ -178,7 +191,7 @@ test_slice_e2e.py::test_crash_slice
      "function": "read_calibration",
      "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
      "line": 21,
-     "address": "0x00000029802798b1",
+     "address": "0x00000052c64838b1",
      "library": null
     },
     {
@@ -186,7 +199,7 @@ test_slice_e2e.py::test_crash_slice
      "function": "average_offset",
      "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
      "line": 28,
-     "address": "0x00000029802798e2",
+     "address": "0x00000052c64838e2",
      "library": null
     },
     {
@@ -194,7 +207,7 @@ test_slice_e2e.py::test_crash_slice
      "function": "main",
      "file": "/home/ubuntu/work/qnx-mcp/examples/crash_demo/crash.c",
      "line": 46,
-     "address": "0x00000029802799ca",
+     "address": "0x00000052c64839ca",
      "library": null
     }
    ]
@@ -207,10 +220,22 @@ test_slice_e2e.py::test_crash_slice
  "ok": false,
  "error": {
   "code": "core_mismatch",
-  "message": "the core /tmp/qnx-mcp/runs/r-c348570a404b/crash_demo.core was not produced by crash_demo",
+  "message": "the core's executable has build ID c65158d019120da0f95c3df1a466d88b, the binary 0d42bd18fe0b4cb9ec2eeb2e1a83556c",
   "hint": "Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed.",
   "details": {
-   "binary_build_id": "0d42bd18fe0b4cb9ec2eeb2e1a83556c"
+   "provenance": {
+    "source": "manual",
+    "binary_sha256": "949748e0c9dd784e059fab70572720fd11991908959911129ce11ff2071c1091",
+    "binary_build_id": "0d42bd18fe0b4cb9ec2eeb2e1a83556c",
+    "core_executable": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
+    "core_pid": 66793494,
+    "core_build_id": "c65158d019120da0f95c3df1a466d88b",
+    "build_id_match": false,
+    "executable_match": null,
+    "pid_match": null,
+    "core_sha256": "6d8b429c2a05427be39f2f1803e016bf701eb3110ea0f96609067d9b80a38147",
+    "core_size": 1658880
+   }
   }
  }
 }
@@ -218,7 +243,7 @@ test_slice_e2e.py::test_crash_slice
 --- build bad.c (diagnostics)
 [
  {
-  "file": "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/bad.c",
+  "file": "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/bad.c",
   "line": 4,
   "column": 16,
   "severity": "error",
@@ -227,7 +252,7 @@ test_slice_e2e.py::test_crash_slice
   "source": "gcc-json",
   "notes": [
    {
-    "file": "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/bad.c",
+    "file": "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/bad.c",
     "line": 4,
     "column": 16,
     "message": "each undeclared identifier is reported only once for each function it appears in"
@@ -235,7 +260,7 @@ test_slice_e2e.py::test_crash_slice
   ]
  },
  {
-  "file": "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/bad.c",
+  "file": "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/bad.c",
   "line": 3,
   "column": 9,
   "severity": "warning",
@@ -244,7 +269,7 @@ test_slice_e2e.py::test_crash_slice
   "source": "gcc-json"
  },
  {
-  "file": "/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/bad.c",
+  "file": "/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/bad.c",
   "line": 5,
   "column": 1,
   "severity": "warning",
@@ -256,13 +281,16 @@ test_slice_e2e.py::test_crash_slice
 
 --- MCP call log
 target_status(name='tb') -> is_error=False in 0.19s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo') -> is_error=False in 0.07s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo', timeout_s=20) -> is_error=False in 1.66s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo', cflags=['-g', '-O0', '-DREBUILT=1', '-fno-inline']) -> is_error=False in 0.04s
-get_crash(target='tb', run_id='r-c348570a404b') -> is_error=False in 0.75s
-get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-c348570a404b/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo') -> is_error=True in 0.50s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/crash_demo', args=['0'], timeout_s=20) -> is_error=False in 0.83s
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_crash_slice0/bad.c') -> is_error=True in 0.01s
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo') -> is_error=False in 0.06s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo', timeout_s=20) -> is_error=False in 0.41s
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo', cflags=['-g', '-O0', '-DREBUILT=1', '-fno-inline']) -> is_error=False in 0.04s
+get_crash(target='tb', run_id='r-1680de50d5cd') -> is_error=False in 0.75s
+get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-1680de50d5cd/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo') -> is_error=True in 0.71s
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/nobid', ldflags=['-Wl,--build-id=none']) -> is_error=False in 0.04s
+get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-1680de50d5cd/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/nobid') -> is_error=True in 0.71s
+get_crash(target='tb', run_id='r-1680de50d5cd') -> is_error=True in 0.47s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/crash_demo', args=['0'], timeout_s=20) -> is_error=False in 0.34s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_crash_slice0/bad.c') -> is_error=True in 0.01s
 PASSED
 test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its host processes
 
@@ -278,7 +306,7 @@ test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its
  "outcome": "timeout",
  "timed_out": true,
  "signal_name": "SIGKILL",
- "duration_ms": 1522,
+ "duration_ms": 1523,
  "stdout": "start\n",
  "group_clean": true
 }
@@ -289,31 +317,31 @@ test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its
   "outcome": "exited",
   "exit_code": 0,
   "group_clean": true,
-  "duration_ms": 37
+  "duration_ms": 26
  },
- "child_pid": 39854103,
+ "child_pid": 68456471,
  "processes(pid=child).returned": 0
 }
 
 --- cancellation: hang run cancelled after 3 s, no 'hang' process left after 0.5 s, next run ok
 
 --- MCP call log
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/echoargs.c') -> is_error=False in 0.06s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/echoargs', args=['$(touch /tmp/qnx-mcp-pwned)', 'a b; touch /tmp/qnx-mcp-pwned', '`id`', "it's", '*', 'line1\nline2', '\u2028sep']) -> is_error=False in 0.85s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/echoargs', args=['xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'], max_output_kb=1) -> is_error=False in 0.39s
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/hang.c') -> is_error=False in 0.04s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/hang', timeout_s=1.5) -> is_error=False in 2.34s
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/forker.c') -> is_error=False in 0.02s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/forker', timeout_s=10) -> is_error=False in 0.83s
-processes(target='tb', pid=39854103) -> is_error=False in 0.18s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/echoargs', cwd='/nonexistent-dir') -> is_error=False in 0.34s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/echoargs.c') -> is_error=False in 0.07s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/echoargs', args=['$(touch /tmp/qnx-mcp-pwned)', 'a b; touch /tmp/qnx-mcp-pwned', '`id`', "it's", '*', 'line1\nline2', '\u2028sep']) -> is_error=False in 0.85s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/echoargs', args=['xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'], max_output_kb=1) -> is_error=False in 0.34s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/hang.c') -> is_error=False in 0.04s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/hang', timeout_s=1.5) -> is_error=False in 2.34s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/forker.c') -> is_error=False in 0.04s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/forker', timeout_s=10) -> is_error=False in 0.84s
+processes(target='tb', pid=68456471) -> is_error=False in 0.18s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/echoargs', cwd='/nonexistent-dir') -> is_error=False in 0.34s
 processes(target='tb', name='hang') -> is_error=False in 0.17s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_runner_contract0/echoargs', args=['after-cancel'], timeout_s=10) -> is_error=False in 0.34s
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_runner_contract0/echoargs', args=['after-cancel'], timeout_s=10) -> is_error=False in 0.34s
 PASSED
 test_slice_e2e.py::test_threads_crash 
 --- get_crash threads
 {
- "summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in crasher at /tmp/pytest-of-ubuntu/pytest-30/test_threads_crash0/threads.c:6; stack: crasher() <- __thread_entry() <- ??(). Fault address 0x0 means a NULL pointer dereference.",
+ "summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in crasher at /tmp/pytest-of-ubuntu/pytest-36/test_threads_crash0/threads.c:6; stack: crasher() <- __thread_entry() <- ??(). Fault address 0x0 means a NULL pointer dereference.",
  "faulting_thread_id": "3",
  "threads": [
   {
@@ -353,17 +381,17 @@ test_slice_e2e.py::test_background_runs_and_inspection
 {
  "start": {
   "ok": true,
-  "run_id": "r-a5ffdb362598",
+  "run_id": "r-1780d01f863c",
   "target": "tb",
   "state": "running",
-  "pid": 41259031,
-  "runner_pid": 41259030,
-  "binary": "/tmp/pytest-of-ubuntu/pytest-30/test_background_runs_and_inspe0/ticker",
-  "binary_sha256": "0e1d9982ea0354599ddf2731239fcb959df8147f6c67ad443c22ebc61f31a5c3",
-  "remote_path": "/tmp/qnx-mcp/apps/0e1d9982ea035459/ticker",
+  "pid": 69701655,
+  "runner_pid": 69701654,
+  "binary": "/tmp/pytest-of-ubuntu/pytest-36/test_background_runs_and_inspe0/ticker",
+  "binary_sha256": "38649b3e134f0afdc3ddd493a27c661d445e3794201bbf3a1a08f677a9ab26c0",
+  "remote_path": "/tmp/qnx-mcp/apps/38649b3e134f0afd/ticker",
   "args": [],
   "deadline_s": 60.0,
-  "next_step": "call run_poll with run_id='r-a5ffdb362598' for output (pass back stdout_next/stderr_next as offsets); run_stop ends it"
+  "next_step": "call run_poll with run_id='r-1780d01f863c' for output (pass back stdout_next/stderr_next as offsets); run_stop ends it"
  },
  "poll1": {
   "state": "running",
@@ -376,14 +404,14 @@ test_slice_e2e.py::test_background_runs_and_inspection
   "stdout_next": 86
  },
  "processes_during_run": {
-  "pid": 41259031,
-  "ppid": 41259030,
+  "pid": 69701655,
+  "ppid": 69701654,
   "uid": 0,
   "code_bytes": 1032192,
   "data_bytes": 94208,
   "name": "ticker",
-  "path": "tmp/qnx-mcp/apps/0e1d9982ea035459/ticker",
-  "args": "/tmp/qnx-mcp/apps/0e1d9982ea035459/ticker",
+  "path": "tmp/qnx-mcp/apps/38649b3e134f0afd/ticker",
+  "args": "/tmp/qnx-mcp/apps/38649b3e134f0afd/ticker",
   "threads": [
    {
     "tid": 1,
@@ -400,14 +428,14 @@ test_slice_e2e.py::test_background_runs_and_inspection
  },
  "stop": {
   "ok": true,
-  "run_id": "r-a5ffdb362598",
+  "run_id": "r-1780d01f863c",
   "target": "tb",
   "was_running": true,
-  "forced": false,
+  "acknowledged": true,
   "state": "finished",
   "outcome": "stopped",
   "result": {
-   "pid": 41259031,
+   "pid": 69701655,
    "exec_error": null,
    "exited": false,
    "exit_code": null,
@@ -418,7 +446,7 @@ test_slice_e2e.py::test_background_runs_and_inspection
    "timed_out": false,
    "disconnected": false,
    "runner_stopped_by": "SIGTERM",
-   "duration_ms": 2409,
+   "duration_ms": 2391,
    "group_clean": true,
    "capture_complete": true,
    "stdout_bytes": 86,
@@ -437,19 +465,19 @@ test_slice_e2e.py::test_background_runs_and_inspection
 }
 
 --- MCP call log
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_background_runs_and_inspe0/ticker.c') -> is_error=False in 0.07s
-run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_background_runs_and_inspe0/ticker', timeout_s=60) -> is_error=False in 0.84s
-run_poll(target='tb', run_id='r-a5ffdb362598', wait_s=2) -> is_error=False in 0.13s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_background_runs_and_inspe0/ticker.c') -> is_error=False in 0.07s
+run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_background_runs_and_inspe0/ticker', timeout_s=60) -> is_error=False in 0.85s
+run_poll(target='tb', run_id='r-1780d01f863c', wait_s=2) -> is_error=False in 0.13s
 processes(target='tb', name='ticker', include_threads=True) -> is_error=False in 0.18s
 logs(target='tb', limit=5) -> is_error=False in 0.18s
-run_poll(target='tb', run_id='r-a5ffdb362598', stdout_offset=42) -> is_error=False in 0.12s
-run_stop(target='tb', run_id='r-a5ffdb362598') -> is_error=False in 0.34s
-run_poll(target='tb', run_id='r-a5ffdb362598', stdout_offset=86) -> is_error=False in 0.12s
+run_poll(target='tb', run_id='r-1780d01f863c', stdout_offset=42) -> is_error=False in 0.12s
+run_stop(target='tb', run_id='r-1780d01f863c') -> is_error=False in 0.34s
+run_poll(target='tb', run_id='r-1780d01f863c', stdout_offset=86) -> is_error=False in 0.12s
 processes(target='tb', name='ticker') -> is_error=False in 0.17s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-30/test_background_runs_and_inspe0/crash_demo') -> is_error=False in 0.04s
-run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-30/test_background_runs_and_inspe0/crash_demo', timeout_s=30) -> is_error=False in 0.34s
-run_poll(target='tb', run_id='r-c241f81f3b45', wait_s=10) -> is_error=False in 0.12s
-get_crash(target='tb', run_id='r-c241f81f3b45') -> is_error=False in 0.76s
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-36/test_background_runs_and_inspe0/crash_demo') -> is_error=False in 0.04s
+run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-36/test_background_runs_and_inspe0/crash_demo', timeout_s=30) -> is_error=False in 0.34s
+run_poll(target='tb', run_id='r-edbd2e72c450', wait_s=10) -> is_error=False in 0.12s
+get_crash(target='tb', run_id='r-edbd2e72c450') -> is_error=False in 0.74s
 run_stop(target='tb', run_id='r-0123456789ab') -> is_error=True in 0.00s
 PASSED
 test_slice_e2e.py::test_file_transfer 
@@ -458,24 +486,24 @@ test_slice_e2e.py::test_file_transfer
  "put": {
   "ok": true,
   "target": "tb",
-  "local_path": "/tmp/pytest-of-ubuntu/pytest-30/test_file_transfer0/blob.bin",
-  "remote_path": "/tmp/qnx-mcp-test/117887-1793724003/blob.bin",
+  "local_path": "/tmp/pytest-of-ubuntu/pytest-36/test_file_transfer0/blob.bin",
+  "remote_path": "/tmp/qnx-mcp-test/157045-1793725678/blob.bin",
   "size": 200000,
-  "sha256": "06f2f8bbfa71115e21455c60cbbe2d00aca8c6e85322768fd820b76cb07639e1",
+  "sha256": "f1e2dacd2fabaf6e290ff549c9d023ed20f8577ff74f3f76f5804316919eb450",
   "mode": "0644",
   "replaced": false
  },
  "get": {
-  "remote_path": "/tmp/qnx-mcp-test/117887-1793724003/blob.bin",
-  "local_path": "/tmp/pytest-of-ubuntu/pytest-30/test_file_transfer0/back.bin",
+  "remote_path": "/tmp/qnx-mcp-test/157045-1793725678/blob.bin",
+  "local_path": "/tmp/pytest-of-ubuntu/pytest-36/test_file_transfer0/back.bin",
   "size": 200000,
-  "sha256": "06f2f8bbfa71115e21455c60cbbe2d00aca8c6e85322768fd820b76cb07639e1"
+  "sha256": "f1e2dacd2fabaf6e290ff549c9d023ed20f8577ff74f3f76f5804316919eb450"
  },
  "get_text": {
   "ok": true,
   "target": "tb",
-  "remote_path": "/tmp/qnx-mcp-test/117887-1793724003/blob.bin.txt",
-  "local_path": "/home/ubuntu/.qnx-mcp/state/files/tb/4ae88915396c/blob.bin.txt",
+  "remote_path": "/tmp/qnx-mcp-test/157045-1793725678/blob.bin.txt",
+  "local_path": "/home/ubuntu/.qnx-mcp/state/files/tb/69f50322b9a5/blob.bin.txt",
   "size": 20,
   "sha256": "e4a985feba6c291b0de2319ce53b41e44d6a1413c535c586a649e896ac623743",
   "mode": "0600",
@@ -528,7 +556,7 @@ test_slice_e2e.py::test_processes_and_logs
 {
  "ok": true,
  "target": "tb",
- "target_time": 1793724007,
+ "target_time": 1793725682,
  "total_entries": 1082,
  "matched": 6,
  "returned": 3,
@@ -536,46 +564,55 @@ test_slice_e2e.py::test_processes_and_logs
  "source_truncated": false,
  "entries": [
   {
-   "time": 1793724007.484,
+   "time": 1793725682.545,
    "process": "sshd_session",
-   "pid": 43094018,
-   "buffer_set": "sshd_session.43094018..0",
+   "pid": 71643138,
+   "buffer_set": "sshd_session.71643138..0",
    "buffer": "slog",
    "thread": 1,
    "code": 0,
    "severity": 5,
    "severity_name": "info",
-   "message": "<38>Nov 03 16:40:07 sshd-session[43094018-1]: Disconnected from user root 192.168.122.1 port 54856",
-   "time_iso": "2026-11-03T16:40:07.484Z"
+   "message": "<38>Nov 03 17:08:02 sshd-session[71643138-1]: Disconnected from user root 192.168.122.1 port 49744",
+   "time_iso": "2026-11-03T17:08:02.545Z"
   },
   {
-   "time": 1793724007.533,
+   "time": 1793725682.594,
    "process": "sshd_session",
-   "pid": 43126786,
-   "buffer_set": "sshd_session.43126786..1",
+   "pid": 71675906,
+   "buffer_set": "sshd_session.71675906..1",
    "buffer": "slog",
    "thread": 1,
    "code": 0,
    "severity": 5,
    "severity_name": "info",
-   "message": "<38>Nov 03 16:40:07 sshd-session[43126786-1]: Connection closed by 192.168.122.1 port 54862 [preauth]",
-   "time_iso": "2026-11-03T16:40:07.533Z"
+   "message": "<38>Nov 03 17:08:02 sshd-session[71675906-1]: Connection closed by 192.168.122.1 port 49756 [preauth]",
+   "time_iso": "2026-11-03T17:08:02.594Z"
   },
   {
-   "time": 1793724007.606,
+   "time": 1793725682.662,
    "process": "sshd_session",
-   "pid": 43130898,
-   "buffer_set": "sshd_session.43130898..1",
+   "pid": 71675924,
+   "buffer_set": "sshd_session.71675924..1",
    "buffer": "slog",
    "thread": 1,
    "code": 0,
    "severity": 5,
    "severity_name": "info",
-   "message": "<38>Nov 03 16:40:07 sshd-session[43130898-1]: Accepted publickey for root from 192.168.122.1 port 54870 ssh2: ED25519 SHA256:dq+fYyYO1kfuQi1ytFYdyp+xq6uAndGTY/guLrGg8OA",
-   "time_iso": "2026-11-03T16:40:07.606Z"
+   "message": "<38>Nov 03 17:08:02 sshd-session[71675924-1]: Accepted publickey for root from 192.168.122.1 port 49760 ssh2: ED25519 SHA256:dq+fYyYO1kfuQi1ytFYdyp+xq6uAndGTY/guLrGg8OA",
+   "time_iso": "2026-11-03T17:08:02.662Z"
   }
  ]
 }
+PASSED
+test_slice_e2e.py::test_poll_budget_for_escaped_output 
+--- run_poll returned 2 x 1 MiB of control characters in one call (stdout_next=1048576, stderr_next=1048576)
+PASSED
+test_slice_e2e.py::test_file_boundaries 
+--- file_get of a growing file copied exactly the 49 bytes that were hashed
+PASSED
+test_slice_e2e.py::test_pruning_and_failed_starts 
+--- lost run_start acknowledgement: cleanup=stopped; prune with keep=0 age=0 during two live runs: {'runner': 'qnx-mcp-run', 'version': 'f1813ab1e274', 'removed': 18, 'skipped_live': 2}
 PASSED
 test_lifecycle_e2e.py::test_failed_create_is_cleaned_up 
 --- target_create with boot_timeout_s=1
@@ -586,11 +623,11 @@ test_lifecycle_e2e.py::test_failed_create_is_cleaned_up
 }
 PASSED
 test_lifecycle_e2e.py::test_create_stop_start_destroy 
---- target_create 21s
+--- target_create 22s
 {
  "name": "tb2",
  "state": "running",
- "ip": "192.168.122.72",
+ "ip": "192.168.122.159",
  "uname": "QNX tb2 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64",
  "dumper_args": "dumper -U 30:30 -d /data/var/dumper -M 1000 -D cores -n",
  "core_naming": "sequential",
@@ -600,22 +637,22 @@ test_lifecycle_e2e.py::test_create_stop_start_destroy
 --- two concurrent crashes of crash_demo on a sequential-naming target
 [
  {
-  "run_id": "r-0cc6981e4e39",
-  "pid": 1417242,
-  "dumper_core_path": "/data/var/dumper/crash_demo.1.core",
-  "core_path": "/tmp/qnx-mcp/runs/r-0cc6981e4e39/crash_demo.1.core"
+  "run_id": "r-3d6118836c61",
+  "pid": 1417243,
+  "dumper_core_path": "/data/var/dumper/crash_demo.2.core",
+  "core_path": "/tmp/qnx-mcp/runs/r-3d6118836c61/crash_demo.2.core"
  },
  {
-  "run_id": "r-8149a1b8f001",
-  "pid": 1417243,
+  "run_id": "r-2f638eb0c06f",
+  "pid": 1417241,
   "dumper_core_path": "/data/var/dumper/crash_demo.1.core",
-  "core_path": "/tmp/qnx-mcp/runs/r-8149a1b8f001/crash_demo.1.core"
+  "core_path": "/tmp/qnx-mcp/runs/r-2f638eb0c06f/crash_demo.1.core"
  }
 ]
 
---- target_stop issued 1 s into a 4 s run waited 3.79 s and stopped the target after the run ended (run outcome timeout)
+--- target_stop issued 1 s into a 4 s run waited 3.78 s and stopped the target after the run ended (run outcome timeout)
 
---- target_start 16s: ssh ok with StrictHostKeyChecking=yes against the keys pinned at creation
+--- target_start 15s: ssh ok with StrictHostKeyChecking=yes against the keys pinned at creation
 
 --- target_destroy
 {
@@ -627,21 +664,21 @@ test_lifecycle_e2e.py::test_create_stop_start_destroy
 }
 
 --- MCP call log
-target_create(name='tb2', cpus=1, options=['--hostname=tb2'], boot_timeout_s=300) -> is_error=False in 20.55s
+target_create(name='tb2', cpus=1, options=['--hostname=tb2'], boot_timeout_s=300) -> is_error=False in 21.66s
 target_create(name='tb2') -> is_error=True in 0.00s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-30/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 0.06s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-30/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 1.34s
-get_crash(target='tb2', run_id='r-0cc6981e4e39') -> is_error=False in 0.65s
-get_crash(target='tb2', run_id='r-8149a1b8f001') -> is_error=False in 0.63s
-build(path='/tmp/pytest-of-ubuntu/pytest-30/test_create_stop_start_destroy0/hang.c') -> is_error=False in 0.02s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-30/test_create_stop_start_destroy0/hang', timeout_s=4) -> is_error=False in 4.64s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-30/test_create_stop_start_destroy0/hang') -> is_error=True in 0.00s
-target_start(name='tb2', boot_timeout_s=240) -> is_error=False in 15.50s
-target_destroy(name='tb2', confirm='tb2') -> is_error=False in 0.09s
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-36/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 0.06s
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-36/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 1.44s
+get_crash(target='tb2', run_id='r-3d6118836c61') -> is_error=False in 0.66s
+get_crash(target='tb2', run_id='r-2f638eb0c06f') -> is_error=False in 0.62s
+build(path='/tmp/pytest-of-ubuntu/pytest-36/test_create_stop_start_destroy0/hang.c') -> is_error=False in 0.02s
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-36/test_create_stop_start_destroy0/hang', timeout_s=4) -> is_error=False in 4.64s
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-36/test_create_stop_start_destroy0/hang') -> is_error=True in 0.00s
+target_start(name='tb2', boot_timeout_s=240) -> is_error=False in 14.50s
+target_destroy(name='tb2', confirm='tb2') -> is_error=False in 0.07s
 target_list() -> is_error=False in 0.02s
 PASSED
 test_lifecycle_e2e.py::test_inspection_during_a_run 
---- agent B listed agent A's running 'hang' (pid 43450390) in 0.24 s while A's run was active
+--- agent B listed agent A's running 'hang' (pid 74801174) in 0.19 s while A's run was active
 PASSED
 
-======================== 48 passed in 89.49s (0:01:29) =========================
+======================== 62 passed in 121.64s (0:02:01) ========================

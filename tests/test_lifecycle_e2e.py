@@ -70,7 +70,7 @@ def test_create_stop_start_destroy(tmp_path: Path):
             for r in (a, bb):
                 err, cr_ = await c.call("get_crash", target=NEW, run_id=r["run_id"])
                 assert not err and cr_["provenance"]["verified"] and cr_["faulting_frame"]["function"] == "read_calibration", cr_
-                assert cr_["provenance"]["core_pid"] == r["pid"] and cr_["provenance"]["pid_matches_run"] is True, cr_["provenance"]
+                assert cr_["provenance"]["core_pid"] == r["pid"] and cr_["provenance"]["pid_match"] is True, cr_["provenance"]
             print("\n--- two concurrent crashes of crash_demo on a sequential-naming target\n" + json.dumps(
                 [{k: r[k] for k in ("run_id", "pid", "dumper_core_path", "core_path")} for r in (a, bb)], indent=1))
 
