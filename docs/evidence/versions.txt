@@ -1,0 +1,25 @@
+# commands run on the build box (ssh qnx), 2026-11-03T16:36Z
+$ lsb_release -ds
+Ubuntu 22.04.5 LTS
+$ uname -r
+6.8.0-1066-aws
+$ qemu-system-x86_64 --version | head -1
+QEMU emulator version 6.2.0 (Debian 1:6.2+dfsg-2ubuntu6.31)
+$ python3 --version
+Python 3.10.12
+$ ~/work/venv-qnx-mcp/bin/pip show mcp | grep Version
+Version: 2.3.0
+$ ssh -V
+OpenSSH_8.9p1 Ubuntu-3ubuntu0.18, OpenSSL 3.0.2 15 Mar 2022
+$ qcc -V 2>&1 | head -2
+cc: targets available in /home/ubuntu/qnx800/host/linux/x86_64/etc/qcc:
+	12.2.0,gcc_ntox86_64_gpp
+$ ntox86_64-gdb --version | head -1
+GNU gdb (qnx800-gdb-14.2-release-55-g85f1a3-dev) 14.2
+$ ~/bin/qtarget tb ssh uname -a
+QNX noname 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64
+# on the agent host
+$ claude --version
+2.1.312 (Claude Code)
+$ codex --version
+codex-cli 0.160.0

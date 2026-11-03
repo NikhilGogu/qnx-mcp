@@ -1,42 +1,214 @@
 # qnx-mcp
 
-An MCP (Model Context Protocol) server that gives AI coding agents structured, bounded tools for QNX OS 8.0 development: boot QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2` as JSON. Design, security model and roadmap: [docs/DESIGN.md](docs/DESIGN.md).
+qnx-mcp is a Model Context Protocol (MCP) server that gives AI coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
 
-## Requirements
+Status: release candidate v0.1. Everything below was run against QNX OS 8.0 x86_64 QEMU targets; the evidence is in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
 
-* QNX SDP 8.0 (tested with the non-commercial licence; `qnxsdp-env.sh`, qcc, mkqnximage, ntox86_64-gdb).
-* Linux x86_64 host with QEMU and KVM (tested on Ubuntu 22.04 with libvirt's `virbr0` network), ssh/scp, an ed25519 key.
-* Python 3.10+.
-* Targets: QNX OS 8.0 x86_64 QEMU images built by mkqnximage (the server builds them for you).
+## Why this is more than SSH
 
-## Install and run
+An agent with plain SSH has to compose shell commands, guess where cores land, pick the right gdb and sysroot, and parse free text. qnx-mcp does these things on the target and the host, and returns objects:
 
-```sh
-python3 -m venv ~/venv-qnx-mcp
-~/venv-qnx-mcp/bin/pip install -e '.[test]'
-~/venv-qnx-mcp/bin/qnx-mcp            # MCP over stdio; normally started by your agent
+* **Native crash notification.** A small C helper on the target (`qnx-mcp-run`) registers a pulse with dumper (`DCMD_DUMPER_NOTIFYEVENT`) before the program starts. When the program dies from a signal that dumper handles, the helper waits for the pulse carrying that pid and asks `DCMD_DUMPER_GETPATH` for the exact core path, then moves the core into the run's own directory. Measured in the example below: the whole crashing run took 63 ms, and dumper's completion pulse was already waiting when the helper saw the program exit (`core_ready_ms: 0`).
+* **Verified crash provenance.** Each run keeps a snapshot of the exact binary that was deployed. `get_crash` downloads the core with a size and SHA-256 check and refuses it (`core_mismatch`) unless the core's notes contain that binary's GNU build ID or its content-addressed path, and the pid in the core is the run's pid. A rebuilt binary at the same path is rejected; this is tested.
+* **Bounded runs.** Every run has a wall-clock deadline, capped output (truncation is reported), stdin on `/dev/null`, its own process group, and the whole group is killed when the program ends, so a forked child does not outlive the run. If the client cancels a call, the server kills its ssh and the helper notices the closed session and kills the program. Long-running programs get `run_start`, `run_poll` (output cursors) and `run_stop`.
+* **Structured system state.** `processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack, so an agent can see which thread faulted and which threads were waiting on it.
+
+## Example (real output, abridged)
+
+From `docs/evidence/test-run.log`, the crash demo in `examples/crash_demo`:
+
+`deploy_and_run(target="tb", binary=".../crash_demo")`
+```json
+{"run_id": "r-c348570a404b", "outcome": "crashed", "signal_name": "SIGSEGV", "stdout": "imu: average offset 6\n",
+ "dumper": "notified", "core_path": "/tmp/qnx-mcp/runs/r-c348570a404b/crash_demo.core",
+ "dumper_core_path": "/data/var/dumper/crash_demo.core", "remote_path": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
+ "duration_ms": 63, "core_ready_ms": 0, "group_clean": true,
+ "next_step": "call get_crash with target='tb' and run_id='r-c348570a404b' for a source-level backtrace"}
 ```
 
-Configuration is by environment: `QNX_MCP_SDP_ENV` (default `~/qnx800/qnxsdp-env.sh`), `QNX_MCP_TARGETS_DIR` (default `~/.qnx-mcp/targets`), `QNX_MCP_STATE_DIR`, `QNX_MCP_ALLOW_TARGETS` (comma-separated globs, default `*`), `QNX_MCP_SSH_KEY` (default `~/.ssh/id_ed25519`), `QNX_MCP_DHCP_LEASES`.
+`get_crash(target="tb", run_id="r-c348570a404b")`
+```json
+{"summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in read_calibration at .../examples/crash_demo/crash.c:21; stack: read_calibration() <- average_offset() <- main(). Fault address 0x0 means a NULL pointer dereference.",
+ "faulting_instruction": "=> 0x29802798b1 <read_calibration+32>:\tmov    (%rax),%eax",
+ "frames": [{"level": 0, "function": "read_calibration", "line": 21}, {"level": 1, "function": "average_offset", "line": 28}, {"level": 2, "function": "main", "line": 46}],
+ "locals_frame0": [{"name": "s", "type": "const struct sensor *", "value": "0x13c1e10b68", "arg": true}, {"name": "index", "type": "int", "value": "0", "arg": true}],
+ "provenance": {"build_id_in_core": true, "deployed_path_in_core": true, "core_pid": 38207510, "pid_matches_run": true, "verified": true}}
+```
 
-Claude Code: `claude mcp add qnx -e QNX_MCP_ALLOW_TARGETS='dev*' -- ~/venv-qnx-mcp/bin/qnx-mcp`. Codex, Cursor and VS Code: see docs/DESIGN.md section 6.
+The same call with `core_path` and a rebuilt `binary`:
+```json
+{"ok": false, "error": {"code": "core_mismatch", "message": "the core /tmp/qnx-mcp/runs/r-c348570a404b/crash_demo.core was not produced by crash_demo",
+ "hint": "Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed.", "details": {"binary_build_id": "0d42bd18fe0b4cb9ec2eeb2e1a83556c"}}}
+```
+
+## Requirements and tested versions
+
+Tested on (commands and output in [docs/evidence/versions.txt](docs/evidence/versions.txt)):
+
+| Component | Version |
+|---|---|
+| Build host | Ubuntu 22.04.5 LTS, x86_64, KVM, libvirt `virbr0` network |
+| QNX SDP | 8.0 (gcc 12.2.0 targets, `ntox86_64-gdb` 14.2), non-commercial licence |
+| Targets | QNX OS 8.0.0 x86_64 QEMU images built by mkqnximage |
+| QEMU | 6.2.0 |
+| Python | 3.10.12, `mcp` SDK 2.3.0 |
+| OpenSSH client | 8.9p1 |
+| Clients | Claude Code 2.1.312, Codex CLI 0.160.0 |
+
+aarch64 builds work (`build(arch="aarch64le")` is tested); aarch64 targets are not.
+
+## Install
+
+```sh
+git clone <this repository> qnx-mcp && cd qnx-mcp
+python3 -m venv ~/venv-qnx-mcp
+~/venv-qnx-mcp/bin/pip install -e '.[test]'
+QNX_MCP_ALLOW_TARGETS='dev*' ~/venv-qnx-mcp/bin/qnx-mcp    # MCP over stdio; normally your agent starts it
+```
+
+The target-side helper is compiled with the SDP's qcc on first use and uploaded to each target; nothing has to be installed on the target.
+
+## Configure the server
+
+Configuration is by environment variable:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `QNX_MCP_ALLOW_TARGETS` | none (refuses every target) | Comma-separated globs of target names this server may touch, e.g. `dev*`; `*` must be explicit |
+| `QNX_MCP_TARGETS_DIR` | `~/.qnx-mcp/targets` | One mkqnximage directory per target |
+| `QNX_MCP_STATE_DIR` | `~/.qnx-mcp/state` | Locks, pinned host keys, run records, binary snapshots, cores (mode 0700) |
+| `QNX_MCP_WORKSPACE` | not set | Colon-separated host directories; when set, every host path argument must resolve inside them |
+| `QNX_MCP_SDP_ENV` | `~/qnx800/qnxsdp-env.sh` | The SDP environment script |
+| `QNX_MCP_SSH_KEY` | `~/.ssh/id_ed25519` | Key installed into images by `target_create` |
+| `QNX_MCP_DHCP_LEASES` | `/var/lib/libvirt/dnsmasq/virbr0.status` | Lease file used to find target addresses |
+
+Target creation takes about 20 s with KVM (21 s in the last lifecycle test run, `target_start` 16 s), so raise client tool timeouts where a client has them.
+
+## Configure your agent
+
+**Claude Code** (tested, transcript in [docs/evidence/claude-code-session.json](docs/evidence/claude-code-session.json)):
+```sh
+claude mcp add -s project qnx -e QNX_MCP_ALLOW_TARGETS='dev*' -- ~/venv-qnx-mcp/bin/qnx-mcp
+```
+With the SDK and QEMU on a separate build box, run the server there through ssh (this is the configuration that was tested):
+```sh
+claude mcp add -s project qnx -- ssh -T buildbox env "QNX_MCP_ALLOW_TARGETS='dev*'" /home/me/venv-qnx-mcp/bin/qnx-mcp
+```
+
+**Codex CLI** (tested, transcript in [docs/evidence/codex-session.json](docs/evidence/codex-session.json)), in `~/.codex/config.toml`:
+```toml
+[mcp_servers.qnx]
+command = "ssh"
+args = ["-T", "buildbox", "env", "QNX_MCP_ALLOW_TARGETS='dev*'", "/home/me/venv-qnx-mcp/bin/qnx-mcp"]
+tool_timeout_sec = 600
+```
+The test passed the same keys as `-c mcp_servers.qnx.command=...` overrides to `codex exec`.
+
+**Cursor** (untested), `.cursor/mcp.json`:
+```json
+{ "mcpServers": { "qnx": { "command": "/home/me/venv-qnx-mcp/bin/qnx-mcp", "env": { "QNX_MCP_ALLOW_TARGETS": "dev*" } } } }
+```
+
+**VS Code** (untested), `.vscode/mcp.json`:
+```json
+{ "servers": { "qnx": { "type": "stdio", "command": "/home/me/venv-qnx-mcp/bin/qnx-mcp", "env": { "QNX_MCP_ALLOW_TARGETS": "dev*" } } } }
+```
 
 ## Tools
 
-`environment_check`, `target_list`, `target_create`, `target_start`, `target_stop`, `target_status`, `build`, `deploy_and_run`, `get_crash`, `processes`, `logs`. Each returns JSON with `ok`, or `ok: false` with `error {code, message, hint}`.
+Every tool returns JSON as MCP `structuredContent` (and as text). Success has `ok: true`; failure sets `isError` and returns `{ok: false, error: {code, message, hint, details}}`. Each declared output schema is "success object or error object", so both conform.
+
+| Tool | What it does |
+|---|---|
+| `environment_check` | SDP, qcc, mkqnximage, gdb, KVM, QEMU, ssh, key, lease file, allowlist and workspace checks, each with a fix |
+| `target_list` | Allowed targets under the targets dir with state (no SSH) |
+| `target_create` | mkqnximage build and headless boot, waits for SSH; pins the image's host keys; failed creates are removed |
+| `target_start` / `target_stop` | Boot without rebuild / stop QEMU through a pidfd of the verified QEMU process |
+| `target_destroy` | Stop and delete a managed target (`confirm` must repeat the name) |
+| `target_status` | State, IP, SSH probe, target clock, dumper arguments and core naming, host key policy |
+| `build` | qcc, make or cmake with the SDP; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
+| `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed` |
+| `run_start` / `run_poll` / `run_stop` | Background runs with output cursors, lifetime limit, and per-server ownership of run ids |
+| `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack |
+| `file_put` / `file_get` | One file each way, size and SHA-256 verified; destinations validated |
+| `processes` | `pidin` as JSON, optionally per thread |
+| `logs` | `slog2info` as JSON, filtered by buffer, process, time, severity, text |
+
+More real outputs (from `docs/evidence/test-run.log`):
+
+`target_status(name="tb")`
+```json
+{"name": "tb", "state": "running", "ip": "192.168.122.130", "uname": "QNX noname 8.0.0 2026/06/05-16:26:03EDT x86pc x86_64",
+ "dumper_running": true, "dumper_args": "dumper -U 30:30 -d /data/var/dumper -M 1000 -D cores", "core_naming": "fixed", "host_key_policy": "image"}
+```
+
+`build(path=".../bad.c")` (excerpt)
+```json
+{"ok": false, "error": {"code": "build_failed"}, "diagnostics": [
+ {"file": ".../bad.c", "line": 4, "column": 16, "severity": "error", "message": "'y' undeclared (first use in this function)", "source": "gcc-json"},
+ {"file": ".../bad.c", "line": 3, "column": 9, "severity": "warning", "message": "unused variable 'unused'", "option": "-Wunused-variable", "source": "gcc-json"}]}
+```
+
+`run_start` of a program printing a line every 200 ms, then `run_poll`, `processes` while it runs, `run_poll` from the returned offset, `run_stop`:
+```json
+{"run_id": "r-a5ffdb362598", "state": "running", "pid": 41259031, "remote_path": "/tmp/qnx-mcp/apps/0e1d9982ea035459/ticker"}
+{"state": "running", "stdout": "tick 0\ntick 1\ntick 2\ntick 3\ntick 4\ntick 5\n", "stdout_next": 42}
+{"pid": 41259031, "name": "ticker", "threads": [{"tid": 1, "priority": 10, "policy": "RR", "state": "NANOSLEEP", "blocked_on": null}]}
+{"state": "running", "stdout_offset": 42, "stdout_next": 86}
+{"was_running": true, "forced": false, "state": "finished", "outcome": "stopped"}
+```
+
+`get_crash` of a program whose third thread dereferences NULL while the main thread waits in `pthread_join` and another thread waits on a mutex: `faulting_thread_id` is `"3"`, `faulting_frame.function` is `crasher`, and `threads[]` lists all three stacks with `faulting: true` on thread 3.
+
+`file_get(target="tb", remote_path="/tmp/qnx-mcp-test/.../blob.bin.txt")`
+```json
+{"remote_path": "/tmp/qnx-mcp-test/117887-1793724003/blob.bin.txt", "local_path": "/home/ubuntu/.qnx-mcp/state/files/tb/4ae88915396c/blob.bin.txt",
+ "size": 20, "sha256": "e4a985feba6c291b0de2319ce53b41e44d6a1413c535c586a649e896ac623743", "mode": "0600", "text": "hello from the host\n"}
+```
+
+`logs(target="tb", process="sshd", since_s=3600, limit=3)` (one entry)
+```json
+{"total_entries": 1082, "matched": 6, "returned": 3, "entries": [{"time_iso": "2026-11-03T16:40:07.533Z", "process": "sshd_session", "pid": 43126786,
+ "severity_name": "info", "message": "<38>Nov 03 16:40:07 sshd-session[43126786-1]: Connection closed by 192.168.122.1 port 54862 [preauth]"}]}
+```
+
+## Security model
+
+The agent is treated as capable but fallible and possibly prompt-injected. The server enforces the limits; tool descriptions only explain them.
+
+* **Targets.** Names must match `[a-z][a-z0-9_-]{0,31}` and the allowlist; an unset or empty allowlist refuses everything. A target directory that is a symlink, or resolves outside the targets dir, is refused. `target_destroy` only deletes mkqnximage directories directly inside the targets dir.
+* **Target identity.** mkqnximage generates the image's SSH host keys on the host (`--sshd-pregen=yes`, its default; `target_create` passes it explicitly). They are stored in `local/misc_files/` of the target directory and copied to `/data/var/ssh` on the image's persistent data partition, so they survive reboots (tested: SSH with `StrictHostKeyChecking=yes` after stop and start). qnx-mcp pins them under `HostKeyAlias=qnx-mcp-<name>`, so an address change cannot switch machines unnoticed: a VM that does not present the pinned key gets `host_key_mismatch`. Images without pre-generated keys are pinned on first contact and stay pinned until the target is destroyed (not tested). Expired DHCP leases are ignored; `mkqnximage --getip` is the fallback.
+* **No shell tool.** Remote commands are fixed argument lists; agent arguments are quoted one by one. A test passes `$(touch ...)`, `; touch ...`, backticks, quotes, `*`, a newline and U+2028 and checks that the program receives them unchanged.
+* **Validated paths.** Remote paths are limited to `[A-Za-z0-9._+/-]` without `.` or `..` components. `file_put` writes only below `/tmp` or `/data`, never into qnx-mcp's own `/tmp/qnx-mcp`. `file_get` never writes through or replaces a symlink. With `QNX_MCP_WORKSPACE` set, every host path, and every source file read for backtraces (paths come from DWARF), must resolve inside it; source context is only read from C/C++ source files.
+* **Builds run code.** `build` runs the project's own make or cmake files, which can execute anything on the build host. Only point it at trees you trust.
+* **Bounded execution.** Host commands run in their own process group with timeouts and capped output; cancelled calls kill their processes. Target programs have deadlines and output caps; cores are size-limited before download and after decompression.
+* **Locking.** Per-target `flock`: exclusive for lifecycle changes, shared for runs, probes and inspection, so `processes` works during a run and `target_stop` waits for runs in progress (both tested). Waiting fails with `target_busy` after 120 s.
+* **Privileges.** Programs run as root on the target, because mkqnximage development images log in as root. Use disposable development targets.
+* **Data.** Cores, logs, run records and binary snapshots stay in the state directory (mode 0700, files 0600) on the build host.
 
 ## Tests
 
 ```sh
 cd tests
-python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py   # no QNX needed
-python -m pytest -q -p no:asyncio test_build_sdk.py                                  # needs QNX SDP
-QNX_MCP_E2E_TARGET=tb python -m pytest -q -s -p no:asyncio test_slice_e2e.py         # needs a running target
-QNX_MCP_E2E_CREATE=tb2 python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py    # builds and boots a new target
+python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py                # no QNX needed
+python -m pytest -q -p no:asyncio test_build_sdk.py                                # needs the QNX SDP
+QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb \
+  python -m pytest -q -s -p no:asyncio test_slice_e2e.py                           # needs a running target
+QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2 \
+  python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py                       # builds, boots and destroys tb2
 ```
 
-The slice test drives the server through an MCP `ClientSession` over stdio: build `examples/crash_demo`, run it (SIGSEGV), then `get_crash` must name `read_calibration` in `crash.c` at the marked line.
+Last full run on the build box: 48 passed in 89.5 s (32 unit, 4 offline MCP, 3 SDK build, 6 slice end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio, the same way an agent does.
+
+## Limitations
+
+* Programs run as root on the target; a descendant that calls `setsid()` leaves the process group and is not killed.
+* Shared libraries in a backtrace are resolved against the SDK's copies. A custom image with different library builds can give wrong frames inside those libraries; gdb's warnings are returned in `gdb_warnings`.
+* Unique core names: qnx-mcp moves each core into its run's directory right after dumper reports it. Images created by `target_create` (without `--secpol`) also run dumper with sequential names (`-n`), so two crashes of the same program never share a file. On other images (`core_naming: "fixed"`), a second crash of a program with the same name in the moment between the dump and the move could overwrite the first core; `get_crash` then reports `core_mismatch` (pid check) instead of a wrong backtrace.
+* Background runs are detached from the ssh session that started them but do not survive a target reboot (`run_poll` then reports `lost`; this path is not tested).
+* Only QEMU targets created by mkqnximage on a libvirt network are supported; real boards and aarch64 targets are not yet.
+* On the shared test box, 3 of 13 mkqnximage builds reported success but left no `output/disk-qemu`, at times when other agents were running mkqnximage builds; `target_create` now rebuilds once with `--clean` in that case. The cause is not known.
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE).
+Apache-2.0, see [LICENSE](LICENSE). The QNX SDP is not part of this project and has its own licence.
