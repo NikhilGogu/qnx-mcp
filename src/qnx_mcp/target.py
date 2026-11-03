@@ -341,10 +341,16 @@ class Target:
         deadline = time.monotonic() + timeout
         last = "no IP yet"
         next_getip = time.monotonic() + 8  # the lease file usually wins; arp fallback every 10 s after that
-        while time.monotonic() < deadline:
+        started = time.monotonic()
+        seen = False
+        while time.monotonic() < deadline or not seen:
             check_cancelled()
             if self.qemu_pid() is None:
-                raise QnxMcpError("target_down", f"QEMU for {self.name} exited during boot", hint=f"See {self.log_path}.", log=self.log_tail())
+                if seen or time.monotonic() - started > 5:  # QEMU may not have written its pid file yet
+                    raise QnxMcpError("target_down", f"QEMU for {self.name} exited during boot", hint=f"See {self.log_path}.", log=self.log_tail())
+                time.sleep(0.5)
+                continue
+            seen = True
             use_getip = time.monotonic() >= next_getip
             if use_getip:
                 next_getip = time.monotonic() + 10
@@ -407,19 +413,29 @@ class Target:
                     # A pre-existing local/snippets also tells mkqnximage this is a deliberate new image dir.
                     (self.dir / "local" / "snippets").mkdir(parents=True)
                     (self.dir / "local" / "snippets" / "post_start.custom").write_text(SEQUENTIAL_DUMPER_SNIPPET)
-                self._mkqnximage(
-                    ["--type=qemu", f"--arch={arch}", f"--ssh-ident={pub}", "--sshd-pregen=yes", "--noprompt",
-                     f"--ram={ram}", f"--cpu={cpus}", *opts, "--run=-h"],
-                    timeout=1200,
-                )
-                self.pin_host_keys()
-                self.wait_ssh(boot_timeout)
+                args = ["--type=qemu", f"--arch={arch}", f"--ssh-ident={pub}", "--sshd-pregen=yes", "--noprompt",
+                        f"--ram={ram}", f"--cpu={cpus}", *opts, "--run=-h"]
+                for attempt in (1, 2):
+                    self._mkqnximage(args, timeout=1200)
+                    self.pin_host_keys()
+                    if attempt == 1 and not (self.dir / "output" / "disk-qemu").is_file():
+                        # Seen on a shared build box while other mkqnximage builds ran: the build reported
+                        # success but output/disk-qemu was missing and QEMU exited. One clean rebuild recovers.
+                        self._stop_qemu()
+                        self.create_retried = "mkqnximage reported success but output/disk-qemu was missing; rebuilt once with --clean"
+                        args = ["--noprompt", "--clean", "--run=-h"]
+                        continue
+                    self.wait_ssh(boot_timeout)
+                    break
             except BaseException as e:
                 cleanup = self._remove(created)
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise
-        return self.status(probe=True)
+        st = self.status(probe=True)
+        if getattr(self, "create_retried", None):
+            st["note"] = self.create_retried
+        return st
 
     def _stop_qemu(self, timeout: float = 30) -> bool:
         got = self.qemu_pidfd()
