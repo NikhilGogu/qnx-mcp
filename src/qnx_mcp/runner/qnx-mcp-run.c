@@ -10,7 +10,12 @@
  *       output goes to dir/stdout and dir/stderr, the final report to dir/status.json
  *   qnx-mcp-run -P dir -O out_off -E err_off -L max     poll a background run (output from cursors)
  *   qnx-mcp-run -K dir [-w wait_ms]                     stop a background run through its control FIFO
- *   qnx-mcp-run -H file                                 size, mode and SHA-256 of a regular file
+ *   qnx-mcp-run -H file [-x dir]                        size, mode, SHA-256 and real path of a regular file;
+ *       -x refuses a file whose real path is inside dir
+ *   qnx-mcp-run -l dir -L max                           the first max entries of a directory by name (lstat)
+ *   qnx-mcp-run -Z pid -q path -s SIGNAME -w grace_ms [-f] -A root... -F dir...  stop a process that qnx-mcp did
+ *       not start, if its executable path is path and lies inside a root and outside every dir; -f sends SIGKILL
+ *       when it has not exited after grace_ms
  *   qnx-mcp-run -X file -L max                          copy at most max bytes of a regular file to stdout (raw)
  *   qnx-mcp-run -G dir -k keep -a age_s [-p name]...    prune run or app directories that are not in use
  *   qnx-mcp-run -D rel -r root [-x dir] [-c] [-I tmp [-n]]  check, or install tmp as, root/rel without
@@ -18,7 +23,8 @@
  *   qnx-mcp-run -V                                      print the version
  * Run options: -t timeout_ms, -m max bytes kept per stream, -w core_wait_ms, -C cwd,
  *   -e NAME=VALUE (repeatable), -R dir (move the core file there and lock dir/active while running),
- *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here).
+ *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here),
+ *   -x dir (refuse a program that is not an executable regular file or whose real path is inside dir).
  *
  * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
  * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
@@ -52,6 +58,7 @@
 #include <unistd.h>
 #include <sys/dcmd_dumper.h>
 #include <sys/neutrino.h>
+#include <sys/procfs.h>
 #include <sys/siginfo.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -68,6 +75,9 @@
 #define MAX_PROTECT 128
 #define PIPE_GRACE_MS 300
 #define GROUP_GRACE_MS 2000
+#define MAX_ROOTS 16
+#define MAX_LIST 1000
+#define LIST_ALARM_S 30
 
 static volatile sig_atomic_t g_stop_signal;
 static volatile sig_atomic_t g_child; /* the program while it is not yet reaped, else 0 */
@@ -266,15 +276,55 @@ static void sha256_hex(struct sha256 *c, char out[65])
     }
 }
 
-static int mode_hash(const char *path)
+/* ------------------------------------------------------------------ path rules */
+
+/* path equals dir or lies below it (both absolute, dir without a trailing '/'). */
+static int under(const char *path, const char *dir)
 {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    size_t l = strlen(dir);
+    return strncmp(path, dir, l) == 0 && (path[l] == '\0' || path[l] == '/');
+}
+
+/* path lies inside dir as named or inside dir's real path (/tmp is a link to /data/var/tmp on these images). */
+static int inside(const char *path, const char *dir)
+{
+    char real[PATH_MAX];
+    return under(path, dir) || (realpath(dir, real) != NULL && under(path, real));
+}
+
+/* A program that -x allows: an executable regular file whose real path is not inside forbidden. */
+static void check_program(const char *prog, const char *forbidden)
+{
     struct stat st;
+    char real[PATH_MAX];
+    if (stat(prog, &st) == -1 || realpath(prog, real) == NULL) {
+        fail("program not found", errno);
+    }
+    if (inside(real, forbidden)) {
+        fail("program is inside qnx-mcp's own directory", 0);
+    }
+    if (!S_ISREG(st.st_mode) || (st.st_mode & 0111) == 0 || access(prog, X_OK) == -1) {
+        fail("program is not an executable regular file", 0);
+    }
+}
+
+static int mode_hash(const char *path, const char *forbidden)
+{
+    /* O_NONBLOCK: opening a FIFO must not wait for a writer; it is refused below like any non-regular file */
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    struct stat st;
+    char real[PATH_MAX];
     if (fd == -1 || fstat(fd, &st) == -1) {
         fail("open", errno);
     }
     if (!S_ISREG(st.st_mode)) {
         fail("not a regular file", 0);
+    }
+    if (realpath(path, real) == NULL) {
+        fail("realpath", errno);
+    }
+    if (forbidden != NULL && inside(real, forbidden)) {
+        fail("inside qnx-mcp's own directory", 0);
     }
     struct sha256 c;
     sha256_init(&c);
@@ -299,7 +349,10 @@ static int mode_hash(const char *path)
     j_head(stdout);
     fputs(",\"path\":", stdout);
     j_cstr(stdout, path);
-    printf(",\"size\":%llu,\"mode\":\"%04o\",\"sha256\":\"%s\"}\n", (unsigned long long)size, (unsigned)(st.st_mode & 07777), hex);
+    fputs(",\"real_path\":", stdout);
+    j_cstr(stdout, real);
+    printf(",\"size\":%llu,\"mode\":\"%04o\",\"sha256\":\"%s\",\"executable\":%s}\n", (unsigned long long)size,
+           (unsigned)(st.st_mode & 07777), hex, (st.st_mode & 0111) != 0 && access(path, X_OK) == 0 ? "true" : "false");
     return 0;
 }
 
@@ -324,6 +377,16 @@ static const char *signal_name(int signo)
         }
     }
     return NULL;
+}
+
+static int signal_number(const char *name)
+{
+    for (size_t i = 0; i < sizeof k_signals / sizeof k_signals[0]; i++) {
+        if (strcmp(k_signals[i].name, name) == 0) {
+            return k_signals[i].no;
+        }
+    }
+    return 0;
 }
 
 /* The signals for which dumper writes a core (see the dumper utility docs). */
@@ -1383,7 +1446,7 @@ static int mode_prune(const char *dir, long keep, long age_s, char **protect, in
 /* Copy at most max bytes of a regular file to stdout, raw (the one mode whose output is not JSON). */
 static int mode_cat(const char *path, size_t max)
 {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     struct stat st;
     if (fd == -1 || fstat(fd, &st) == -1 || !S_ISREG(st.st_mode)) {
         return 3;
@@ -1512,6 +1575,235 @@ static int mode_dest(const char *root, const char *rel, const char *forbidden, i
     return 0;
 }
 
+/* ------------------------------------------------------------------ directory listing */
+
+static const char *type_name(mode_t m)
+{
+    return S_ISREG(m) ? "file" : S_ISDIR(m) ? "dir" : S_ISLNK(m) ? "symlink" : S_ISCHR(m) ? "char" : S_ISBLK(m) ? "block"
+         : S_ISFIFO(m) ? "fifo" : S_ISSOCK(m) ? "socket" : "other";
+}
+
+/* -l dir -L max: count every entry and report the first max by name (byte order), each with lstat, so
+ * links are described and never followed. Memory stays bounded by max. */
+static int mode_list(const char *dir, size_t max)
+{
+    alarm(LIST_ALARM_S); /* a stat that blocks in a wedged resource manager must not keep the runner forever */
+    if (max > MAX_LIST) {
+        max = MAX_LIST;
+    }
+    DIR *d = opendir(dir);
+    if (d == NULL) {
+        fail(errno == ENOENT ? "no such directory" : errno == ENOTDIR ? "not a directory" : "opendir", errno);
+    }
+    char real[PATH_MAX];
+    if (realpath(dir, real) == NULL) {
+        fail("realpath", errno);
+    }
+    char **keep = calloc(max ? max : 1, sizeof *keep);
+    if (keep == NULL) {
+        fail("out of memory", ENOMEM);
+    }
+    size_t n = 0;
+    unsigned long long total = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+            continue;
+        }
+        total++;
+        if (max == 0 || (n == max && strcmp(e->d_name, keep[max - 1]) >= 0)) {
+            continue;
+        }
+        size_t lo = 0, hi = n;
+        while (lo < hi) {
+            size_t mid = (lo + hi) / 2;
+            if (strcmp(keep[mid], e->d_name) < 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        char *name = strdup(e->d_name);
+        if (name == NULL) {
+            fail("out of memory", ENOMEM);
+        }
+        if (n == max) {
+            free(keep[--n]);
+        }
+        memmove(keep + lo + 1, keep + lo, (n - lo) * sizeof *keep);
+        keep[lo] = name;
+        n++;
+    }
+    int dfd = dirfd(d);
+    j_head(stdout);
+    fputs(",\"path\":", stdout);
+    j_cstr(stdout, dir);
+    fputs(",\"real_path\":", stdout);
+    j_cstr(stdout, real);
+    printf(",\"total\":%llu,\"entries\":[", total);
+    for (size_t i = 0; i < n; i++) {
+        struct stat st;
+        fputs(i ? ",{\"name\":" : "{\"name\":", stdout);
+        j_cstr(stdout, keep[i]);
+        if (fstatat(dfd, keep[i], &st, AT_SYMLINK_NOFOLLOW) == -1) {
+            fputs(",\"error\":", stdout);
+            j_cstr(stdout, strerror(errno)); /* removed since readdir */
+            fputc('}', stdout);
+            continue;
+        }
+        printf(",\"type\":\"%s\",\"size\":%lld,\"mode\":\"%04o\",\"mtime\":%lld", type_name(st.st_mode), (long long)st.st_size,
+               (unsigned)(st.st_mode & 07777), (long long)st.st_mtime);
+        if (S_ISLNK(st.st_mode)) {
+            char target[PATH_MAX];
+            ssize_t k = readlinkat(dfd, keep[i], target, sizeof target);
+            fputs(",\"link_target\":", stdout);
+            if (k >= 0) {
+                j_str(stdout, target, (size_t)k);
+            } else {
+                fputs("null", stdout);
+            }
+        }
+        fputc('}', stdout);
+    }
+    puts("]}");
+    closedir(d);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ stopping a process qnx-mcp did not start */
+
+/* The process is opened through /proc/<pid>/ctl and inspected and signalled only through that descriptor.
+ * While it is open the process entry stays (a dying process shows _NTO_PF_TERMING until it is closed), so
+ * the checks and the signal apply to one process and cannot reach a later process with the same pid. */
+static int proc_exiting(int fd)
+{
+    procfs_info info;
+    memset(&info, 0, sizeof info);
+    return devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL) != EOK || (info.flags & (_NTO_PF_TERMING | _NTO_PF_ZOMBIE)) != 0;
+}
+
+static int proc_signal(int fd, int signo)
+{
+    procfs_signal s;
+    memset(&s, 0, sizeof s);
+    s.signo = signo;
+    s.code = SI_USER;
+    return devctl(fd, DCMD_PROC_SIGNAL, &s, sizeof s, NULL);
+}
+
+static int proc_wait_exit(int fd, uint64_t until)
+{
+    while (!proc_exiting(fd)) {
+        if (now_ms() >= until) {
+            return 0;
+        }
+        usleep(20000);
+    }
+    return 1;
+}
+
+static void refuse_exe(const char *what, const char *exe, const char *real)
+{
+    j_head(stdout);
+    fputs(",\"usage_error\":", stdout);
+    j_cstr(stdout, what);
+    fputs(",\"executable\":", stdout);
+    j_cstr(stdout, exe);
+    fputs(",\"real_path\":", stdout);
+    j_cstr(stdout, real);
+    puts("}");
+    fflush(stdout);
+    exit(2);
+}
+
+static int mode_pstop(long pid, const char *expect, const char *signame, long grace_ms, int force, char **roots, int nroots, char **forbid, int nforbid)
+{
+    int signo = signame ? signal_number(signame) : 0;
+    if (signo <= 0 || expect == NULL || nroots == 0) {
+        fail("-Z needs -q path, -s SIGNAME and -A root", 0);
+    }
+    if (pid <= 1) {
+        fail("refused: pid 1 is procnto", 0);
+    }
+    char p[64];
+    snprintf(p, sizeof p, "/proc/%ld/ctl", pid);
+    int fd = open(p, O_RDWR | O_CLOEXEC);
+    if (fd == -1) {
+        fail(errno == ENOENT ? "no such process" : "open process", errno);
+    }
+    procfs_info info;
+    memset(&info, 0, sizeof info);
+    int e = devctl(fd, DCMD_PROC_INFO, &info, sizeof info, NULL);
+    if (e != EOK || info.pid != (pid_t)pid) {
+        fail("process information", e);
+    }
+    struct {
+        procfs_debuginfo d;
+        char room[PATH_MAX + 1];
+    } dbg;
+    memset(&dbg, 0, sizeof dbg);
+    e = devctl(fd, DCMD_PROC_MAPDEBUG_BASE, &dbg, sizeof dbg - 1, NULL); /* the last byte stays NUL */
+    if (e != EOK) {
+        fail("executable path", e);
+    }
+    if (strcmp(dbg.d.path, expect) != 0) {
+        fail("refused: the process's executable path is not the one pidin reported", 0);
+    }
+    if (info.crit_proc) {
+        fail("refused: critical process", 0);
+    }
+    char exe[PATH_MAX + 2], real[PATH_MAX];
+    snprintf(exe, sizeof exe, "%s%s", dbg.d.path[0] == '/' ? "" : "/", dbg.d.path); /* pidin shows most paths without the leading '/' */
+    if (realpath(exe, real) == NULL) {
+        fail("refused: the executable path does not resolve", errno);
+    }
+    for (int i = 0; i < nforbid; i++) {
+        if (inside(exe, forbid[i]) || inside(real, forbid[i])) {
+            refuse_exe("refused: the executable is in a system or qnx-mcp directory", exe, real);
+        }
+    }
+    int in_exe = 0, in_real = 0;
+    for (int i = 0; i < nroots; i++) {
+        in_exe |= inside(exe, roots[i]);
+        in_real |= inside(real, roots[i]);
+    }
+    if (!in_exe || !in_real) {
+        refuse_exe("refused: the executable is outside the allowed roots", exe, real);
+    }
+    int already = proc_exiting(fd), exited = already, killed = 0;
+    uint64_t start = now_ms();
+    if (!already) {
+        e = proc_signal(fd, signo);
+        if (e != EOK) {
+            fail("signal", e);
+        }
+        exited = proc_wait_exit(fd, start + (uint64_t)grace_ms);
+        if (!exited && force && signo != SIGKILL) {
+            e = proc_signal(fd, SIGKILL);
+            if (e != EOK) {
+                warn_errno("SIGKILL", e);
+            } else {
+                killed = 1;
+                exited = proc_wait_exit(fd, now_ms() + GROUP_GRACE_MS);
+            }
+        }
+    }
+    long waited = (long)(now_ms() - start);
+    close(fd);
+    j_head(stdout);
+    printf(",\"pid\":%ld,\"ppid\":%ld,\"uid\":%ld,\"path\":", pid, (long)info.parent, (long)info.uid);
+    j_cstr(stdout, dbg.d.path);
+    fputs(",\"executable\":", stdout);
+    j_cstr(stdout, exe);
+    fputs(",\"real_path\":", stdout);
+    j_cstr(stdout, real);
+    printf(",\"signal\":\"%s\",\"already_exiting\":%s,\"signal_sent\":%s,\"sigkill_sent\":%s,\"exited\":%s,\"waited_ms\":%ld",
+           signame, already ? "true" : "false", already ? "false" : "true", killed ? "true" : "false", exited ? "true" : "false", waited);
+    j_warnings(stdout);
+    puts("}");
+    return 0;
+}
+
 /* ------------------------------------------------------------------ main */
 
 static long num_arg(const char *s, long lo, long hi)
@@ -1533,15 +1825,16 @@ int main(int argc, char *argv[])
     o.core_wait_ms = 10000;
     o.max_bytes = 65536;
     const char *bg_dir = NULL, *poll_dir = NULL, *stop_dir = NULL, *hash_path = NULL, *prune_dir = NULL, *cat_path = NULL;
-    const char *dest = NULL, *root = NULL, *forbidden = NULL, *install = NULL;
-    char *protect[MAX_PROTECT];
-    int nprotect = 0, create = 0, no_replace = 0;
+    const char *dest = NULL, *root = NULL, *forbidden = NULL, *install = NULL, *list_dir = NULL, *expect = NULL, *signame = NULL;
+    char *protect[MAX_PROTECT], *roots[MAX_ROOTS], *forbid[MAX_ROOTS];
+    int nprotect = 0, create = 0, no_replace = 0, nroots = 0, nforbid = 0, force = 0;
+    long stop_pid = 0;
     long keep = 20, age_s = 300;
     unsigned long long out_off = 0, err_off = 0;
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nV")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -1579,11 +1872,33 @@ int main(int argc, char *argv[])
         case 'I': install = optarg; break;
         case 'n': no_replace = 1; break;
         case 'V': printf("qnx-mcp-run %s\n", QMR_VERSION); return 0;
+        case 'l': list_dir = optarg; break;
+        case 'Z': stop_pid = num_arg(optarg, 0, LONG_MAX); break;
+        case 'q': expect = optarg; break;
+        case 's': signame = optarg; break;
+        case 'f': force = 1; break;
+        case 'A':
+        case 'F':
+            if ((opt == 'A' ? nroots : nforbid) == MAX_ROOTS || optarg[0] != '/') {
+                fail("bad -A or -F", 0);
+            }
+            if (opt == 'A') {
+                roots[nroots++] = optarg;
+            } else {
+                forbid[nforbid++] = optarg;
+            }
+            break;
         default: fail("unknown option", 0);
         }
     }
     if (hash_path != NULL) {
-        return mode_hash(hash_path);
+        return mode_hash(hash_path, forbidden);
+    }
+    if (list_dir != NULL) {
+        return mode_list(list_dir, max_chunk);
+    }
+    if (stop_pid != 0) {
+        return mode_pstop(stop_pid, expect, signame, o.core_wait_ms, force, roots, nroots, forbid, nforbid);
     }
     if (cat_path != NULL) {
         return mode_cat(cat_path, max_chunk);
@@ -1607,6 +1922,9 @@ int main(int argc, char *argv[])
         fail("missing program", 0);
     }
     o.prog = &argv[optind];
+    if (forbidden != NULL) {
+        check_program(o.prog[0], forbidden); /* checked again here, just before the program starts */
+    }
 
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
