@@ -59,7 +59,7 @@ Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `targ
 
 Follow the chain: a REPLY-blocked client points at a server; look at that server's threads; a MUTEX-blocked thread points at the owner thread; a cycle is a deadlock. Stop the run with `run_stop`, fix, rebuild, start again and check that the server threads are back in RECEIVE.
 
-**Service and logs.** `run_start` the service, `run_poll` with `stdout_offset` set to the previous `stdout_next` to read only new output, `logs(target, process=<name>, min_severity="warning")` for what it logged, `run_stop` at the end. Programs log to slog2 buffers in memory, not to files, and slogger2 keeps the buffers of a process that has exited only while it has room for them. In our tests such a buffer was gone within seconds when other tool calls ran in between (every SSH login registers new buffers), and still there after two minutes on an idle target. Read the log while the program runs, or right after it ends.
+**Service and logs.** `run_start` the service, `run_poll` with `stdout_offset` set to the previous `stdout_next` to read only new output, `logs(target, process=<name>, min_severity="warning")` for what it logged, `run_stop` at the end. Programs log to slog2 buffers in memory, not to files. When a program ends, slogger2 keeps its buffer set on a delete queue of 16 (default) and drops the oldest when more arrive; every SSH login, so every qnx-mcp tool call, adds a few. Read the log while the program runs, or right after it ends.
 
 ## Rules
 
