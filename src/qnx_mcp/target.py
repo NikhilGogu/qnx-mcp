@@ -192,8 +192,8 @@ class Target:
     # ------------------------------------------------------------ address
 
     def lookup_ip(self, fallback: bool = True, getip_timeout: float = 25) -> str | None:
-        """Current IPv4 address: newest live DHCP lease for this target's MAC whose port 22 answers,
-        else mkqnximage --getip (arp). Identity is not taken from the address: the pinned host key is
+        """Current IPv4 address: the only live DHCP lease for this target's MAC, or the newest one whose port 22
+        answers, else mkqnximage --getip (arp). Identity is not taken from the address: the pinned host key is
         what proves which machine answered."""
         mac = self.mac or ""
         if not mac:
@@ -202,7 +202,12 @@ class Target:
             text = self.cfg.leases.read_text()
         except OSError:
             text = "[]"
-        for ip in parse_leases(text, mac, time.time()):
+        ips = parse_leases(text, mac, time.time())
+        if len(ips) == 1:
+            # No port probe for a single lease: sshd on QNX 8.0 images (OpenSSH 10) penalises connections that
+            # never attempt authentication and then drops every connection from the host for a while.
+            return ips[0]
+        for ip in ips:
             if _tcp_open(ip, 22, 1.0):
                 return ip
         if not fallback:
