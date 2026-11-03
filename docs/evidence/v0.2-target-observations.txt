@@ -1,0 +1,35 @@
+# Observations on target tb (QNX OS 8.0.0 x86_64 QEMU) behind v0.2 design choices, 2026-11-03.
+# The probe is a small program of ours (built with qcc -Vgcc_ntox86_64): it opens /proc/<pid>/<file>
+# (O_RDWR when a signal is given), prints DCMD_PROC_INFO and DCMD_PROC_MAPDEBUG_BASE, optionally sends a
+# signal with DCMD_PROC_SIGNAL and then polls DCMD_PROC_INFO and kill(pid, 0) every 100 ms.
+
+## 1. pidin's path column equals DCMD_PROC_MAPDEBUG_BASE; most paths have no leading '/'; a symlink is not resolved
+$ pidin -F "%a|%N|%n|%A" | grep sleep        (/tmp/sleeplink is a symlink to /system/bin/sleep)
+84512792|sleeplink         |tmp/sleeplink        |/tmp/sleeplink 300
+84520983|sleep             |proc/boot/sleep      |sleep 300
+$ /tmp/probe 84512792 ctl
+info: No error pid=84512792 parent=1 flags=0x49000600 crit=0 threads=1
+mapdebug_base: No error path=[tmp/sleeplink]
+$ /tmp/probe 1 ctl
+mapdebug_base: No error path=[/proc/boot/procnto-smp-instr]
+$ /tmp/probe 16387 ctl
+mapdebug_base: No error path=[proc/boot/slogger2]
+$ ls -ld /tmp
+lrwxrwxrwx  1 root root   13 2026-11-03 15:12 /tmp -> /data/var/tmp
+
+## 2. DCMD_PROC_SIGNAL needs a descriptor open for writing; the entry stays while it is open
+$ /tmp/probe 84512792 ctl 15      (descriptor opened O_RDONLY)
+signal 15: Bad file descriptor
+$ /tmp/probe 84512792 ctl 15      (descriptor opened O_RDWR)
+signal 15: No error
+  t=100ms info: No error flags=0x49000304 threads=1 kill0=0
+  t=200ms info: No error flags=0x49000304 threads=1 kill0=0
+  (flags 0x4 is _NTO_PF_TERMING; pidin no longer listed the process afterwards)
+
+## 3. sshd (OpenSSH 10.4p1) penalises connections that never authenticate
+$ ssh -V        (on the target)
+OpenSSH_10.4p1, OpenSSL 3.0.20 7 Apr 2026
+$ slog2info -t | grep -i -E "penalt|drop"   (after a burst of tool calls, each with a port-22 probe)
+sshd[249871-1]: srclimit_penalise: 192.168.122.1/32: activating ipv4 penalty of 15.383 seconds for penalty: connections without attempting authentication
+sshd[249871-1]: drop connection #0 from [192.168.122.1]:37472 on [192.168.122.130]:22 penalty: connections without attempting authentication
+(the tool call saw: ssh_failed, "kex_exchange_identification: Connection closed by remote host")

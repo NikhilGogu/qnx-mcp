@@ -2,7 +2,7 @@
 
 qnx-mcp is a Model Context Protocol (MCP) server that gives AI coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
 
-Status: release candidate v0.1, revised after a second review. Everything below was run against QNX OS 8.0 x86_64 QEMU targets; the evidence is in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
+Status: v0.2. v0.1 was revised after two reviews; v0.2 adds the tools an agent needs when it has no shell on the target (`file_list`, `process_stop`, and `remote_binary` for `deploy_and_run` and `run_start`) and has not been reviewed yet. Everything below was run against QNX OS 8.0 x86_64 QEMU targets; the evidence is in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
 
 Tutorial: the codelab [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/) (about 45 minutes; source in [codelab/](codelab/qnx-mcp-agent-target.md), dry runs in [codelab/DRYRUN.md](codelab/DRYRUN.md)). The agent skill file is [skills/qnx-mcp/SKILL.md](skills/qnx-mcp/SKILL.md).
 
@@ -17,7 +17,7 @@ An agent with plain SSH has to compose shell commands, guess where cores land, p
 
 ## Example (real output, abridged)
 
-From `docs/evidence/test-run.log`, the crash demo in `examples/crash_demo`:
+From the v0.1 test run (`docs/evidence/test-run-v0.1.log`), the crash demo in `examples/crash_demo`:
 
 `deploy_and_run(target="tb", binary=".../crash_demo")`
 ```json
@@ -130,14 +130,16 @@ Every tool returns JSON as MCP `structuredContent` (and as text). Success has `o
 | `target_destroy` | Stop and delete a managed target (`confirm` must repeat the name) |
 | `target_status` | State, IP, SSH probe, target clock, dumper arguments and core naming, host key policy |
 | `build` | qcc, make or cmake with the SDP; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
-| `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed` |
-| `run_start` / `run_poll` / `run_stop` | Background runs with output cursors (`max_kb` up to 1024), lifetime limit, per-server ownership of run ids; stop goes through the owning runner's control FIFO |
-| `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack |
+| `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`. With `remote_binary` instead of `binary`: a program already on the target |
+| `run_start` / `run_poll` / `run_stop` | Background runs with output cursors (`max_kb` up to 1024), lifetime limit, per-server ownership of run ids; stop goes through the owning runner's control FIFO. `run_start` also takes `remote_binary` |
+| `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack. For a `remote_binary` run, `run_id` plus the host build as `binary` |
 | `file_put` / `file_get` | One file each way, size and SHA-256 verified; no directory, symlink or symlinked-parent destinations; never replaces a file unless `overwrite` |
+| `file_list` | One target directory, read-only: name, type, size, mode, mtime, symlink target (links are never followed); sorted by name, at most `max_entries` (up to 1000), truncation reported |
 | `processes` | `pidin` as JSON, optionally per thread |
+| `process_stop` | Stop a process qnx-mcp did not start, only if its executable is below `/tmp` or `/data` (the path pidin reports and the resolved path, checked on the target at call time); never pid 1, procnto, a critical process, the runner or anything in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system`. SIGTERM (or another signal), then SIGKILL after `grace_s` if `kill_after_grace` |
 | `logs` | `slog2info` as JSON, filtered by buffer, process, time, severity, text |
 
-More real outputs (from `docs/evidence/test-run.log`):
+More real outputs (from the v0.1 test run, `docs/evidence/test-run-v0.1.log`):
 
 `target_status(name="tb")`
 ```json
@@ -175,6 +177,47 @@ More real outputs (from `docs/evidence/test-run.log`):
  "severity_name": "info", "message": "<38>Nov 03 17:08:02 sshd-session[71675906-1]: Connection closed by 192.168.122.1 port 49756 [preauth]"}]}
 ```
 
+## Without a shell on the target (v0.2)
+
+An agent that has qnx-mcp and no shell can still look at directories, restart a program installed on the target and stop a hung one. Real outputs from `docs/evidence/test-run.log` (`tests/test_shellfree_e2e.py`), abridged:
+
+`file_list(target="tb", path="/tmp/qnx-mcp-test/l496639")` (`alink` and `boot` are symlinks the test made; they are described, not followed)
+```json
+{"path": "/tmp/qnx-mcp-test/l496639", "real_path": "/data/var/tmp/qnx-mcp-test/l496639", "total_entries": 4, "returned": 4, "truncated": false, "entries": [
+ {"name": "a.txt", "type": "file", "size": 6, "mode": "0644", "mtime_iso": "2026-11-03T21:19:10Z"},
+ {"name": "alink", "type": "symlink", "size": 5, "link_target": "a.txt"},
+ {"name": "boot", "type": "symlink", "size": 10, "link_target": "/proc/boot"},
+ {"name": "sub", "type": "dir", "size": 4096, "mode": "0755"}]}
+```
+With `max_entries=2` the same call returns `a.txt` and `alink` with `truncated: true` and `total_entries: 4`.
+
+`deploy_and_run(target="tb", remote_binary="/tmp/qnx-mcp-test/r496639/bin/echoargs", args=["a b", "$(id)"])`
+```json
+{"run_id": "r-5fec17a2c93f", "outcome": "exited", "exit_code": 7, "stdout": "[a b]\n[$(id)]\n", "remote_binary": true, "binary": null,
+ "remote_path": "/tmp/qnx-mcp-test/r496639/bin/echoargs", "binary_sha256": "0a9459e67962fa4106d456e105851c67d6243afbee2f36ab1a5dbc267df4f9b4", "duration_ms": 27}
+```
+The crash demo installed on the target and run the same way crashes, and `next_step` says that `get_crash` needs `binary=<host path of the unstripped build of ...>`, because qnx-mcp holds no copy of a program it did not deploy. `get_crash(target="tb", run_id="r-4be3ca1e4687", binary=".../crash_demo")`:
+```json
+{"summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in read_calibration at .../examples/crash_demo/crash.c:21; stack: read_calibration() <- average_offset() <- main(). ...",
+ "provenance": {"source": "remote_run", "core_executable": "/tmp/qnx-mcp-test/r496639/bin/crash_demo", "core_pid": 105213974, "pid_match": true, "executable_match": true,
+  "core_build_id": "c65158d019120da0f95c3df1a466d88b", "build_id_match": true, "same_file_as_target": true, "verified": true}}
+```
+A rebuilt binary is refused with `core_mismatch` (different build ID).
+
+`process_stop(target="tb", pid=107282454)` of a program that was started outside qnx-mcp:
+```json
+{"pid": 107282454, "name": "hang", "ppid": 1, "executable": "/tmp/qnx-mcp-test/p496639/hang", "real_path": "/data/var/tmp/qnx-mcp-test/p496639/hang",
+ "signal": "SIGTERM", "signal_sent": true, "sigkill_sent": false, "exited": true, "waited_ms": 1, "still_running": false}
+```
+A program that ignores SIGTERM returns `exited: false, still_running: true` after `grace_s=1`, with a `next_step`; the same call with `kill_after_grace=true` returns `sigkill_sent: true, exited: true`. Refusals are `process_not_allowed` errors with a hint; the messages from the log:
+```
+pid 1: pid 1 is procnto, the QNX microkernel and process manager
+slogger2: its executable /proc/boot/slogger2 is in /proc/boot, a system directory
+/system/bin/sleep: its executable /system/bin/sleep is in /system, a system directory
+a symlink in /tmp to /system/bin/sleep: the executable is in a system or qnx-mcp directory (/tmp/qnx-mcp-test/p496639/sleeplink resolves to /system/bin/sleep)
+the runner of a background run: it is qnx-mcp's own runner, which enforces the deadline of a run; use run_stop for runs
+```
+
 ## Security model
 
 The agent is treated as capable but fallible and possibly prompt-injected. The server enforces the limits; tool descriptions only explain them.
@@ -183,31 +226,36 @@ The agent is treated as capable but fallible and possibly prompt-injected. The s
 * **Target identity.** mkqnximage generates the image's SSH host keys on the host (`--sshd-pregen=yes`, its default; `target_create` passes it explicitly). They are stored in `local/misc_files/` of the target directory and copied to `/data/var/ssh` on the image's persistent data partition, so they survive reboots (tested: SSH with `StrictHostKeyChecking=yes` after stop and start). qnx-mcp pins them under `HostKeyAlias=qnx-mcp-<name>`, so an address change cannot switch machines unnoticed: a VM that does not present the pinned key gets `host_key_mismatch`. A target without pre-generated keys is refused (`host_key_missing`) unless `QNX_MCP_TRUST_FIRST_USE=1` is set, which pins whatever key answers first (weaker; not tested against a real image). Expired DHCP leases are ignored; `mkqnximage --getip` is the fallback.
 * **No shell tool.** Remote commands are fixed argument lists; agent arguments are quoted one by one. A test passes `$(touch ...)`, `; touch ...`, backticks, quotes, `*`, a newline and U+2028 and checks that the program receives them unchanged.
 * **Validated paths.** Remote paths must be normalised (no `//`, `.`, `..` or trailing `/`) and use `[A-Za-z0-9._+/-]` only. `file_put` writes only below `/tmp` or `/data` and never into qnx-mcp's own directory, also not through an alias such as `/data/var/tmp/qnx-mcp` (the runner compares real paths); parents are opened one by one without following symlinks, directories and symlinks are refused as destinations, and installation is atomic. `file_get` stages the download in the server state and installs it through a descriptor of the destination directory without changing that directory, never replacing a file or following a symlink unless `overwrite` is set for a regular file. With `QNX_MCP_WORKSPACE` set, every host path, and every source file read for backtraces (paths come from DWARF), must resolve inside it; source context is only read from C/C++ source files.
+* **Listing.** `file_list` reads one directory anywhere on the target (as `file_get` reads any file) and never follows links inside it; the directory itself may be reached through a link, and `real_path` says where it is. Output is bounded (`max_entries` at most 1000, and the runner gives up after 30 s).
+* **Programs already on the target.** `remote_binary` must be a normalised absolute path to an executable regular file whose real path is outside `/tmp/qnx-mcp`, so qnx-mcp's runner and other runs' files cannot be started with arbitrary arguments (a symlink into `/tmp/qnx-mcp` is refused; tested). The runner checks this again just before it starts the program. The program's SHA-256 is taken on the target before the run and kept in the run record.
+* **Stopping processes.** `process_stop` reads the executable path of the pid with `pidin` at call time; then the runner opens `/proc/<pid>/ctl`, checks that the process manager reports the same path, resolves it, and signals through that descriptor. The reported path and the resolved path must both be below `/tmp` or `/data` and outside `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` and qnx-mcp's runner directory; pid 1, procnto and critical processes are refused. Names are never trusted: a symlink in `/tmp` to a system program is refused (tested). While the descriptor is open the process entry stays (observed: a process that exits after the signal still answers on the descriptor, flagged as terminating, until the runner closes it), so the checks and the signal apply to the same process; a reuse of the pid in between was not provoked.
 * **Builds run code.** `build` runs the project's own make or cmake files, which can execute anything on the build host. Only point it at trees you trust.
 * **Bounded execution.** Host commands run in their own process group with timeouts and capped output; cancelled calls kill their processes. Target programs have deadlines and output caps; cores are size-limited before download and after decompression.
 * **Locking.** Per-target `flock`: exclusive for lifecycle changes, shared for runs, probes and inspection, so `processes` works during a run and `target_stop` waits for runs in progress (both tested). Waiting fails with `target_busy` after 120 s.
-* **Privileges.** Programs run as root on the target, because mkqnximage development images log in as root. Use disposable development targets.
+* **Privileges.** Programs run as root on the target, because mkqnximage development images log in as root. Use disposable development targets. The v0.2 tools do not add a shell: an agent still cannot run a command line, but a program it builds and runs can do anything root can.
 * **Data.** Cores, logs, run records and binary snapshots stay in the state directory (mode 0700, files 0600) on the build host.
 
 ## Tests
 
 ```sh
 cd tests
-python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py                # no QNX needed
+python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py  # no QNX needed
 python -m pytest -q -p no:asyncio test_build_sdk.py                                # needs the QNX SDP
 QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb \
-  python -m pytest -q -s -p no:asyncio test_slice_e2e.py                           # needs a running target
+  python -m pytest -q -s -p no:asyncio test_slice_e2e.py test_shellfree_e2e.py     # needs a running target
 QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2 \
   python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py                       # builds, boots and destroys tb2
 ```
 
-Last full run on the build box: 62 passed in 121.6 s (43 unit, 4 offline MCP, 3 SDK build, 9 slice end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio, the same way an agent does.
+Last full run on the build box (v0.2, 3 Nov 2026, with `QNX_MCP_TARGETS_DIR` set to the box's targets directory): 84 passed in 152.4 s (59 unit, 5 offline MCP, 2 skill, 3 SDK build, 9 slice end-to-end, 3 shell-free end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log); the v0.1 run is [test-run-v0.1.log](docs/evidence/test-run-v0.1.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio, the same way an agent does.
 
 ## Limitations
 
 * **Builds run trusted code.** `build` runs the project's own make or cmake files with your user's rights on the build host; there is no sandbox. Only build trees you trust.
 * **Root on the target.** Programs run as root, because mkqnximage development images log in as root. Use disposable development targets.
-* **setsid escapes.** A descendant that calls `setsid()` leaves the program's process group and is not killed at the end of a run.
+* **setsid escapes.** A descendant that calls `setsid()` leaves the program's process group and is not killed at the end of a run (`process_stop` may end it afterwards, since its executable is below `/tmp`; not tested with an escaped process).
+* **process_stop is path-based.** It signals one process, not its children or group, and any executable below `/tmp` or `/data` qualifies, including a copy of a system program placed there.
+* **remote_binary content.** The SHA-256 of a target program is taken just before the run; a file replaced between that check and the start (possible only from another program on the target) would run under the recorded hash. `get_crash` then still checks the build ID in the core.
 * **Unverified SDK libraries.** Frames inside shared libraries are resolved against the SDK's copies on the build host, not verified against the libraries on the image; a custom image with different builds can give wrong library frames (gdb's warnings are returned in `gdb_warnings`).
 * **Current source, not preserved source.** Source lines in a backtrace are read from the files on the build host at the time of `get_crash`; if you edited them after building, the lines shown are the edited ones.
 * **Lossy text decoding.** Program output, logs and gdb text are decoded as UTF-8 with replacement characters; byte counts and output cursors are exact, but binary output is not reproduced exactly in text fields.
