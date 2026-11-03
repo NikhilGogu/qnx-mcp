@@ -803,7 +803,13 @@ cd $CODELAB/work && claude mcp remove qnx
 cd ~ && rm -rf $CODELAB
 ```
 
-Check: `ls ~/qnx-codelab` reports that it does not exist, and `pgrep -af qemu-system | grep qnx-codelab` prints nothing (no QEMU process from this codelab is left).
+Check: `ls ~/qnx-codelab` reports that it does not exist, and this prints nothing:
+
+```bash
+for p in $(pgrep qemu-system); do echo "$p $(readlink /proc/$p/cwd)"; done | grep qnx-codelab
+```
+
+mkqnximage starts QEMU in the target's directory and passes it only relative paths, so the working directory, not the command line, shows which QEMU belongs to this codelab. A line here is a QEMU process from this codelab that is still running (its directory shows as `(deleted)`); end it with `kill` and the process id at the start of the line.
 
 ---
 
