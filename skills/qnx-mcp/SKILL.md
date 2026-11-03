@@ -1,6 +1,6 @@
 ---
 name: qnx-mcp
-description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background; copy files; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available. Written for qnx-mcp v0.1 (17 tools)."
+description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background, including programs already installed on the target; copy files and list target directories; stop processes qnx-mcp did not start; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available, and especially when you have no shell on the target. Written for qnx-mcp v0.2 (19 tools)."
 license: Apache-2.0
 ---
 
@@ -37,6 +37,9 @@ Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `targ
 | Stop it | `run_stop(target, run_id)` |
 | Copy a data or config file to the target (below `/tmp` or `/data`) | `file_put(target, local_path, remote_path, mode, overwrite)` |
 | Copy a file back from the target (output, a log file, a generated report) | `file_get(target, remote_path, local_path, overwrite)` |
+| See what is in a target directory: what a service installed, which cores dumper wrote (`/data/var/dumper`), whether a file exists | `file_list(target, path, max_entries)` |
+| Run a program that is already installed on the target, for example to restart a service | `deploy_and_run(target, remote_binary, args, timeout_s)` or `run_start(target, remote_binary, args)` |
+| Backtrace of a crash of such a program (qnx-mcp has no copy of it, so pass the host path of its unstripped build) | `get_crash(target, run_id, binary)` |
 
 ## Look inside the system
 
@@ -44,6 +47,7 @@ Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `targ
 |---|---|
 | See why something hangs or what a service is doing: every thread's state and what it is blocked on | `processes(target, name, include_threads=true)` |
 | Read the system log (slog2): messages of one process, by time, severity or text | `logs(target, process, since_s, min_severity, contains, limit)` |
+| Stop a process that qnx-mcp did not start (a hung program, a service you want to restart); only executables below `/tmp` or `/data` | `process_stop(target, pid, signal, grace_s, kill_after_grace)` |
 
 ## Recipes
 
@@ -61,6 +65,8 @@ Follow the chain: a REPLY-blocked client points at a server; look at that server
 
 **Service and logs.** `run_start` the service, `run_poll` with `stdout_offset` set to the previous `stdout_next` to read only new output, `logs(target, process=<name>, min_severity="warning")` for what it logged, `run_stop` at the end. Programs log to slog2 buffers in memory, not to files. When a program ends, slogger2 keeps its buffer set on a delete queue of 16 (default) and drops the oldest when more arrive; every SSH login, so every qnx-mcp tool call, adds a few. Read the log while the program runs, or right after it ends.
 
+**No shell on the target.** Everything a task needs goes through these tools. Find things with `processes` (the `path` column is where each executable lives; most paths are shown without the leading `/`, for example `tmp/hub`) and `file_list`; read files with `file_get`; write them with `file_put`. To restart a service: `processes(target, name)` for its pid and path, `process_stop(target, pid)` (if `still_running` is true, call it again with `kill_after_grace=true`), fix and rebuild, then `run_start(target, binary=<new build>)`, or `run_start(target, remote_binary=<its path>)` to start the installed program again, and check `logs(target, process=<name>)`. A crash of a program started with `remote_binary` needs `get_crash(target, run_id, binary)`; the result says so in `next_step`.
+
 ## Rules
 
 * `deploy_and_run` and `run_start` copy only the executable. Copy data files with `file_put` first and pass target paths in `args`.
@@ -70,4 +76,6 @@ Follow the chain: a REPLY-blocked client points at a server; look at that server
 * There is no shell tool on purpose. If a task needs something the tools cannot do, say so and ask the user, instead of working around the server with your own ssh commands.
 * `target_not_allowed` means the target is outside the server's allowlist (`QNX_MCP_ALLOW_TARGETS`). Do not try other names; ask the user.
 * `target_busy` means another call holds the target's lock (for example a long `target_create`); wait and retry.
+* `process_not_allowed` means `process_stop` will not touch that process (pid 1, procnto, a critical process, qnx-mcp's runner, or an executable in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` or outside `/tmp` and `/data`). Do not look for another way to stop it; report it. Use `run_stop` for runs that qnx-mcp started.
+* `remote_binary` cannot point into `/tmp/qnx-mcp` (qnx-mcp's own files), also not through a symlink.
 * Programs run as root on the target. Use disposable development targets.
