@@ -113,6 +113,41 @@ Verdict: every command and prompt ran as written and every Check held, including
 3. Step 7: the agent noticed the table in each run but could not say which lookups would fail (twice it guessed `baro`; in pass 3 it named no channel).
 4. Step 7, Check: compare the agent's details with the text; in two runs it got one wrong (the field at offset 8 in pass 2, the sort order in pass 3).
 
-These changes touch no `bash` block and no prompt: `gen_pass.py` run on the final text produces a driver byte for byte identical to `pass3.sh` (`cmp` silent), so pass 3 is a full run of the final text. The outputs shown in the codelab come from pass 1; pass 3 reproduced each of them with its own ids, addresses and times.
+These changes touch no `bash` block and no prompt: `gen_pass.py` run on that text produces a driver byte for byte identical to `pass3.sh` (`cmp` silent). The outputs shown in the codelab come from pass 1; pass 3 reproduced each of them with its own ids, addresses and times.
 
-Wall time of the commands and agent turns, from the first `bash` block to the end: 3 min 33 s (pass 2) and 4 min 24 s (pass 3), against the 45 minutes the codelab gives a reader, who also reads and types. Bedrock cost over all passes: $0.13 + $0.47 + $0.47 + $0.52 = $1.59. The dry-run targets (`cl1` in each pass) were destroyed by step 13, and the development target used to draft the codelab (`cl0`, its own allowlist and directories) was destroyed with `target_destroy` while pass 3 ran.
+One Check was wrong in every pass so far. Step 13 said that `pgrep -af qemu-system | grep qnx-codelab` prints nothing when no QEMU from the codelab is left. qnx-mcp starts QEMU through `mkqnximage --run` in the target's directory, and QEMU's command line holds only relative paths (`-drive file=output/disk-qemu.vmdk ...`), so that check prints nothing even while the target runs. Tested on a temporary development target `cl0` (`~/cl-dev/checktest.sh`): while it ran, the old check printed nothing (`grep` exit 1) and a check by working directory printed `~/cl-dev/targets/cl0`; after `target_destroy` the new check printed nothing. That passes 1 to 3 left no QEMU behind rests on `target_destroy` ("stopped QEMU", checked by qnx-mcp through the pidfd) and on the same check by working directory after pass 3, which found no QEMU under any dry-run directory.
+
+Text fixed after pass 3 (commit 81a83cf): step 13's Check is now `for p in $(pgrep qemu-system); do echo "$p $(readlink /proc/$p/cwd)"; done | grep qnx-codelab`, with a sentence on why the working directory and not the command line identifies the codelab's QEMU, and what to do with a line it prints. It is a `bash` block, so the driver runs it.
+
+## Pass 4: 19:35:57 to 19:39:54 UTC (3 min 57 s)
+
+The final text (commit 81a83cf), run by `pass4.sh`, which differs from `pass3.sh` only in step 13: the new check replaces the old one.
+
+| Step | Time | Result |
+|---|---|---|
+| 2 Before you begin | 0.5 s | as in pass 2 |
+| 3 Install | 9.2 s | `ls` shows `hub` and `sensor`; `--check`: 15 lines `ok`, `environment_check: ok` |
+| 4 Connect | 1.4 s + 10.5 s | `qnx: ... - ✔ Connected`; the agent listed the tools by name and called `environment_check`: "passed on all 15 checks" |
+| 5 Create a target | 25.9 s | `target_create`, `target_status`: `running` |
+| 6 Build | 12.3 s + 10.1 s | 2 errors and 1 warning as objects; the agent changed `gain` to `scale`, "I changed nothing else"; build ok, `debug_info: true`; it named the unsorted table and the missing NULL check without naming a channel and "left them alone, as you asked" |
+| 7 Crash | 27.1 s | `outcome: crashed`, SIGSEGV, `core_ready_ms: 0`; `get_crash`: `calibrate` at `sensor.c:71`, fault address `0x8` read as `offsetof(struct calibration, scale)`, `line_no` 7 `"gyro_z,31"`, `verified: true`; the agent named the unsorted table, `bsearch()` and the missing NULL check |
+| 8 Fix | 21.6 s | sorted table with a comment, NULL check with a slog2 warning; `exit_code` 0, `20 readings from 23 lines` |
+| 9 Service | 24.3 s | `run_start`; `run_poll` (`wait_s` 2) returned bytes 0 to 937, the second poll from `stdout_offset` 937 returned bytes 937 to 1320; `state: running` |
+| 10 Logs | 13.5 s | 6 warnings `line 12: gyro_z reading 10.71 rad/s is outside +/-8.70`; `run_stop` `outcome: stopped` |
+| 11 Hang | 25.5 s + 26.1 s | only the first line, then nothing; JOIN, MUTEX (`2347031-03`), SEND, REPLY; after the agent's fix: RECEIVE, NANOSLEEP, NANOSLEEP and `table` lines |
+| 12 Safety | 9.5 s + 9.6 s | `target_not_allowed` for `lab2`; `"/tmp/sensor/samples.csv; reboot"` arrived as one argument, `No such file or directory`, the target still running |
+| 13 Clean up | 9.4 s + 0.2 s | `target_destroy` ok; `claude mcp remove qnx`; `ls` reports that the directory does not exist; the new check printed nothing |
+
+All Checks held, and no fix was needed: pass 4 is a full run of the final text. Bedrock cost of pass 4: $0.50.
+
+## Summary
+
+| Pass | Text | Wall time | Bedrock | Fixes after it |
+|---|---|---|---|---|
+| 0 | draft | stopped after step 6 | $0.13 | example rewritten (the source gave the crash away) |
+| 1 | 137c35c examples, draft text | 17:40 to 17:46 | $0.47 | six text fixes (bc2dac8) |
+| 2 | bc2dac8 | 3 min 33 s | $0.47 | step 6 prompt and two sentences in step 7 (26f5982) |
+| 3 | 26f5982 | 4 min 24 s | $0.52 | four changes of prose (611e5ce), step 13 Check (81a83cf) |
+| 4 | 81a83cf | 3 min 57 s | $0.50 | none |
+
+Wall time counts the commands and agent turns from the first `bash` block to the end, against the 45 minutes the codelab gives a reader, who also reads and types. Bedrock cost over all passes: $2.09. The dry-run targets (`cl1` in each pass) were destroyed in step 13, and the development target `cl0` (its own allowlist and directories) with `target_destroy` after the check test.
