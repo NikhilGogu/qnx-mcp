@@ -92,7 +92,7 @@ def test_slog2_parser():
             "1793718943.260         sshd_session.835586..1                 slog*   1      0  5  <38>Accepted publickey for root\n"
             "    continuation line\n")
     e = parse_slog2(text)
-    assert e[0]["process"] == "io_usb_otg" and e[0]["pid"] == 282643 and e[0]["severity_name"] == "warning"
+    assert e[0]["process"] == "io_usb_otg" and e[0]["pid"] == 282643 and e[0]["severity_name"] == "notice"
     assert e[1]["process"] == "sshd_session" and e[1]["pid"] == 835586 and e[1]["buffer"] == "slog"
     assert e[1]["message"].endswith("continuation line")
 

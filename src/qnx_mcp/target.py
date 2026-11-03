@@ -37,7 +37,7 @@ MKQNXIMAGE_OPTIONS = {
     "--tz": r"[A-Za-z0-9_+/-]{1,64}",
     "--time-servers": r"[A-Za-z0-9.:-]{1,200}",
 }
-_RAM_RE = re.compile(r"^\d{2,6}[MG]$")
+_RAM_RE = re.compile(r"^\d{1,6}[MG]$")
 
 
 def validate_mkqnximage_options(options: Sequence[str]) -> list[str]:
@@ -215,7 +215,7 @@ class Target:
         last = "no IP yet"
         while time.monotonic() < deadline:
             if self.qemu_pid() is None:
-                raise QnxMcpError("target_down", f"QEMU for {self.name} exited during boot", hint="See the log in the target directory (qnx-mcp.log).", log=self.log_tail())
+                raise QnxMcpError("target_down", f"QEMU for {self.name} exited during boot", hint=f"See {self.log_path}.", log=self.log_tail())
             ip = self.lookup_ip(fallback=False)
             if ip:
                 r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", "true"], timeout=10)
@@ -225,15 +225,20 @@ class Target:
             time.sleep(2)
         raise QnxMcpError("timeout", f"target {self.name} did not accept SSH within {timeout:.0f}s", hint="Call target_status; boot may be slow or the image lacks sshd.", last_error=last)
 
+    @property
+    def log_path(self) -> Path:
+        return self.state / "mkqnximage.log"
+
     def log_tail(self) -> str:
         try:
-            return tail((self.dir / "qnx-mcp.log").read_text(errors="replace"), 2000)
+            return tail(self.log_path.read_text(errors="replace"), 2000)
         except OSError:
             return ""
 
     def _mkqnximage(self, args: list[str], timeout: float) -> ProcResult:
         env = sdk_env(self.cfg)
-        log = self.dir / "qnx-mcp.log"
+        self.state.mkdir(parents=True, exist_ok=True)
+        log = self.log_path  # outside the target dir: mkqnximage refuses to build into a non-empty directory
         with open(log, "a") as f:
             f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} mkqnximage {' '.join(args)}\n")
         r = run([sdk_tool(env, "mkqnximage"), *args], timeout=timeout, env=env, cwd=self.dir, log_path=log)

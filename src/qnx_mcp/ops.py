@@ -21,6 +21,7 @@ from .target import Target, gdb_for
 from .util import ENV_NAME_RE, REMOTE_NAME_RE, Config, QnxMcpError, check_remote_path, quote_argv, run, tail
 
 REMOTE_ROOT = "/tmp/qnx-mcp"
+KEEP_CORES = 20
 _runs_lock = threading.Lock()
 
 
@@ -138,6 +139,18 @@ def deploy_and_run(
     else:
         result["outcome"] = "exited"
     if result.get("core_path"):
+        # dumper (as configured by mkqnximage) reuses <name>.core, so keep this run's core under its run_id.
+        src = check_remote_path(result["core_path"], "core path")
+        dst = f"{REMOTE_ROOT}/cores/{run_id}-{os.path.basename(src)}"
+        script = (
+            f"mkdir -p {REMOTE_ROOT}/cores && mv -f {quote_argv([src, dst])} && "
+            f"cd {REMOTE_ROOT}/cores && ls -t | sed -e '1,{KEEP_CORES}d' | while read f; do rm -f -- \"$f\"; done"
+        )
+        with t.lock(exclusive=True):
+            mv = t.ssh_script(script, timeout=30, what="preserve core")
+        if mv.returncode == 0:
+            result["dumper_core_path"] = src
+            result["core_path"] = dst
         result["next_step"] = f"call get_crash with target={target!r} and run_id={run_id!r} for a source-level backtrace"
     elif res.get("core_expected"):
         result["next_step"] = f"no core reported (dumper={res.get('dumper')}); check target_status.dumper_running"
