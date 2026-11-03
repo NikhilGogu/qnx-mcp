@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 import uuid
@@ -21,7 +22,7 @@ from .sdk import runner_binary, sdk_env
 from .target import Target
 from .util import (
     ENV_NAME_RE, REMOTE_NAME_RE, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
-    private_dir, quote_argv, tail, within, write_private,
+    private_dir, quote_argv, tail, uncancellable, within, write_private,
 )
 
 REMOTE_ROOT = "/tmp/qnx-mcp"
@@ -30,7 +31,9 @@ KEEP_REMOTE_RUNS = 20
 KEEP_HOST_RUNS = 40
 MAX_BINARY = 256 << 20
 INLINE_TEXT = 64 << 10
-WRITE_ROOTS = ("/tmp/", "/data/")
+WRITE_ROOTS = ("/tmp", "/data")
+IN_FLIGHT = ("starting", "running")
+POLL_MAX_KB = 1024
 _sha_cache: dict[tuple[str, int, int], str] = {}
 _sha_lock = threading.Lock()
 
@@ -82,14 +85,18 @@ def all_records(t: Target) -> list[dict[str, Any]]:
     return sorted(recs, key=lambda r: r.get("started_at") or 0)
 
 
-def _active_background(t: Target) -> list[str]:
-    return [r["run_id"] for r in all_records(t) if r.get("kind") == "background" and r.get("state") == "running"]
+def _in_flight(t: Target) -> list[dict[str, Any]]:
+    """Runs that may still use their directories on the target (any kind, including uncertain starts)."""
+    now = time.time()
+    return [r for r in all_records(t) if r.get("state") in IN_FLIGHT and (r.get("deadline") or r.get("started_at", 0) + 3600) + 3600 > now]
 
 
 def _prune_host_runs(t: Target) -> None:
+    """Keep the newest KEEP_HOST_RUNS finished records (any kind); never prune a run still in flight."""
     with t.records_lock():
-        recs = [r for r in all_records(t) if r.get("state") != "running"]
-        for r in recs[: max(0, len(recs) - KEEP_HOST_RUNS)]:
+        live = {r["run_id"] for r in _in_flight(t)}
+        done = [r for r in all_records(t) if r["run_id"] not in live]
+        for r in done[: max(0, len(done) - KEEP_HOST_RUNS)]:
             shutil.rmtree(runs_dir(t) / r["run_id"], ignore_errors=True)
 
 
@@ -154,28 +161,31 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     """Make sure the runner and the given files are on the target with the right bytes.
 
     files: (local, remote, sha256, size, mode). One round trip checks everything; only
-    missing or mismatching files are uploaded. Returns the verified runner's remote path.
+    missing or mismatching files are uploaded. With prune, the verified runner removes old run
+    and app directories, never one that is locked by a live runner, younger than a few minutes,
+    or named by a run this server still has in flight. Returns the runner's remote path.
     """
     runner_local, digest = runner_binary(t.cfg, t.arch)
     runner_sha, runner_size = _sha256_file(runner_local), runner_local.stat().st_size
     runner_remote = f"{REMOTE_ROOT}/bin/qnx-mcp-run-{digest}"
-    dirs = sorted({f"{REMOTE_ROOT}/bin", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
+    dirs = sorted({f"{REMOTE_ROOT}/bin", f"{REMOTE_ROOT}/runs", f"{REMOTE_ROOT}/apps", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
     for d in dirs:
         check_remote_path(d)
-    parts = []
-    if prune:
-        active = " ".join(_active_background(t))
-        parts.append(
-            f"(cd {REMOTE_ROOT}/apps 2>/dev/null && ls -t | sed -e '1,{KEEP_APPS}d' | while read d; do rm -rf -- \"$d\"; done;"
-            f" cd {REMOTE_ROOT}/runs 2>/dev/null && ls -t | sed -e '1,{KEEP_REMOTE_RUNS}d' | while read d; do"
-            f" case \" {active} \" in *\" $d \"*) ;; *) rm -rf -- \"$d\";; esac; done) >/dev/null 2>&1;"
-        )
-    parts.append(f"mkdir -p {quote_argv(dirs)} || exit 3; R={quote_argv([runner_remote])};")
+    parts = [f"mkdir -p {quote_argv(dirs)} || exit 3; R={quote_argv([runner_remote])};"]
     for p in [runner_remote, *(f[1] for f in files)]:
         q = quote_argv([p])
         # exactly one line per file, even if the runner is missing or broken
         parts.append(f"X=; if test -f {q} && test -x \"$R\"; then X=$(\"$R\" -H {q} 2>/dev/null); fi; "
                      f"if test -n \"$X\"; then printf '%s\\n' \"$X\"; else echo none; fi;")
+    if prune:
+        flight = _in_flight(t)
+        keep_runs = [x for r in flight for x in ("-p", r["run_id"])] + [x for d in mkdirs if d.startswith(f"{REMOTE_ROOT}/runs/") for x in ("-p", os.path.basename(d))]
+        keep_apps = [x for r in flight if r.get("remote_path") for x in ("-p", r["remote_path"].split("/")[-2])]
+        keep_apps += [x for f in files if f[1].startswith(f"{REMOTE_ROOT}/apps/") for x in ("-p", f[1].split("/")[-2])]
+        ver = quote_argv([f"qnx-mcp-run {digest}"])
+        parts.append(f"if test \"$(\"$R\" -V 2>/dev/null)\" = {ver}; then "
+                     f"\"$R\" -G {REMOTE_ROOT}/runs -k {KEEP_REMOTE_RUNS} -a 300 {quote_argv(keep_runs)} >/dev/null 2>&1; "
+                     f"\"$R\" -G {REMOTE_ROOT}/apps -k {KEEP_APPS} -a 600 {quote_argv(keep_apps)} >/dev/null 2>&1; fi;")
     r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip)
     lines = [line for line in r.out.split("\n") if line.strip()]
     if len(lines) != len(files) + 1:
@@ -280,7 +290,9 @@ def deploy_and_run(
         argv = [runner, "-S", *opts, "-R", remote_run, "--", remote_bin, *args]
         try:
             r = t.ssh(argv, timeout=timeout_s + core_wait_s + 30, what="deploy_and_run", ip=ip, check=False, hold_stdin=True,
-                      max_output=12 * max_output_kb * 1024 + (1 << 20))
+                      max_output=12 * max_output_kb * 1024 + (1 << 20))  # JSON escaping can grow a byte to 6, two streams
+            if r.truncated:
+                raise QnxMcpError("runner_failed", "the runner's report was larger than its budget and was cut off")
             res = _parse_runner(r.out, "deploy_and_run")
         except BaseException as e:
             rec.update(state="failed", error=getattr(e, "code", type(e).__name__))
@@ -333,13 +345,20 @@ def run_start(
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
             "deadline": time.time() + timeout_s,
         }
-        save_record(t, rec)
-        r = t.ssh([runner, "-B", remote_run, *opts, "-R", remote_run, "--", remote_bin, *args], timeout=30, what="run_start", ip=ip, check=False)
-        res = _parse_runner(r.out, "run_start")
-        if not res.get("started"):
-            rec.update(state="failed", error=res.get("error"))
+        save_record(t, rec)  # ownership is on disk before anything is launched
+        _reconcile_starts(t, ip, exclude=rid)
+        try:
+            r = t.ssh([runner, "-B", remote_run, *opts, "-R", remote_run, "--", remote_bin, *args], timeout=30, what="run_start", ip=ip, check=False)
+            res = _parse_runner(r.out, "run_start")
+            if not res.get("started"):
+                raise QnxMcpError("runner_failed", f"background run did not start: {res.get('error')}")
+        except BaseException as e:
+            # Lost acknowledgement, timeout or cancellation: the daemon may be running. Stop it
+            # through its control FIFO (bounded, not tied to the cancelled call) and record the outcome.
+            stopped = _stop_quietly(t, ip, runner, remote_run)
+            rec.update(state="failed", error=getattr(e, "code", type(e).__name__), cleanup=stopped)
             save_record(t, rec)
-            raise QnxMcpError("runner_failed", f"background run did not start: {res.get('error')}")
+            raise
         rec.update(state="running", pid=res.get("pid"), runner_pid=res.get("runner_pid"))
         save_record(t, rec)
     return {
@@ -347,6 +366,24 @@ def run_start(
         "binary": str(local), "binary_sha256": sha, "remote_path": remote_bin, "args": args, "deadline_s": timeout_s,
         "next_step": f"call run_poll with run_id={rid!r} for output (pass back stdout_next/stderr_next as offsets); run_stop ends it",
     }
+
+
+def _stop_quietly(t: Target, ip: str, runner: str, remote_run: str) -> str:
+    with uncancellable():
+        try:
+            r = t.ssh([runner, "-K", remote_run, "-w", "3000"], timeout=20, what="stop failed start", ip=ip, check=False)
+            res = _parse_runner(r.out, "stop failed start")
+            return "stopped" if res.get("acknowledged") else ("not running" if not res.get("was_running") else "stop not acknowledged")
+        except QnxMcpError as e:
+            return f"stop failed: {e.code}"
+
+
+def _reconcile_starts(t: Target, ip: str, exclude: str) -> None:
+    """A start whose outcome was never recorded (server killed mid-call) is stopped and marked failed."""
+    for rec in all_records(t):
+        if rec.get("state") == "starting" and rec["run_id"] != exclude and time.time() - rec.get("started_at", 0) > 60:
+            rec.update(state="failed", error="start not acknowledged", cleanup=_stop_quietly(t, ip, rec["runner"], rec["remote_run_dir"]))
+            save_record(t, rec)
 
 
 def _owned_background(t: Target, run_id: str) -> dict[str, Any]:
@@ -359,11 +396,14 @@ def _owned_background(t: Target, run_id: str) -> dict[str, Any]:
 
 def _poll_once(t: Target, ip: str, rec: dict[str, Any], out_off: int, err_off: int, max_bytes: int) -> dict[str, Any]:
     argv = [rec["runner"], "-P", rec["remote_run_dir"], "-O", str(out_off), "-E", str(err_off), "-L", str(max_bytes)]
-    r = t.ssh(argv, timeout=30, what="run_poll", ip=ip, check=False, max_output=8 * max_bytes + (1 << 20))
+    budget = 12 * max_bytes + (256 << 10)  # each byte can become \u00XX in JSON, two streams, plus the status
+    r = t.ssh(argv, timeout=30, what="run_poll", ip=ip, check=False, max_output=budget)
     if r.returncode == 127:  # runner missing (for example the target's /tmp was cleaned): reinstall it
         rec["runner"] = prepare(t, ip, [], [])
         argv[0] = rec["runner"]
-        r = t.ssh(argv, timeout=30, what="run_poll", ip=ip, check=False, max_output=8 * max_bytes + (1 << 20))
+        r = t.ssh(argv, timeout=30, what="run_poll", ip=ip, check=False, max_output=budget)
+    if r.truncated:
+        raise QnxMcpError("runner_failed", "run_poll output exceeded its budget and was cut off", hint="Poll again with a smaller max_kb.")
     return _parse_runner(r.out, "run_poll")
 
 
@@ -385,8 +425,8 @@ def _apply_poll(t: Target, rec: dict[str, Any], p: dict[str, Any]) -> str:
 def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stderr_offset: int = 0, max_kb: int = 64, wait_s: float = 0) -> dict[str, Any]:
     t = Target(cfg, target)
     rec = _owned_background(t, run_id)
-    if stdout_offset < 0 or stderr_offset < 0 or not 1 <= max_kb <= 4096 or not 0 <= wait_s <= 60:
-        raise QnxMcpError("invalid_argument", "offsets must be >= 0, max_kb in [1, 4096], wait_s in [0, 60]")
+    if stdout_offset < 0 or stderr_offset < 0 or not 1 <= max_kb <= POLL_MAX_KB or not 0 <= wait_s <= 60:
+        raise QnxMcpError("invalid_argument", f"offsets must be >= 0, max_kb in [1, {POLL_MAX_KB}], wait_s in [0, 60]")
     with t.lock(exclusive=False):
         ip = t.require_ip()
         deadline = time.monotonic() + wait_s
@@ -425,18 +465,20 @@ def run_stop(cfg: Config, target: str, run_id: str, grace_s: float = 5) -> dict[
         raise QnxMcpError("invalid_argument", "grace_s must be in [0, 60]")
     with t.lock(exclusive=False):
         ip = t.require_ip()
+        # The request goes through the run's control FIFO, read only by the runner that owns the run.
         r = t.ssh([rec["runner"], "-K", rec["remote_run_dir"], "-w", str(int(grace_s * 1000))], timeout=grace_s + 30, what="run_stop", ip=ip, check=False)
         stop = _parse_runner(r.out, "run_stop")
-        if stop.get("error"):
-            raise QnxMcpError("remote_failed", f"run_stop refused: {stop['error']}")
         p = _poll_once(t, ip, rec, 0, 0, 1)
         state = _apply_poll(t, rec, p)
     status = p.get("status") if isinstance(p.get("status"), dict) else {}
-    return {
-        "ok": True, "run_id": run_id, "target": target, "was_running": bool(stop.get("was_running")), "forced": bool(stop.get("forced")),
-        "state": state, "outcome": _outcome(status) if status else None,
+    result: dict[str, Any] = {
+        "ok": True, "run_id": run_id, "target": target, "was_running": bool(stop.get("was_running")),
+        "acknowledged": bool(stop.get("acknowledged")), "state": state, "outcome": _outcome(status) if status else None,
         "result": {k: v for k, v in status.items() if k not in ("runner", "version")} or None,
     }
+    if stop.get("was_running") and not stop.get("acknowledged"):
+        result["note"] = "the runner did not finish within grace_s; it still enforces the run's deadline. Poll again or call run_stop with a longer grace_s."
+    return result
 
 
 # ---------------------------------------------------------------- file transfer
@@ -449,30 +491,116 @@ def _remote_hash(t: Target, ip: str, runner: str, remote: str) -> dict[str, Any]
     return None
 
 
+def _write_root(remote: str) -> tuple[str, str]:
+    """Split a file_put destination into (root, path below root); refuse qnx-mcp's own directory."""
+    for root in WRITE_ROOTS:
+        if remote.startswith(root + "/") and len(remote) > len(root) + 1:
+            if remote == REMOTE_ROOT or remote.startswith(REMOTE_ROOT + "/"):
+                break
+            return root, remote[len(root) + 1:]
+    raise QnxMcpError("path_not_allowed", f"file_put only writes files below {' or '.join(WRITE_ROOTS)} and never into {REMOTE_ROOT}: {remote}",
+                      hint="Choose a destination such as /tmp/myapp/config.txt or /data/home/...")
+
+
+def _dest(t: Target, ip: str, runner: str, root: str, rel: str, extra: list[str]) -> dict[str, Any]:
+    r = t.ssh([runner, "-D", rel, "-r", root, "-x", REMOTE_ROOT, *extra], timeout=30, what="destination check", ip=ip, check=False)
+    try:
+        return _parse_runner(r.out, "destination check")
+    except QnxMcpError as e:
+        msg = e.message.split("refused destination check: ")[-1]
+        code = "file_exists" if "destination exists" in msg else "path_not_allowed"
+        raise QnxMcpError(code, f"{root}/{rel}: {msg}", hint="Pass overwrite=true to replace an existing file." if code == "file_exists"
+                          else "Use a plain file path whose parent directories are not symlinks.") from None
+
+
+def _staging(cfg: Config) -> Path:
+    return private_dir(cfg.state_dir / "staging")
+
+
 def file_put(cfg: Config, target: str, local_path: str, remote_path: str, mode: str = "0644", overwrite: bool = False, max_mb: int = 64) -> dict[str, Any]:
     t = Target(cfg, target)
     local = check_host_path(cfg, local_path, "local_path")
     remote = check_remote_path(remote_path, "remote_path")
-    if not remote.startswith(WRITE_ROOTS) or remote.startswith(REMOTE_ROOT + "/") or remote.rstrip("/") in ("/tmp", "/data"):
-        raise QnxMcpError("path_not_allowed", f"file_put only writes below {' or '.join(WRITE_ROOTS)} (not {REMOTE_ROOT}): {remote}",
-                          hint="Choose a destination such as /tmp/myapp/config.txt or /data/home/...")
+    root, rel = _write_root(remote)
     if not re.fullmatch(r"0[0-7]{3}", mode):
         raise QnxMcpError("invalid_argument", f"mode must be octal like 0644, got {mode!r}")
     if not 1 <= max_mb <= 1024:
         raise QnxMcpError("invalid_argument", "max_mb must be 1-1024")
-    size = local.stat().st_size
-    if size > max_mb << 20:
-        raise QnxMcpError("file_too_large", f"{local} is {size} bytes, above max_mb={max_mb}")
-    sha = _sha256_file(local)
-    with t.lock(exclusive=False):
-        ip = t.require_ip()
-        runner = prepare(t, ip, [], [os.path.dirname(remote)])
-        existing = _remote_hash(t, ip, runner, remote)
-        if existing and not overwrite:
-            raise QnxMcpError("file_exists", f"{remote} already exists on {target}", hint="Pass overwrite=true to replace it.")
-        _upload(t, ip, local, remote, sha, size, mode, runner)
+    cap = max_mb << 20
+    # Snapshot first, with the cap enforced while copying: the source cannot grow or change afterwards.
+    snap = _staging(cfg) / f"put-{uuid.uuid4().hex[:12]}"
+    h = hashlib.sha256()
+    size = 0
+    try:
+        with open(local, "rb") as src, open(snap, "xb") as dst:
+            os.chmod(snap, 0o600)
+            for chunk in iter(lambda: src.read(1 << 20), b""):
+                size += len(chunk)
+                if size > cap:
+                    raise QnxMcpError("file_too_large", f"{local} is larger than max_mb={max_mb}")
+                h.update(chunk)
+                dst.write(chunk)
+        sha = h.hexdigest()
+        with t.lock(exclusive=False):
+            ip = t.require_ip()
+            runner = prepare(t, ip, [], [])
+            existing = _dest(t, ip, runner, root, rel, ["-c"]).get("exists")
+            if existing and not overwrite:
+                raise QnxMcpError("file_exists", f"{remote} already exists on {target}", hint="Pass overwrite=true to replace it.")
+            tmp_name = f".{os.path.basename(remote)}.part-{uuid.uuid4().hex[:8]}"
+            tmp = f"{os.path.dirname(remote)}/{tmp_name}"
+            t.put(snap, tmp, timeout=300, ip=ip)
+            try:
+                r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([runner, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
+                got = _parse_runner(r.out, "upload verification")
+                if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
+                    raise QnxMcpError("deploy_failed", f"uploaded copy of {local.name} does not match", expected_sha256=sha, got_sha256=got.get("sha256"))
+                _dest(t, ip, runner, root, rel, ["-I", tmp_name] + ([] if overwrite else ["-n"]))
+            except BaseException:
+                with uncancellable(), contextlib.suppress(QnxMcpError):
+                    t.ssh(["rm", "-f", tmp], timeout=15, what="upload cleanup", ip=ip, check=False)
+                raise
+    finally:
+        with contextlib.suppress(OSError):
+            snap.unlink()
     return {"ok": True, "target": target, "local_path": str(local), "remote_path": remote, "size": size, "sha256": sha, "mode": mode,
             "replaced": bool(existing)}
+
+
+def _install(src: Path, parent: Path, name: str, overwrite: bool) -> None:
+    """Copy src into a directory through a descriptor of that directory: a unique temporary name,
+    then link (never replaces) or, with overwrite, rename over a regular file. The directory itself
+    is not modified otherwise (no chmod), and a symlink or directory at the destination is refused."""
+    dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    tmp = f".{name}.{uuid.uuid4().hex[:8]}.part"
+    try:
+        try:
+            st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None and (not overwrite or not stat_isreg(st.st_mode)):
+            raise QnxMcpError("file_exists", f"{parent / name} already exists" + ("" if stat_isreg(st.st_mode) else " and is not a regular file"),
+                              hint="Pass overwrite=true to replace a regular file, or choose another local_path.")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+        try:
+            with os.fdopen(fd, "wb") as out, open(src, "rb") as f:
+                shutil.copyfileobj(f, out, 1 << 20)
+            if overwrite:
+                os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            else:
+                try:
+                    os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+                except FileExistsError:
+                    raise QnxMcpError("file_exists", f"{parent / name} appeared while downloading", hint="Pass overwrite=true, or choose another local_path.") from None
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+
+
+def stat_isreg(mode: int) -> bool:
+    return stat.S_ISREG(mode)
 
 
 def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None = None, overwrite: bool = False, max_mb: int = 16) -> dict[str, Any]:
@@ -480,43 +608,44 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
     remote = check_remote_path(remote_path, "remote_path")
     if not 1 <= max_mb <= 1024:
         raise QnxMcpError("invalid_argument", "max_mb must be 1-1024")
+    parent = name = None
     if local_path:
         dest = Path(local_path).expanduser()
-        if not dest.is_absolute():
-            raise QnxMcpError("invalid_argument", "local_path must be absolute")
-        parent = Path(os.path.realpath(dest.parent))
+        if not dest.is_absolute() or not dest.name or dest.name in (".", ".."):
+            raise QnxMcpError("invalid_argument", "local_path must be an absolute file path")
+        parent, name = Path(os.path.realpath(dest.parent)), dest.name
         if cfg.workspace and not within(parent, cfg.workspace):
             raise QnxMcpError("path_not_allowed", f"{dest} is outside the workspace", hint="Use a path inside QNX_MCP_WORKSPACE or omit local_path.")
         if not parent.is_dir():
             raise QnxMcpError("invalid_argument", f"directory {parent} does not exist on the build host")
-        dest = parent / dest.name
-        if os.path.lexists(dest) and (dest.is_symlink() or not overwrite):
-            raise QnxMcpError("file_exists", f"{dest} already exists (or is a symlink)", hint="Pass overwrite=true, or another local_path.")
-    else:
-        dest = private_dir(cfg.state_dir / "files" / target / uuid.uuid4().hex[:12]) / os.path.basename(remote)
-    with t.lock(exclusive=False):
-        ip = t.require_ip()
-        runner = prepare(t, ip, [], [])
-        info = _remote_hash(t, ip, runner, remote)
-        if info is None:
-            raise QnxMcpError("file_not_found", f"{remote} is not a readable regular file on {target}")
-        if info["size"] > max_mb << 20:
-            raise QnxMcpError("file_too_large", f"{remote} is {info['size']} bytes, above max_mb={max_mb}", hint="Raise max_mb (up to 1024).")
-        part = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.part")
-        try:
-            t.get(remote, part, timeout=300, ip=ip)
-            got = _sha256_file(part)
-            if part.stat().st_size != info["size"] or got != info["sha256"]:
-                raise QnxMcpError("copy_failed", f"downloaded copy of {remote} does not match the target's file (it may have changed during the copy)")
-            os.replace(part, dest)
-        finally:
-            with contextlib.suppress(OSError):
-                part.unlink()
-    result: dict[str, Any] = {"ok": True, "target": target, "remote_path": remote, "local_path": str(dest), "size": info["size"],
+    staged = _staging(cfg) / f"get-{uuid.uuid4().hex[:12]}"
+    try:
+        with t.lock(exclusive=False):
+            ip = t.require_ip()
+            runner = prepare(t, ip, [], [])
+            info = _remote_hash(t, ip, runner, remote)
+            if info is None:
+                raise QnxMcpError("file_not_found", f"{remote} is not a readable regular file on {target}")
+            if info["size"] > max_mb << 20:
+                raise QnxMcpError("file_too_large", f"{remote} is {info['size']} bytes, above max_mb={max_mb}", hint="Raise max_mb (up to 1024).")
+            # Exactly the bytes that were hashed are copied; a file that changed in between fails the check.
+            t.fetch(runner, remote, staged, info["size"], timeout=300, ip=ip)
+            if staged.stat().st_size != info["size"] or _sha256_file(staged) != info["sha256"]:
+                raise QnxMcpError("copy_failed", f"downloaded copy of {remote} does not match the target's file (it changed during the copy)")
+        if parent is None:
+            final = private_dir(cfg.state_dir / "files" / target / uuid.uuid4().hex[:12]) / os.path.basename(remote)
+            os.replace(staged, final)
+        else:
+            _install(staged, parent, name, overwrite)
+            final = parent / name
+    finally:
+        with contextlib.suppress(OSError):
+            staged.unlink()
+    result: dict[str, Any] = {"ok": True, "target": target, "remote_path": remote, "local_path": str(final), "size": info["size"],
                               "sha256": info["sha256"], "mode": info.get("mode")}
     if info["size"] <= INLINE_TEXT:
-        with contextlib.suppress(UnicodeDecodeError):
-            result["text"] = dest.read_bytes().decode("utf-8")
+        with contextlib.suppress(UnicodeDecodeError, OSError):
+            result["text"] = final.read_bytes().decode("utf-8")
     return result
 
 
