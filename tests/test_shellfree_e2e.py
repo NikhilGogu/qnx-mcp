@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from helpers import mcp_client, run_async
+from qnx_mcp.sdk import runner_binary
 from qnx_mcp.target import Target
 from qnx_mcp.util import Config, quote_argv
 
@@ -28,6 +29,11 @@ DEMO = Path(__file__).resolve().parents[1] / "examples" / "crash_demo"
 ECHOARGS = '#include <stdio.h>\nint main(int c, char **v){ for (int i = 1; i < c; i++) printf("[%s]\\n", v[i]); return 7; }\n'
 HANG = '#include <unistd.h>\nint main(void){ for (;;) sleep(1); }\n'
 STUBBORN = '#include <signal.h>\n#include <unistd.h>\nint main(void){ signal(SIGTERM, SIG_IGN); for (;;) sleep(1); }\n'
+SHAPESHIFTER = r'''#include <signal.h>
+#include <unistd.h>
+static void on_term(int s) { (void)s; char *argv[] = {"sleep", "30", NULL}; execv("/system/bin/sleep", argv); }
+int main(void) { signal(SIGTERM, on_term); for (;;) sleep(1); }
+'''
 TICKER = '#include <stdio.h>\n#include <unistd.h>\nint main(void){ for (int i = 0;; i++) { printf("tick %d\\n", i); fflush(stdout); usleep(200000); } }\n'
 
 
@@ -85,7 +91,7 @@ def test_file_list(tmp_path: Path):
             # links are described, never followed: the size is the link's own and the target is reported
             assert ents["boot"]["type"] == "symlink" and ents["boot"]["link_target"] == "/proc/boot" and ents["boot"]["size"] == len("/proc/boot")
             assert ents["alink"]["type"] == "symlink" and ents["alink"]["link_target"] == "a.txt"
-            assert ls["real_path"].endswith(base[len("/tmp"):]), ls
+            assert ls["real_path"].endswith(base[len("/tmp"):]) and ls["real_path_verified"] is True and ls["complete"] is True, ls
             _show("file_list", ls)
 
             err, part = await c.call("file_list", target=TARGET, path=base, max_entries=2)
@@ -137,8 +143,19 @@ def test_remote_binary_runs(tmp_path: Path):
             assert not err and g["faulting_frame"]["function"] == "read_calibration" and g["fault_address"] == "0x0", g
             pv = g["provenance"]
             assert pv["source"] == "remote_run" and pv["verified"] and pv["executable_match"] and pv["pid_match"], pv
-            assert pv["build_id_match"] is True and pv["same_file_as_target"] is True and pv["core_executable"] == f"{base}/bin/crash_demo", pv
+            assert pv["build_id_match"] is True and pv["core_executable"] == f"{base}/bin/crash_demo" and "build ID" in pv["evidence"], pv
             _show("get_crash(run_id, binary)", {"summary": g["summary"], "provenance": pv})
+            # Without a build ID nothing ties the host binary to the code that ran: a backtrace, but never verified.
+            err, nb = await c.call("build", path=str(DEMO), output=str(tmp_path / "nobid"), ldflags=["-Wl,--build-id=none"])
+            assert not err and nb["artifacts"][0]["build_id"] is None, nb
+            await _install(c, nb["artifacts"][0]["path"], f"{base}/bin/nobid")
+            err, cn = await c.call("deploy_and_run", target=TARGET, remote_binary=f"{base}/bin/nobid", timeout_s=20)
+            assert not err and cn["outcome"] == "crashed", cn
+            err, gn = await c.call("get_crash", target=TARGET, run_id=cn["run_id"], binary=nb["artifacts"][0]["path"])
+            pn = gn.get("provenance", {})
+            assert not err and pn["verified"] is False and pn["build_id_match"] is None and pn["pid_match"] and pn["executable_match"], gn
+            assert pn["evidence"].startswith("pid and path match; build ID not available"), pn
+            _show("get_crash(run_id, binary) without a build ID", {"summary": gn["summary"][:90], "provenance": pn})
             err, b2 = await c.call("build", path=str(DEMO), output=str(tmp_path / "rebuilt"), cflags=["-g", "-O0", "-DREBUILT=1", "-fno-inline"])
             assert not err, b2
             err, mm = await c.call("get_crash", target=TARGET, run_id=cr["run_id"], binary=b2["artifacts"][0]["path"])
@@ -179,6 +196,7 @@ def test_process_stop(tmp_path: Path):
             pid = await _pid_of(c, f"{base[1:]}/hang")
             err, s = await c.call("process_stop", target=TARGET, pid=pid)
             assert not err and s["signal"] == "SIGTERM" and s["signal_sent"] and s["exited"] and not s["still_running"] and not s["sigkill_sent"], s
+            assert s["start_ns"] > 1_700_000_000 * 10**9, s
             assert s["executable"] == f"{base}/hang" and s["real_path"].endswith(f"{base[len('/tmp'):]}/hang"), s
             err, gone = await c.call("processes", target=TARGET, pid=pid)
             assert not err and gone["returned"] == 0, gone
@@ -190,6 +208,24 @@ def test_process_stop(tmp_path: Path):
             err, s2 = await c.call("process_stop", target=TARGET, pid=pid, grace_s=1, kill_after_grace=True)
             assert not err and s2["sigkill_sent"] and s2["exited"], s2
             _show("process_stop of a program that ignores SIGTERM, then kill_after_grace=true", [s1, s2])
+
+            # A program that execs a system program when it gets SIGTERM: SIGKILL is withheld after the grace period.
+            await _install(c, await _build(c, tmp_path, "shapeshifter", SHAPESHIFTER), f"{base}/shapeshifter")
+            _detached([f"{base}/shapeshifter"])
+            pid = await _pid_of(c, f"{base[1:]}/shapeshifter")
+            err, sh = await c.call("process_stop", target=TARGET, pid=pid, grace_s=1, kill_after_grace=True)
+            assert err and sh["error"]["code"] == "process_not_allowed" and "SIGKILL was not sent" in sh["error"]["message"], sh
+            assert sh["error"]["details"]["signal_sent"] is True and sh["error"]["details"]["sigkill_sent"] is False, sh
+            err, now = await c.call("processes", target=TARGET, pid=pid)
+            assert not err and now["returned"] == 1 and "system/bin/sleep" in now["processes"][0]["path"], now
+            print(f"\nprocess_stop of a program that execs /system/bin/sleep on SIGTERM: {sh['error']['message']}")
+            # A creation token that does not match the process is refused by the runner before any signal.
+            runner = f"/tmp/qnx-mcp/bin/qnx-mcp-run-{runner_binary(Config.from_env(), 'x86_64')[1]}"
+            r = _target().ssh([runner, "-Z", str(pid), "-T", "1", "-q", now["processes"][0]["path"], "-s", "SIGKILL", "-w", "0", "-A", "/tmp", "-A", "/system"],
+                              timeout=15, check=False)
+            assert "changed: its start time differs" in r.out, r.out
+            print(f"runner -Z with a wrong start time: {r.out.strip()}")
+            _target().ssh_script(f"kill -9 {pid}", timeout=15, what="test cleanup", check=False)
 
             err, ps = await c.call("processes", target=TARGET, name="slogger2")
             slogger = ps["processes"][0]["pid"]

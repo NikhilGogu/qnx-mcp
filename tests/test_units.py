@@ -401,3 +401,74 @@ def test_program_choice(tmp_path):
         assert e.value.code == code, (binary, remote, e.value.message)
     prog = _program(cfg, None, None, "/data/home/svc/sensord", "r-000000000000")
     assert prog["remote_binary"] and prog["remote_path"] == "/data/home/svc/sensord" and prog["binary"] is None
+
+
+def test_stale_lease_is_rediscovered_after_a_connection_failure(tmp_path, monkeypatch):
+    """One live lease is used without a port probe; when ssh cannot connect there, the address is rediscovered
+    (leases and mkqnximage --getip) and the command retried once; a session that broke after it started is not."""
+    import types
+    import qnx_mcp.target as tg
+    d = tmp_path / "targets" / "tb5" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\nOPT_MACADDR='52:54:00:00:00:05'\n")
+    leases = tmp_path / "leases"
+    leases.write_text(json.dumps([{"mac-address": "52:54:00:00:00:05", "ip-address": "10.0.0.5", "expiry-time": 0}]))
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_DHCP_LEASES": str(leases)})
+    t = Target(cfg, "tb5")
+    monkeypatch.setattr(Target, "_ssh_opts", lambda self: [])
+    monkeypatch.setattr(Target, "qemu_pid", lambda self: 4242)
+    monkeypatch.setattr(Target, "_getip", lambda self, timeout: "10.0.0.9")
+    calls = []
+
+    def fake(argv, **kw):
+        host = next(a for a in argv if a.startswith("root@"))
+        calls.append(host)
+        if host == "root@10.0.0.5":
+            return types.SimpleNamespace(returncode=255, timed_out=False, out="", err="ssh: connect to host 10.0.0.5 port 22: No route to host\r\n", truncated=False)
+        return types.SimpleNamespace(returncode=0, timed_out=False, out="ok\n", err="", truncated=False)
+
+    monkeypatch.setattr(tg, "run", fake)
+    assert t.lookup_ip() == "10.0.0.5"  # no probe
+    assert t.ssh(["true"], timeout=5).out == "ok\n" and calls == ["root@10.0.0.5", "root@10.0.0.9"]
+    t.ssh(["true"], timeout=5, ip="10.0.0.5")
+    assert calls[2:] == ["root@10.0.0.9"]  # later calls go to the rediscovered address directly
+
+    def broken(argv, **kw):
+        calls.append("broken")
+        return types.SimpleNamespace(returncode=255, timed_out=False, out="", err="Connection to 10.0.0.9 closed by remote host.\r\n", truncated=False)
+
+    monkeypatch.setattr(tg, "run", broken)
+    with pytest.raises(QnxMcpError) as e:
+        t.ssh(["true"], timeout=5)
+    assert e.value.code == "ssh_failed" and calls.count("broken") == 1
+
+
+def test_stop_result_never_reports_an_unknown_state_as_success():
+    from qnx_mcp.ops import stop_result
+    proc = {"pid": 7, "name": "hang", "path": "tmp/hang"}
+    head = {"runner": "qnx-mcp-run", "pid": 7, "executable": "/tmp/hang", "real_path": "/data/var/tmp/hang", "signal": "SIGTERM",
+            "signal_sent": True, "sigkill_sent": False, "already_exiting": False, "waited_ms": 5, "warnings": []}
+    for extra, code, words in (({"exited": None, "state_error": "Bad file descriptor"}, "remote_failed", "could not be read"),
+                               ({"exited": False, "sigkill_withheld": "it runs a different executable now"}, "process_not_allowed", "SIGKILL was not sent")):
+        with pytest.raises(QnxMcpError) as e:
+            stop_result("tb", 7, proc, json.dumps({**head, **extra}), 1, "hint")
+        assert e.value.code == code and words in e.value.message and e.value.details["signal_sent"] is True, e.value.to_dict()
+    for usage, code in (("changed: its start time differs (the pid was reused, or the program called exec)", "process_not_found"),
+                        ("changed: it runs a different executable now", "process_not_allowed"), ("no such process", "process_not_found")):
+        with pytest.raises(QnxMcpError) as e:
+            stop_result("tb", 7, proc, json.dumps({"runner": "qnx-mcp-run", "usage_error": usage, "error": None}), 1, "hint")
+        assert e.value.code == code, usage
+    ok = stop_result("tb", 7, proc, json.dumps({**head, "exited": True, "state_error": None, "sigkill_withheld": None}), 1, "hint")
+    assert ok["exited"] is True and ok["still_running"] is False
+
+
+def test_list_result_reports_incomplete_and_unverified_listings():
+    from qnx_mcp.ops import list_result
+    res = {"runner": "qnx-mcp-run", "real_path": "/data/x", "real_path_verified": False, "complete": False, "read_error": "Input/output error",
+           "total": 1, "entries": [{"name": "a", "type": "file"}]}
+    out = list_result("tb", "/tmp/x", res)
+    assert out["complete"] is False and out["truncated"] is True and out["real_path_verified"] is False
+    assert "incomplete" in out["note"] and "real_path" in out["note"]
+    good = list_result("tb", "/tmp/x", {**res, "real_path_verified": True, "complete": True, "read_error": None})
+    assert good["truncated"] is False and "note" not in good
