@@ -4,6 +4,8 @@ qnx-mcp is a Model Context Protocol (MCP) server that gives AI coding agents typ
 
 Status: release candidate v0.1, revised after a second review. Everything below was run against QNX OS 8.0 x86_64 QEMU targets; the evidence is in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
 
+Tutorial: the codelab [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/) (about 45 minutes; source in [codelab/](codelab/qnx-mcp-agent-target.md), dry runs in [codelab/DRYRUN.md](codelab/DRYRUN.md)). The agent skill file is [skills/qnx-mcp/SKILL.md](skills/qnx-mcp/SKILL.md).
+
 ## Why this is more than SSH
 
 An agent with plain SSH has to compose shell commands, guess where cores land, pick the right gdb and sysroot, and parse free text. qnx-mcp does these things on the target and the host, and returns objects:
