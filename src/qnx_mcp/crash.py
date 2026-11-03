@@ -110,15 +110,7 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
         "pid_match": (core_pid == rec.get("pid")) if rec else None,
         "core_sha256": info["sha256"], "core_size": info["size"],
     }
-    if remote:
-        # The program came from the target: the host binary is only trusted if its build ID matches the core's,
-        # or if it is byte for byte the file that was started (SHA-256 taken on the target before the run).
-        ev["target_binary_sha256"] = rec.get("binary_sha256")
-        ev["same_file_as_target"] = bin_sha == rec.get("binary_sha256")
     problems = []
-    if remote and ev["build_id_match"] is None and not ev["same_file_as_target"]:
-        problems.append(f"cannot tell whether {binary.name} is the build of {rec['remote_path']} that crashed: it is not the same file and "
-                        + ("the binary has no GNU build ID" if not bin_bid else "the core holds no build ID note"))
     if rec is not None:
         if not ev["executable_match"]:
             problems.append(f"the core names executable {exe!r}, the run deployed {rec['remote_path']}")
@@ -135,6 +127,12 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
     if problems:
         raise QnxMcpError("core_mismatch", "; ".join(problems),
                           hint="Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed.", provenance=ev)
+    if remote and ev["build_id_match"] is not True:
+        # The program came from the target, so only a build ID in the core ties the host binary to the code that ran.
+        ev["evidence"] = "pid and path match; build ID not available (" + ("the binary has none" if not bin_bid else "the core holds no build ID note") + ")"
+        ev["verified"] = False
+        return ev
+    ev["evidence"] = ("build ID, " if ev["build_id_match"] else "") + ("executable path and pid match" if rec else "match")
     ev["verified"] = True
     return ev
 

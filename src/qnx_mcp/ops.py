@@ -753,15 +753,28 @@ def file_list(cfg: Config, target: str, path: str, max_entries: int = 200) -> di
     if r.truncated:
         raise QnxMcpError("runner_failed", "the listing was larger than its budget and was cut off", hint="Lower max_entries.")
     res = _parse_runner(r.out, "file_list")
-    entries = res.get("entries") or []
-    for e in entries:
+    for e in res.get("entries") or []:
         if isinstance(e.get("mtime"), int):
             e["mtime_iso"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e["mtime"]))
+    return list_result(target, remote, res)
+
+
+def list_result(target: str, remote: str, res: dict[str, Any]) -> dict[str, Any]:
+    entries = res.get("entries") or []
     total = int(res.get("total") or 0)
-    out: dict[str, Any] = {"ok": True, "target": target, "path": remote, "real_path": res.get("real_path"), "total_entries": total,
-                           "returned": len(entries), "truncated": total > len(entries), "entries": entries}
-    if out["truncated"]:
-        out["note"] = f"only the first {len(entries)} of {total} entries by name are listed; raise max_entries (up to {LIST_MAX}) or list a subdirectory"
+    complete = res.get("complete") is True
+    out: dict[str, Any] = {"ok": True, "target": target, "path": remote, "real_path": res.get("real_path"),
+                           "real_path_verified": res.get("real_path_verified") is True, "complete": complete,
+                           "total_entries": total, "returned": len(entries), "truncated": total > len(entries) or not complete, "entries": entries}
+    notes = []
+    if not complete:
+        notes.append(f"reading the directory failed after {total} entries ({res.get('read_error')}); the listing and total_entries are incomplete")
+    elif total > len(entries):
+        notes.append(f"only the first {len(entries)} of {total} entries by name are listed; raise max_entries (up to {LIST_MAX}) or list a subdirectory")
+    if not out["real_path_verified"]:
+        notes.append("real_path was resolved separately and does not name the directory that was read (it changed during the call)")
+    if notes:
+        out["note"] = "; ".join(notes)
     return out
 
 
@@ -798,35 +811,61 @@ def process_stop(cfg: Config, target: str, pid: int, signal: str = "TERM", grace
         raise QnxMcpError("process_not_allowed", f"process {pid} is not stopped: {stop_refusal(pid, None, None)}", hint=hint)
     with t.lock(exclusive=False):
         ip = t.require_ip()
-        r = t.ssh(["pidin", "-p", str(pid), "-F", _PROC_FMT], timeout=30, what="pidin", ip=ip, check=False)
-        found = [p for p in parse_pidin(r.out, "") if p["pid"] == pid]
-        if not found:
+        runner = prepare(t, ip, [], [])
+        # Discovery: the process's creation token (start time) from its /proc entry, and its path from pidin.
+        r = t.ssh_script(f"{quote_argv([runner, '-Y', str(pid)])}; echo {_SPLIT}; {quote_argv(['pidin', '-p', str(pid), '-F', _PROC_FMT])}",
+                         timeout=30, what="process discovery", ip=ip, check=False)
+        ident_text, _, pidin_text = r.out.partition(_SPLIT)
+        refused = _runner_refusal(ident_text)
+        found = [p for p in parse_pidin(pidin_text.lstrip("\n"), "") if p["pid"] == pid]
+        if (refused and refused[0] == "no such process") or not found:
             raise QnxMcpError("process_not_found", f"no process {pid} on {target}", hint="Call processes to find the pid (it may have exited).")
+        ident = _parse_runner(ident_text, "process discovery")
         proc = found[0]
-        why = stop_refusal(pid, proc.get("name"), proc.get("path"))
         about = {k: proc.get(k) for k in ("pid", "ppid", "name", "path", "args")}
+        if ident.get("path") != proc.get("path"):
+            raise QnxMcpError("process_not_found", f"process {pid} changed while it was inspected", hint="Call processes again and retry with the current pid.", process=about)
+        why = "it is a critical process" if ident.get("critical") else stop_refusal(pid, proc.get("name"), proc.get("path"))
         if why:
             raise QnxMcpError("process_not_allowed", f"process {pid} ({proc.get('name')}) is not stopped: {why}", hint=hint, process=about)
-        runner = prepare(t, ip, [], [])
-        argv = [runner, "-Z", str(pid), "-q", proc["path"], "-s", "SIG" + signal, "-w", str(int(grace_s * 1000)), *(["-f"] if kill_after_grace else []),
-                *[x for root in STOP_ROOTS for x in ("-A", root)], *[x for d in (*SYSTEM_DIRS, f"{REMOTE_ROOT}/bin") for x in ("-F", d)]]
+        argv = [runner, "-Z", str(pid), "-T", str(ident["start_ns"]), "-q", proc["path"], "-s", "SIG" + signal, "-w", str(int(grace_s * 1000)),
+                *(["-f"] if kill_after_grace else []), *[x for root in STOP_ROOTS for x in ("-A", root)],
+                *[x for d in (*SYSTEM_DIRS, f"{REMOTE_ROOT}/bin") for x in ("-F", d)]]
         r = t.ssh(argv, timeout=grace_s + 30, what="process_stop", ip=ip, check=False)
-    refused = _runner_refusal(r.out)
+    return stop_result(target, pid, proc, r.out, grace_s, hint)
+
+
+def stop_result(target: str, pid: int, proc: dict[str, Any], text: str, grace_s: float, hint: str) -> dict[str, Any]:
+    """Turn the runner's report into the tool result. A state that could not be read is an error, never an exit."""
+    about = {k: proc.get(k) for k in ("pid", "ppid", "name", "path", "args")}
+    refused = _runner_refusal(text)
     if refused:
         msg, err, rep_ = refused
         if msg == "no such process":
             raise QnxMcpError("process_not_found", f"process {pid} exited before it could be stopped", hint="Call processes to check.")
+        if msg.startswith("changed: "):
+            code = "process_not_found" if "start time differs" in msg else "process_not_allowed"
+            raise QnxMcpError(code, f"process {pid} changed after it was checked: {msg[9:]}; no signal was sent",
+                              hint="Call processes again; if it is still the program you mean, call process_stop again.", process=about)
         if msg.startswith("refused: "):
             where = f" ({rep_['executable']} resolves to {rep_['real_path']})" if rep_.get("real_path") else ""
             raise QnxMcpError("process_not_allowed", f"process {pid} ({proc.get('name')}) is not stopped: {msg[9:]}{where}" + (f" ({err})" if err else ""),
                               hint=hint, process=about)
-        raise QnxMcpError("remote_failed", f"process_stop of {pid} failed: {msg} ({err})")
-    res = _parse_runner(r.out, "process_stop")
+        raise QnxMcpError("remote_failed", f"process_stop of {pid} failed: {msg}" + (f" ({err})" if err else ""))
+    res = _parse_runner(text, "process_stop")
+    sent = {k: res.get(k) for k in ("signal", "signal_sent", "sigkill_sent")}
+    if res.get("state_error"):
+        raise QnxMcpError("remote_failed", f"{res.get('signal')} was sent to process {pid}, but its state could not be read afterwards ({res['state_error']})",
+                          hint=f"Call processes(pid={pid}) to see whether it is still running.", process=about, **sent)
+    if res.get("sigkill_withheld"):
+        raise QnxMcpError("process_not_allowed", f"{res.get('signal')} was sent to process {pid} and it did not exit; SIGKILL was not sent because "
+                          f"{res['sigkill_withheld']}", hint=f"Call processes(pid={pid}) to see what it runs now.", process=about, **sent)
     result: dict[str, Any] = {
         "ok": True, "target": target, "pid": pid, "name": proc.get("name"), "args": proc.get("args"), "ppid": res.get("ppid"), "uid": res.get("uid"),
-        **{k: res.get(k) for k in ("executable", "real_path", "signal", "signal_sent", "already_exiting", "sigkill_sent", "exited", "waited_ms", "warnings")},
+        **{k: res.get(k) for k in ("start_ns", "executable", "real_path", "signal", "signal_sent", "already_exiting", "sigkill_sent", "exited",
+                                   "waited_ms", "warnings")},
     }
-    result["still_running"] = not res.get("exited")
+    result["still_running"] = res.get("exited") is False
     if result["still_running"]:
         result["next_step"] = (f"process {pid} is still running after {grace_s:g} s; call process_stop again with kill_after_grace=true "
                                "(or signal='KILL'), or check its threads with processes(include_threads=true)")

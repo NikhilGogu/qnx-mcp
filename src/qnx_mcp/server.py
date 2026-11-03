@@ -315,10 +315,10 @@ class Provenance(_M):
     build_id_match: bool | None
     executable_match: bool | None = Field(description="core_executable equals the content-addressed path the run deployed")
     pid_match: bool | None = Field(description="core_pid equals the pid of the run that crashed")
-    same_file_as_target: bool | None = Field(None, description="remote_run only: the host binary has the SHA-256 the target's program had when the run started")
+    evidence: str | None = Field(None, description="What matched; for a remote_run without a build ID: 'pid and path match; build ID not available'")
     core_sha256: str
     core_size: int
-    verified: bool
+    verified: bool = Field(description="False only for a remote_run whose binary cannot be tied to the core by a build ID: the backtrace may use wrong symbols")
 
 
 class CrashReport(_M):
@@ -363,6 +363,8 @@ class FileListResult(_M):
     target: str
     path: str
     real_path: str | None = Field(description="The directory after resolving symlinks (on these images /tmp is /data/var/tmp)")
+    real_path_verified: bool = Field(description="real_path names the directory that was read (same device and inode, checked after reading)")
+    complete: bool = Field(description="False if reading the directory failed part way; total_entries then counts only what was read")
     total_entries: int
     returned: int
     truncated: bool
@@ -380,11 +382,12 @@ class ProcessStopResult(_M):
     uid: int | None
     executable: str | None = Field(description="Executable path the process manager reports (what pidin shows), made absolute")
     real_path: str | None = Field(description="That path with symlinks resolved; both had to be below /tmp or /data")
+    start_ns: int | None = Field(None, description="The process's start time in ns, its creation token: checked again before each signal")
     signal: str
     signal_sent: bool
     already_exiting: bool
     sigkill_sent: bool
-    exited: bool = Field(description="The process was gone or exiting when the call returned")
+    exited: bool = Field(description="The process was exiting or a zombie when the call returned")
     still_running: bool
     waited_ms: int
     warnings: list[dict[str, Any]] | None = None
@@ -762,7 +765,8 @@ async def file_list(
     title="Stop a process on a QNX target",
     description="Stop a process that qnx-mcp did not start (for runs use run_stop), for example a hung program or a service you want to restart. "
     "Allowed only when its executable lives below /tmp or /data, checked on the target at call time: the path pidin reports for that pid, "
-    "and the same path with symlinks resolved. Never pid 1, procnto, a critical process, qnx-mcp's runner, or anything in /proc/boot, /bin, /sbin, "
+    "and the same path with symlinks resolved. The process is identified by pid and start time; the start time, critical flag and executable "
+    "are checked again right before each signal, and nothing is sent if they changed. Never pid 1, procnto, a critical process, qnx-mcp's runner, or anything in /proc/boot, /bin, /sbin, "
     "/usr or /system; refusals are process_not_allowed errors that name the rule. Sends signal (default TERM), waits up to grace_s for the "
     "process to exit and, with kill_after_grace, then sends SIGKILL. The result says what was stopped and whether it exited.",
     annotations=_ann(False, True, True),
