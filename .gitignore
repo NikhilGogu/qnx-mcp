@@ -4,3 +4,4 @@ __pycache__/
 build-qnx-*/
 examples/crash_demo/crash_demo
 *.core
+examples/crash_demo/crash

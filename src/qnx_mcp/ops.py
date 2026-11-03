@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ from .util import ENV_NAME_RE, REMOTE_NAME_RE, Config, QnxMcpError, check_remote
 
 REMOTE_ROOT = "/tmp/qnx-mcp"
 KEEP_CORES = 20
+KEEP_APPS = 20
 _runs_lock = threading.Lock()
 
 
@@ -55,13 +57,26 @@ def _find_run(t: Target, run_id: str | None) -> dict[str, Any] | None:
 # ---------------------------------------------------------------- deploy_and_run
 
 
+def _upload_once(t: Target, local: Path, remote: str, ip: str) -> bool:
+    """Copy local to remote unless it is already there; write to .part then rename.
+
+    Remote paths are content-addressed by the callers, so an existing file has the
+    right bytes, and a program that is still running (QNX refuses to overwrite a busy
+    executable with EBUSY) is never written to.
+    """
+    q = quote_argv([remote])
+    r = t.ssh_script(f"if test -x {q}; then echo present; else mkdir -p {quote_argv([os.path.dirname(remote)])} && echo absent; fi", timeout=15, what="upload check", ip=ip)
+    if "present" in r.out:
+        return False
+    t.put(local, remote + ".part", timeout=120, ip=ip)
+    t.ssh(["mv", "-f", remote + ".part", remote], timeout=15, what="upload rename", ip=ip)
+    return True
+
+
 def _ensure_runner(t: Target, ip: str) -> str:
     local, digest = runner_binary(t.cfg, t.arch)
     remote = f"{REMOTE_ROOT}/bin/qnx-mcp-run-{digest}"
-    r = t.ssh(["test", "-x", remote], timeout=15, what="runner check", ip=ip)
-    if r.returncode != 0:
-        t.ssh(["mkdir", "-p", f"{REMOTE_ROOT}/bin"], timeout=15, what="mkdir", ip=ip)
-        t.put(local, remote, timeout=60, ip=ip)
+    _upload_once(t, local, remote, ip)
     return remote
 
 
@@ -100,24 +115,38 @@ def deploy_and_run(
         check_remote_path(cwd, "cwd")
 
     run_id = "r-" + uuid.uuid4().hex[:10]
+    moved_from = None
     with t.lock(exclusive=True):
         ip = t.require_ip()
         runner = _ensure_runner(t, ip)
-        remote_bin = f"{REMOTE_ROOT}/bin/{local.name}"
-        t.put(local, remote_bin, timeout=120, ip=ip)
+        digest = hashlib.sha256(local.read_bytes()).hexdigest()[:12]
+        remote_bin = f"{REMOTE_ROOT}/apps/{digest}/{local.name}"
+        if _upload_once(t, local, remote_bin, ip):
+            t.ssh_script(f"cd {REMOTE_ROOT}/apps && ls -t | sed -e '1,{KEEP_APPS}d' | while read d; do rm -rf -- \"$d\"; done", timeout=30, what="prune apps", ip=ip)
         argv = [runner, "-t", str(int(timeout_s * 1000)), "-m", str(max_output_kb * 1024), "-w", str(int(core_wait_s * 1000)), *argv_env]
         if cwd:
             argv += ["-C", cwd]
         argv += ["--", remote_bin, *[str(a) for a in (args or [])]]
         started = time.time()
         r = t.ssh(argv, timeout=timeout_s + core_wait_s + 30, what="deploy_and_run", ip=ip)
-    line = next((l for l in reversed(r.out.splitlines()) if l.startswith("{")), None)
-    try:
-        res = json.loads(line) if line else None
-    except ValueError:
-        res = None
-    if not res or "usage_error" in res:
-        raise QnxMcpError("runner_failed", "the target runner did not return a result", stdout=tail(r.out, 800), stderr=tail(r.err, 800))
+        line = next((l for l in reversed(r.out.splitlines()) if l.startswith("{")), None)
+        try:
+            res = json.loads(line) if line else None
+        except ValueError:
+            res = None
+        if not res or "usage_error" in res:
+            raise QnxMcpError("runner_failed", "the target runner did not return a result", stdout=tail(r.out, 800), stderr=tail(r.err, 800))
+        if res.get("core_path"):
+            # dumper (as configured by mkqnximage) reuses <name>.core: move this run's core under its
+            # run_id while still holding the lock, keeping the newest KEEP_CORES files.
+            src = check_remote_path(res["core_path"], "core path")
+            dst = f"{REMOTE_ROOT}/cores/{run_id}-{os.path.basename(src)}"
+            script = (
+                f"mkdir -p {REMOTE_ROOT}/cores && mv -f {quote_argv([src, dst])} && "
+                f"cd {REMOTE_ROOT}/cores && ls -t | sed -e '1,{KEEP_CORES}d' | while read f; do rm -f -- \"$f\"; done"
+            )
+            if t.ssh_script(script, timeout=30, what="preserve core", ip=ip).returncode == 0:
+                moved_from, res["core_path"] = src, dst
     res.pop("runner", None)
     result: dict[str, Any] = {
         "ok": True,
@@ -139,18 +168,8 @@ def deploy_and_run(
     else:
         result["outcome"] = "exited"
     if result.get("core_path"):
-        # dumper (as configured by mkqnximage) reuses <name>.core, so keep this run's core under its run_id.
-        src = check_remote_path(result["core_path"], "core path")
-        dst = f"{REMOTE_ROOT}/cores/{run_id}-{os.path.basename(src)}"
-        script = (
-            f"mkdir -p {REMOTE_ROOT}/cores && mv -f {quote_argv([src, dst])} && "
-            f"cd {REMOTE_ROOT}/cores && ls -t | sed -e '1,{KEEP_CORES}d' | while read f; do rm -f -- \"$f\"; done"
-        )
-        with t.lock(exclusive=True):
-            mv = t.ssh_script(script, timeout=30, what="preserve core")
-        if mv.returncode == 0:
-            result["dumper_core_path"] = src
-            result["core_path"] = dst
+        if moved_from:
+            result["dumper_core_path"] = moved_from
         result["next_step"] = f"call get_crash with target={target!r} and run_id={run_id!r} for a source-level backtrace"
     elif res.get("core_expected"):
         result["next_step"] = f"no core reported (dumper={res.get('dumper')}); check target_status.dumper_running"

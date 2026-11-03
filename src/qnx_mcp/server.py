@@ -356,7 +356,7 @@ def build(
 
 @mcp.tool(
     title="Deploy and run on a QNX target",
-    description="Copy a host-built QNX executable to the target (/tmp/qnx-mcp/bin) and run it once via the qnx-mcp-run helper: own process group, stdin /dev/null, "
+    description="Copy a host-built QNX executable to the target (/tmp/qnx-mcp/apps/<sha256-prefix>/, content-addressed) and run it once via the qnx-mcp-run helper: own process group, stdin /dev/null, "
     "stdout and stderr captured separately (capped), wall-clock timeout that kills the whole process group. "
     "Returns outcome (exited | crashed | killed | timeout | exec_failed), exit_code or signal_name, and for crashes the exact core_path, "
     "obtained from dumper's DCMD_DUMPER_GETPATH after its completion pulse. Checks the ELF arch and loader first (arch_mismatch, not_a_qnx_binary). "

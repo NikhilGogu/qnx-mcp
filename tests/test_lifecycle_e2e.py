@@ -79,8 +79,8 @@ def test_two_agents_are_serialised(tmp_path: Path):
                 return res, time.monotonic() - t, time.monotonic()
 
             (ra, da, ea), (rb, db, eb) = await asyncio.gather(agent_a(), agent_b())
-            assert not ra[0] and ra[1]["outcome"] == "timeout"
-            assert not rb[0] and rb[1]["outcome"] == "timeout"
+            assert not ra[0] and ra[1]["outcome"] == "timeout", ra
+            assert not rb[0] and rb[1]["outcome"] == "timeout", rb
             assert eb > ea and db > 2.0, (da, db)
             print(f"\n--- agent A run {da:.2f}s, agent B (started 1 s later) waited for the lock and finished after A: B took {db:.2f}s")
 
