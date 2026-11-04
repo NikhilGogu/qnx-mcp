@@ -48,3 +48,17 @@ $ /tmp/probe2 /tmp /data/var/tmp /tmp/qnx-mcp /tmp/qnx-mcp-test/d1 /tmp/qnx-mcp-
 /proc/1/ctl: No error start_time=1793718763000000000
 /proc/16387/ctl: No error start_time=1793718763840745655
 1793742037
+
+## 5. /proc/<pid>/exefile for relative starts (v0.3.0)
+# hangrel is a small program of ours that sleeps forever, installed as /tmp/qnx-mcp-test/rel/hangrel.
+$ cd /tmp/qnx-mcp-test/rel && ./hangrel &;  cd /tmp/qnx-mcp-test && rel/hangrel &;  cd /tmp/qnx-mcp-test/rel/sub && ../hangrel &
+$ for P in <their pids>; do echo "$P pidin=[$(pidin -p $P -F %n | tail -1)] exefile=[$(cat /proc/$P/exefile | tr -d '\000')]"; done
+146501654 pidin=[./hangrel] exefile=[/data/var/tmp/qnx-mcp-test/rel/./hangrel]
+146505752 pidin=[rel/hangrel] exefile=[/data/var/tmp/qnx-mcp-test/rel/hangrel]
+146513945 pidin=[../hangrel] exefile=[/data/var/tmp/qnx-mcp-test/rel/sub/../hangrel]
+$ od -c /proc/1/exefile
+0000000   /   p   r   o   c   /   b   o   o   t   /   p   r   o   c   n
+0000020   t   o   -   s   m   p   -   i   n   s   t   r  \0
+(pidin's path for a relative start is as typed, so 'rel/hangrel' cannot be told from the root-relative form
+pidin uses for absolute starts; exefile is absolute in every case. QNX documents exefile as "the path of the
+executable file used to run the process": Programmer's Guide, Controlling processes via the /proc filesystem.)
