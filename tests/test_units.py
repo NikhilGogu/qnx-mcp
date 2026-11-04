@@ -369,20 +369,23 @@ def test_core_read_and_build_id(tmp_path: Path):
 
 @pytest.mark.parametrize("pid,name,path,allowed", [
     (1, "procnto-smp-instr", "/proc/boot/procnto-smp-instr", False),
-    (16387, "slogger2", "proc/boot/slogger2", False),           # pidin shows most paths without the leading '/'
+    (16387, "slogger2", "/proc/boot/slogger2", False),
     (20000, "procnto-copy", "/tmp/procnto-copy", False),
     (20001, "slay", "/system/bin/slay", False),
     (20002, "x", "/usr/bin/x", False),
     (20003, "x", "/bin/x", False),
     (20004, "x", "/sbin/x", False),
-    (20005, "qnx-mcp-run-abc", "tmp/qnx-mcp/bin/qnx-mcp-run-abc", False),
+    (20005, "qnx-mcp-run-abc", "/tmp/qnx-mcp/bin/qnx-mcp-run-abc", False),
     (20006, "x", "/etc/x", False),
     (20007, "x", "/tmpx/x", False),                             # prefix of an allowed root, not below it
-    (20008, "x", "/tmp/../system/bin/x", False),                # traversal
+    (20008, "x", "/tmp/../system/bin/x", False),                # traversal, normalised before the rules
     (20009, "x", "", False),
-    (20010, "hub", "tmp/hub", True),
-    (20011, "sensord", "/data/home/svc/sensord", True),
-    (20012, "crash", "tmp/qnx-mcp/apps/9216f565e767f4b9/crash", True),
+    (20010, "x", "rel/x", False),                               # not what exefile gives: refused
+    (20011, "sleep", "/system/bin/./sleep", False),             # a system program started as ./sleep
+    (20012, "hub", "/tmp/hub", True),
+    (20013, "statusd", "/data/opt/status/./statusd", True),     # started as ./statusd in /data/opt/status
+    (20014, "statusd", "/data/var/tmp/sv/sub/../statusd", True),
+    (20015, "crash", "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash", True),
 ])
 def test_stop_refusal(pid, name, path, allowed):
     from qnx_mcp.ops import stop_refusal
@@ -472,3 +475,28 @@ def test_list_result_reports_incomplete_and_unverified_listings():
     assert "incomplete" in out["note"] and "real_path" in out["note"]
     good = list_result("tb", "/tmp/x", {**res, "real_path_verified": True, "complete": True, "read_error": None})
     assert good["truncated"] is False and "note" not in good
+
+
+def test_same_executable_ties_pidin_to_exefile():
+    from qnx_mcp.ops import same_executable
+    assert same_executable("./statusd", "/data/opt/status/./statusd")
+    assert same_executable("tmp/hub", "/tmp/hub") and same_executable("/proc/boot/procnto-smp-instr", "/proc/boot/procnto-smp-instr")
+    assert same_executable("../hangrel", "/data/var/tmp/rel/sub/../hangrel")
+    assert not same_executable("./statusd", "/data/opt/status/./other") and not same_executable("hub", "/tmp/xhub") and not same_executable("x", None)
+
+
+def test_remote_binary_policy(tmp_path):
+    from qnx_mcp.ops import _program, remote_binary_refusal
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path), "QNX_MCP_STATE_DIR": str(tmp_path / "s"), "QNX_MCP_ALLOW_TARGETS": "*"})
+    assert cfg.remote_binary_roots == ("/tmp", "/data")
+    for path in ("/proc/boot/ksh", "/bin/sh", "/system/bin/slay", "/usr/bin/x", "/sbin/x", "/data/home/ksh", "/tmp/fesh", "/tmp/x/toybox", "/opt/svc/x", "/tmpx/y"):
+        assert remote_binary_refusal(cfg, path), path
+        with pytest.raises(QnxMcpError) as e:
+            _program(cfg, None, None, path, "r-000000000000")
+        assert e.value.code == "path_not_allowed", path
+    assert remote_binary_refusal(cfg, "/data/opt/status/statusctl") is None and remote_binary_refusal(cfg, "/tmp/sv/stress") is None
+    narrow = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path), "QNX_MCP_REMOTE_BINARY_ROOTS": "/data/opt:/bad/../x:relative"})
+    assert narrow.remote_binary_roots == ("/data/opt",)
+    assert remote_binary_refusal(narrow, "/data/opt/status/statusctl") is None and remote_binary_refusal(narrow, "/tmp/sv/stress")
+    closed = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path), "QNX_MCP_REMOTE_BINARY_ROOTS": ""})
+    assert closed.remote_binary_roots == () and "QNX_MCP_REMOTE_BINARY_ROOTS" in remote_binary_refusal(closed, "/tmp/x")

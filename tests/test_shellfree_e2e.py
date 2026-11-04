@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path
 
 import pytest
@@ -173,8 +174,12 @@ def test_remote_binary_runs(tmp_path: Path):
             err, ls = await c.call("file_list", target=TARGET, path="/tmp/qnx-mcp/bin")
             runner = next(f"/tmp/qnx-mcp/bin/{e['name']}" for e in ls["entries"] if e["name"].startswith("qnx-mcp-run-"))
             _target().ssh(["ln", "-s", runner, f"{base}/bin/runner-link"], timeout=15)
+            _target().ssh(["ln", "-s", "/proc/boot/ksh", f"{base}/bin/innocent"], timeout=15)
+            _target().ssh(["ln", "-s", "/system/bin/slay", f"{base}/bin/helper"], timeout=15)
             for remote, code in ((runner, "path_not_allowed"), (f"{base}/bin/runner-link", "path_not_allowed"), (f"{base}/bin/noexec", "invalid_argument"),
-                                 (f"{base}/bin/missing", "file_not_found"), (f"{base}/../r/bin/echoargs", "invalid_argument"), ("/proc/boot", "invalid_argument")):
+                                 (f"{base}/bin/missing", "file_not_found"), (f"{base}/../r/bin/echoargs", "invalid_argument"), (f"{base}/bin", "invalid_argument"),
+                                 ("/proc/boot/ksh", "path_not_allowed"), ("/system/bin/slay", "path_not_allowed"), (f"{base}/bin/innocent", "path_not_allowed"),
+                                 (f"{base}/bin/helper", "path_not_allowed")):
                 for tool in ("deploy_and_run", "run_start"):
                     err, bad = await c.call(tool, target=TARGET, remote_binary=remote)
                     assert err and bad["error"]["code"] == code, (tool, remote, bad)
@@ -201,6 +206,24 @@ def test_process_stop(tmp_path: Path):
             err, gone = await c.call("processes", target=TARGET, pid=pid)
             assert not err and gone["returned"] == 0, gone
             _show("process_stop", s)
+
+            # Services started with a relative path, as the field services in the evaluation are (cd dir && ./prog &).
+            _target().ssh_script(f"cd {quote_argv([base])} && (./hang >/dev/null 2>&1 &); cd /tmp && (qnx-mcp-test/p{os.getpid()}/hang >/dev/null 2>&1 &); "
+                                 "cd /system/bin && (./sleep 122 >/dev/null 2>&1 &)", timeout=30, what="test setup")
+            await asyncio.sleep(0.5)
+            err, ps = await c.call("processes", target=TARGET, name="hang")
+            rel = [p for p in ps["processes"] if p["path"] in ("./hang", f"qnx-mcp-test/p{os.getpid()}/hang")]
+            assert len(rel) == 2, ps
+            for p in rel:
+                err, s = await c.call("process_stop", target=TARGET, pid=p["pid"])
+                assert not err and s["exited"] and posixpath.normpath(s["executable"]).endswith(f"{base[len('/tmp'):]}/hang"), s
+                print(f"\nprocess_stop of a service started as {p['path']}: executable {s['executable']}, real_path {s['real_path']}, exited {s['exited']}")
+            err, ps = await c.call("processes", target=TARGET, name="sleep")
+            dotsleep = next(p["pid"] for p in ps["processes"] if p["path"] == "./sleep")
+            err, bad = await c.call("process_stop", target=TARGET, pid=dotsleep)
+            assert err and bad["error"]["code"] == "process_not_allowed" and "/system" in bad["error"]["message"], bad
+            print(f"refused process_stop of ./sleep started in /system/bin: {bad['error']['message']}")
+            _target().ssh_script(f"kill {dotsleep}", timeout=15, what="test cleanup", check=False)
 
             pid = await _pid_of(c, f"{base[1:]}/stubborn")
             err, s1 = await c.call("process_stop", target=TARGET, pid=pid, grace_s=1)
@@ -233,7 +256,7 @@ def test_process_stop(tmp_path: Path):
             system = await _pid_of(c, "system/bin/sleep")
             err, rs = await c.call("run_start", target=TARGET, binary=await _build(c, tmp_path, "ticker", TICKER), timeout_s=30)
             assert not err, rs
-            for victim, why in ((1, "procnto"), (slogger, "/proc/boot"), (system, "/system"), (link, "system or qnx-mcp directory"),
+            for victim, why in ((1, "procnto"), (slogger, "/proc/boot"), (system, "/system"), (link, "resolves to /system/bin/sleep"),
                                 (rs["runner_pid"], "runner")):
                 err, bad = await c.call("process_stop", target=TARGET, pid=victim)
                 assert err and bad["error"]["code"] == "process_not_allowed" and why in bad["error"]["message"] and bad["error"]["hint"], (victim, bad)

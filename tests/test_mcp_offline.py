@@ -100,6 +100,9 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls", "remote_binary": "/data/svc"}, "invalid_argument"),
                 ("run_start", {"target": "tb9"}, "invalid_argument"),
                 ("run_start", {"target": "tb9", "remote_binary": "/data/svc"}, "target_down"),
+                ("deploy_and_run", {"target": "tb9", "remote_binary": "/proc/boot/ksh"}, "path_not_allowed"),
+                ("run_start", {"target": "tb9", "remote_binary": "/data/home/sh"}, "path_not_allowed"),
+                ("deploy_and_run", {"target": "tb9", "remote_binary": "/opt/tool"}, "path_not_allowed"),
             ]
             for tool, args, code in cases:
                 err, data = await c.call(tool, **args)
