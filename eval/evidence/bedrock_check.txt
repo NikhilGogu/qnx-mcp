@@ -1,0 +1,12 @@
+# One-line Claude Code call on the build box through the instance role (3 Nov 2026, 16:06 UTC).
+# Command (on the box, no AWS keys present; credentials come from the instance profile):
+#   export CLAUDE_CONFIG_DIR=/tmp/ccv/cfg CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION=eu-west-1 \
+#          ANTHROPIC_MODEL=global.anthropic.claude-sonnet-5-5 ANTHROPIC_DEFAULT_HAIKU_MODEL=global.anthropic.claude-haiku-5-5 \
+#          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1
+#   claude-2.1.312 -p "Reply with exactly: bedrock ok" --model global.anthropic.claude-sonnet-5-5 --output-format json --max-turns 1
+# Output (abridged to the fields that matter):
+"result": "bedrock ok", "is_error": false, "num_turns": 1, "duration_ms": 1119,
+"total_cost_usd": 0.0407915,
+"modelUsage": {"global.anthropic.claude-sonnet-5-5": {"inputTokens": 2, "outputTokens": 8, "cacheCreationInputTokens": 16283,
+  "costUSD": 0.0407915, "canonicalModel": "claude-sonnet-5-5", "provider": "bedrock", "costBasis": "list"}}
+# Instance metadata on the box at the same time: InstanceProfileArn .../instance-profile/qnx-box-bedrock-eval, Code Success.

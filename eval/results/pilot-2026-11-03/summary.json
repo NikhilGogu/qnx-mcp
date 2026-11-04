@@ -1,0 +1,616 @@
+{
+  "stats": {
+    "trials": 8,
+    "scored": 8,
+    "cost_total_usd": 0.69,
+    "cost_mean_usd": 0.086,
+    "cost_max_usd": 0.1231,
+    "wall_mean_s": 42.8,
+    "wall_max_s": 151.4,
+    "judge_cost_usd": 0.0325
+  },
+  "trials": [
+    {
+      "task": "t01-calib-null",
+      "arm": "A",
+      "rep": 1,
+      "target": "e791d82",
+      "started": "2026-11-03T16:32:17+00:00",
+      "ip": "192.168.122.223",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 21.1,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 8,
+      "assistant_messages": 6,
+      "tool_calls": 7,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 2
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 12,
+        "cache_write": 15579,
+        "cache_read": 129791,
+        "output": 1926
+      },
+      "cost_usd": 0.0712,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 1926,
+          "cacheReadInputTokens": 129791,
+          "cacheCreationInputTokens": 15579,
+          "webSearchRequests": 0,
+          "costUSD": 0.0712106,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 189,
+          "cacheCreationEphemeral5mInputTokens": 15579,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "calib.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly identifies the NULL s->cal dereference in calib_apply for humid2 (no cal_db entry); the cited line 47 is wrong, but the function and file are right and the diff fixes the correct spot.",
+        "usage": {
+          "input": 1168,
+          "output": 238
+        },
+        "cost_usd": 0.0047
+      }
+    },
+    {
+      "task": "t01-calib-null",
+      "arm": "B",
+      "rep": 1,
+      "target": "ef9a50d",
+      "started": "2026-11-03T16:33:10+00:00",
+      "ip": "192.168.122.94",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 36.9,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 15,
+      "assistant_messages": 12,
+      "tool_calls": 14,
+      "tool_calls_by_name": {
+        "Bash": 3,
+        "Edit": 1,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 2,
+        "mcp__qnx__deploy_and_run": 3,
+        "mcp__qnx__get_crash": 1,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 7,
+      "bash_calls": 3,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 24,
+        "cache_write": 24485,
+        "cache_read": 333336,
+        "output": 2847
+      },
+      "cost_usd": 0.1231,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 2847,
+          "cacheReadInputTokens": 333336,
+          "cacheCreationInputTokens": 24485,
+          "webSearchRequests": 0,
+          "costUSD": 0.12306410000000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 271,
+          "cacheCreationEphemeral5mInputTokens": 24485,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "calib.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies calib_apply() at calib.c:25 dereferencing a NULL s->cal that calib_find() returns for humid2, and fixes it by returning the raw value (gain 1, offset 0).",
+        "usage": {
+          "input": 1274,
+          "output": 91
+        },
+        "cost_usd": 0.0035
+      }
+    },
+    {
+      "task": "t01-calib-null",
+      "arm": "A",
+      "rep": 2,
+      "target": "e1dcda9",
+      "started": "2026-11-03T16:30:28+00:00",
+      "ip": "192.168.122.26",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 19.8,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 6,
+      "assistant_messages": 5,
+      "tool_calls": 5,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 10,
+        "cache_write": 15095,
+        "cache_read": 101400,
+        "output": 1881
+      },
+      "cost_usd": 0.0667,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 1881,
+          "cacheReadInputTokens": 101400,
+          "cacheCreationInputTokens": 15095,
+          "webSearchRequests": 0,
+          "costUSD": 0.0667075,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 149,
+          "cacheCreationEphemeral5mInputTokens": 15095,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "calib.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names calib.c:25 in calib_apply(), explains the NULL s->cal dereference for humid2 left by calib_find(), and fixes it by treating a NULL table as gain 1 and offset 0.",
+        "usage": {
+          "input": 1124,
+          "output": 91
+        },
+        "cost_usd": 0.0032
+      }
+    },
+    {
+      "task": "t01-calib-null",
+      "arm": "B",
+      "rep": 2,
+      "target": "ea3c6d1",
+      "started": "2026-11-03T16:30:33+00:00",
+      "ip": "192.168.122.96",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 35.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 14,
+      "assistant_messages": 10,
+      "tool_calls": 13,
+      "tool_calls_by_name": {
+        "Bash": 3,
+        "Edit": 1,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 2,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__get_crash": 1,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 6,
+      "bash_calls": 3,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 20,
+        "cache_write": 23912,
+        "cache_read": 274572,
+        "output": 2818
+      },
+      "cost_usd": 0.1155,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 2818,
+          "cacheReadInputTokens": 274572,
+          "cacheCreationInputTokens": 23912,
+          "webSearchRequests": 0,
+          "costUSD": 0.11545719999999998,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 333,
+          "cacheCreationEphemeral5mInputTokens": 23912,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "calib.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Report names calib.c:25 in calib_apply, the NULL s->cal dereference for humid2 from calib_find returning NULL, and fixes it with gain 1/offset 0, matching ground truth.",
+        "usage": {
+          "input": 1227,
+          "output": 89
+        },
+        "cost_usd": 0.0033
+      }
+    },
+    {
+      "task": "t05-msgreply",
+      "arm": "A",
+      "rep": 1,
+      "target": "e549d5d",
+      "started": "2026-11-03T16:30:43+00:00",
+      "ip": "192.168.122.225",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 25.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 7,
+      "assistant_messages": 6,
+      "tool_calls": 6,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 12,
+        "cache_write": 16879,
+        "cache_read": 131529,
+        "output": 2238
+      },
+      "cost_usd": 0.0778,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2238,
+          "cacheReadInputTokens": 131529,
+          "cacheCreationInputTokens": 16879,
+          "webSearchRequests": 0,
+          "costUSD": 0.0777544,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 500,
+          "cacheCreationEphemeral5mInputTokens": 16879,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "cfgsrv.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies the CFG_GET unknown-key path in handle() in cfgsrv.c (lines 37-40) that breaks without MsgReply/MsgError, leaving the client reply-blocked, and fixes it with MsgError(rcvid, ENOENT); minor oddity in the table (set colour output) doesn't change this.",
+        "usage": {
+          "input": 1329,
+          "output": 132
+        },
+        "cost_usd": 0.004
+      }
+    },
+    {
+      "task": "t05-msgreply",
+      "arm": "B",
+      "rep": 1,
+      "target": "eede29d",
+      "started": "2026-11-03T16:30:38+00:00",
+      "ip": "192.168.122.163",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 151.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 9,
+      "assistant_messages": 7,
+      "tool_calls": 8,
+      "tool_calls_by_name": {
+        "Bash": 5,
+        "Edit": 1,
+        "Read": 1,
+        "TaskStop": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 5,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 14,
+        "cache_write": 18654,
+        "cache_read": 164068,
+        "output": 2586
+      },
+      "cost_usd": 0.0889,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 2586,
+          "cacheReadInputTokens": 164068,
+          "cacheCreationInputTokens": 18654,
+          "webSearchRequests": 0,
+          "costUSD": 0.0889298,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 364,
+          "cacheCreationEphemeral5mInputTokens": 18654,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "cfgsrv.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report correctly identifies that the CFG_GET unknown-key path in handle() breaks without replying, leaving the client REPLY-blocked, and fixes it with MsgError(rcvid, ENOENT) at lines 37-40.",
+        "usage": {
+          "input": 1313,
+          "output": 99
+        },
+        "cost_usd": 0.0036
+      }
+    },
+    {
+      "task": "t05-msgreply",
+      "arm": "A",
+      "rep": 2,
+      "target": "ec4f464",
+      "started": "2026-11-03T16:31:55+00:00",
+      "ip": "192.168.122.91",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 22.1,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 7,
+      "assistant_messages": 5,
+      "tool_calls": 6,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 10,
+        "cache_write": 16549,
+        "cache_read": 104898,
+        "output": 1901
+      },
+      "cost_usd": 0.0709,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 1901,
+          "cacheReadInputTokens": 104898,
+          "cacheCreationInputTokens": 16549,
+          "webSearchRequests": 0,
+          "costUSD": 0.07089229999999999,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 94,
+          "cacheCreationEphemeral5mInputTokens": 16549,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "cfgsrv.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly identifies the missing MsgReply/MsgError on the CFG_GET unknown-key path in handle() and fixes it with MsgError(ENOENT); the cited line numbers 62-65 are off, but the function and branch are right.",
+        "usage": {
+          "input": 1293,
+          "output": 409
+        },
+        "cost_usd": 0.0067
+      }
+    },
+    {
+      "task": "t05-msgreply",
+      "arm": "B",
+      "rep": 2,
+      "target": "e248698",
+      "started": "2026-11-03T16:31:30+00:00",
+      "ip": "192.168.122.69",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 30.6,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 8,
+      "assistant_messages": 5,
+      "tool_calls": 7,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 2
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 10,
+        "cache_write": 17884,
+        "cache_read": 109210,
+        "output": 2069
+      },
+      "cost_usd": 0.0763,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2069,
+          "cacheReadInputTokens": 109210,
+          "cacheCreationInputTokens": 17884,
+          "webSearchRequests": 0,
+          "costUSD": 0.07634099999999999,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 349,
+          "cacheCreationEphemeral5mInputTokens": 17884,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "cfgsrv.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Report identifies the missing MsgReply/MsgError on the unknown-key CFG_GET path in handle() at cfgsrv.c:38-39, causing the client to stay reply-blocked, and applies the matching MsgError(ENOENT) fix.",
+        "usage": {
+          "input": 1216,
+          "output": 106
+        },
+        "cost_usd": 0.0035
+      }
+    }
+  ]
+}

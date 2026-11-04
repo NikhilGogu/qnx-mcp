@@ -1,0 +1,7 @@
+{
+  "file": "Makefile",
+  "lines": [5],
+  "window": 2,
+  "function": "LDLIBS",
+  "mechanism": "On QNX the BSD socket API (socket, bind, sendto, recvfrom, setsockopt) lives in libsocket, not in libc as on Linux. The Makefile links without -lsocket, so the link fails with undefined references. Fix: add -lsocket to LDLIBS."
+}

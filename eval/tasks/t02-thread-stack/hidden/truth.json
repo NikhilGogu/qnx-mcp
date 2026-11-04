@@ -1,0 +1,7 @@
+{
+  "file": "vibmon.c",
+  "lines": [26, 59],
+  "window": 3,
+  "function": "analyse",
+  "mechanism": "analyse() runs on a thread created with default attributes and declares a 512 KiB local array (double window[65536]). The default QNX pthread stack is 256 KiB (Linux uses 8 MiB), so the thread overflows its stack and faults (SIGSEGV). Fix: create the thread with a larger stack (pthread_attr_setstacksize) or move the buffer off the stack."
+}

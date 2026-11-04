@@ -1,0 +1,26 @@
+# Target Connection (QNX 8.0)
+
+Filled in for this session. The work in this session is debugging software under `task/`; it is not an Alpine aports port, so there is no aports tree and no package output directory.
+
+## Connecting
+
+- Target: `{TID}`, a QNX OS 8.0 x86_64 QEMU virtual machine built with mkqnximage (image directory `{TARGET_DIR}` on this host). It plays the field unit: its configuration and data are as the user left them.
+- Host: `{IP}`, port 22, user `root`, key-based authentication with the default key `~/.ssh/id_ed25519` (no password).
+- This session's SSH configuration is `{SSHCFG}` (host alias `target`). Only this target is reachable from this session; ssh and scp refuse other hosts.
+
+Non-interactive commands:
+
+```bash
+ssh -F {SSHCFG} target '<command>'
+scp -F {SSHCFG} <file> target:/tmp/
+```
+
+The same works with the address: `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{IP} '<command>'`.
+
+## Building
+
+The image has no native compiler and no abuild. Programs are cross-compiled on this host with the QNX SDP 8.0: `source ~/qnx800/qnxsdp-env.sh`, then build in the program's directory as its README says (the Makefiles call `qcc -Vgcc_ntox86_64`). Copy the binaries to the target, for example to `/tmp`, and run them there.
+
+## Image-specific facts
+
+None recorded yet.

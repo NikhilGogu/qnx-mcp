@@ -1,0 +1,10 @@
+{
+  "file": "statusd.c",
+  "lines": [
+    43,
+    38
+  ],
+  "window": 3,
+  "function": "link_note",
+  "mechanism": "link_note() opens a symlinked state file to check that it is readable and never closes it, so every answer for a component whose state file is a symlink leaks a descriptor. On the unit, /data/var/status/pump.state is a symlink to pump.state.v42; the monitor polls pump every second, so after about 45 polls statusd reaches its 48-file limit and every lookup, for every component, fails with EMFILE (reported as internal error). pidin fds on statusd shows the open pump.state descriptors. Fix: fclose() the file (or use access())."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "v2-06-worker-null",
+  "dir": "sensorhub",
+  "summary": "A ratio sensor whose ref does not resolve (case mismatch among many refs) keeps a NULL pointer that crashes one of several worker threads",
+  "binaries": [
+    "sensorhub"
+  ],
+  "issue": "sensorhub crashes on the field unit in its first cycle (`Memory fault (core dumped)`). On the bench it works with examples/sensor.d. The unit reads its configuration from /etc/sensor.d on the target. We build it with `make` in task/sensorhub."
+}

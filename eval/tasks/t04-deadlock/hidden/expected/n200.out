@@ -1,0 +1,2 @@
+ledger: 200 transfers per worker
+balances: a0=99200 a1=100800 total=200000 journal=800

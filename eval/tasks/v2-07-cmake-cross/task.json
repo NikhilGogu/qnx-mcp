@@ -1,0 +1,7 @@
+{
+  "id": "v2-07-cmake-cross",
+  "dir": "telemetry",
+  "summary": "Multi-directory CMake project that builds on Linux but fails only in the QNX cross build (header, librt, libsocket)",
+  "binaries": [],
+  "issue": "Our telemetry project builds and works on Linux, but the QNX cross build fails: after `source ~/qnx800/qnxsdp-env.sh`, `cmake -S . -B build-qnx -DCMAKE_TOOLCHAIN_FILE=cmake/qnx-x86_64.cmake && cmake --build build-qnx` in task/telemetry stops with errors. Please make the QNX build work without breaking the Linux build, and check on the target that telemd and tlmdump work together over loopback (for example `tlmdump -p 7100 -n 5 &` then `telemd -p 7100 -n 5`)."
+}

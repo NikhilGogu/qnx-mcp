@@ -1,0 +1,18 @@
+# Target Connection (QNX 8.0)
+
+Filled in for this session. The work in this session is debugging software under `task/`; it is not an Alpine aports port, so there is no aports tree and no package output directory.
+
+## Connecting
+
+- Target: `{TID}`, a QNX OS 8.0 x86_64 QEMU virtual machine built with mkqnximage. It plays the field unit: its configuration and data are as the user left them.
+- There is no shell access to the target in this session: ssh, scp and sftp to it are refused. The target is reachable only through the `qnx` MCP server (tools `mcp__qnx__*`, target name `{TID}`). Its tools run programs on the target (your own builds and programs installed there, once or in the background), copy files to and from it, list its directories, show processes and thread states, stop processes, read the system log (slog2) and turn crashes into backtraces. Read `skills/qnx-mcp/SKILL.md` before you start.
+- The MCP tools are deferred: load the ones you need with ToolSearch first, for example `select:mcp__qnx__target_status,mcp__qnx__file_list,mcp__qnx__file_get,mcp__qnx__processes,mcp__qnx__logs`.
+- Host paths you pass to the tools must be inside this workspace.
+
+## Building
+
+The image has no native compiler and no abuild. Programs are cross-compiled on this host with the QNX SDP 8.0: use the `build` tool, or `source ~/qnx800/qnxsdp-env.sh` and build in the program's directory as its README says (the Makefiles call `qcc -Vgcc_ntox86_64`). Run the binaries on the target with `deploy_and_run` or `run_start`.
+
+## Image-specific facts
+
+None recorded yet.

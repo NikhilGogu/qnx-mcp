@@ -1,0 +1,7 @@
+{
+  "id": "t03-socket-link",
+  "dir": "udpecho",
+  "summary": "Socket program that fails to link on QNX without -lsocket",
+  "binaries": ["udpecho"],
+  "issue": "We are porting udpecho, our UDP echo test tool, to QNX. It builds and works on Linux, but `make` in task/udpecho fails at the link step for QNX:\n\n    undefined reference to `socket'\n\nPlease make it build for QNX and check that it works on the target: `./udpecho serve 5555 &` and then `./udpecho send 5555 hello` should print `HELLO`; `./udpecho send 5555 QUIT` prints `BYE` and stops the server."
+}

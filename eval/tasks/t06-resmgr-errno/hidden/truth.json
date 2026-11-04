@@ -1,0 +1,7 @@
+{
+  "file": "sensord.c",
+  "lines": [51, 30],
+  "window": 3,
+  "function": "io_devctl",
+  "mechanism": "io_devctl() follows the POSIX convention (errno = EINVAL; return -1) when set_rate() rejects a rate, but a resource manager handler must return the errno value itself. Returning -1 makes the client's devctl() report EOK, so sensorctl believes 75 Hz was applied and never falls back; only sensord's slog2 warning shows the rejection. Fix: return EINVAL (or errno) from the handler."
+}

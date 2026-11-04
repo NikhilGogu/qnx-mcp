@@ -1,0 +1,9 @@
+{
+  "file": "gatewayd.c",
+  "lines": [
+    53
+  ],
+  "window": 3,
+  "function": "main",
+  "mechanism": "gatewayd's main thread holds count_lock across forward(), i.e. across its MsgSend to storaged. With quota_check=gateway (only in the unit's /etc/storaged.conf), storaged answers each record only after asking gatewayd_ctl for the remaining quota; the control thread receives that query and then blocks on count_lock. Result: feed REPLY-blocked on gatewayd, gatewayd's main thread REPLY-blocked on storaged, storaged REPLY-blocked on gatewayd, gatewayd's control thread MUTEX-blocked on the lock its main thread holds. Fix: do not hold the lock across the MsgSend (take it only to update accepted)."
+}

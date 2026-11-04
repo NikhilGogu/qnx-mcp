@@ -1,0 +1,7 @@
+{
+  "id": "t07-double-free",
+  "dir": "pktq",
+  "summary": "Use-after-free and double free on a retry path; QNX libc aborts",
+  "binaries": ["pktq"],
+  "issue": "pktq, our packet retransmission simulator, aborts on the QNX target as soon as the simulated link reports a send error:\n\n    # ./pktq\n    Abort (core dumped)\n\nWith a lossless link (`./pktq 20 0`) it completes. For the default run every packet should be delivered after retries (`delivered=20 dropped=0`) and the exit status should be 0. We built it with `make` in task/pktq and ran it from /tmp on the target."
+}

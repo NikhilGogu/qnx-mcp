@@ -1,0 +1,10 @@
+{
+  "file": "libs/core/src/clock.c",
+  "lines": [
+    3,
+    10
+  ],
+  "window": 3,
+  "function": "clock.c, telem.h, addr.c and the CMakeLists.txt of core, net and telemd",
+  "mechanism": "Several things fail only for QNX: libs/core/src/clock.c includes <sys/sysinfo.h> under #if defined(__unix__), which QNX's compiler also defines (no sysinfo on QNX); apps/telemd/telem.h includes the glibc header <endian.h> (QNX has <gulliver.h>, ENDIAN_LE32); libs/net/src/addr.c uses AF_INET without <sys/socket.h>; apps/telemd/CMakeLists.txt links rt (no librt on QNX); libs/net/CMakeLists.txt does not link socket (the socket API is in libsocket on QNX); and once it builds, libs/core is a SHARED library, so telemd and tlmdump copied to the target alone fail to start because libcore.so is not there. Fix: QNX-safe headers (sysinfo only on __linux__, gulliver.h, sys/socket.h), no rt and socket on QNX (CMAKE_SYSTEM_NAME is QNX; there is no QNX variable), and a static core library."
+}

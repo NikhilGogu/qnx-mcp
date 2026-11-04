@@ -1,0 +1,13 @@
+sensorhub: 8 sensors, 2 derived, 0 rejected, 0 disabled, 50 cycles
+temp_in      i2c0 last      7.453 C    mean      5.569 min      3.344 max      7.734 n 50 fail 0
+temp_out     i2c0 last     77.688 C    mean     76.302 min     73.688 max     78.312 n 50 fail 0
+baro         i2c1 last    740.551 hPa  mean    743.262 min    737.124 max    750.011 n 50 fail 0
+humid        i2c1 last     58.855 %RH  mean     58.515 min     58.101 max     58.855 n 50 fail 0
+vib_x        spi0 last      1.684 g    mean      1.938 min      1.684 max      2.144 n 50 fail 0
+vib_z        spi0 last    -51.211 m/s2 mean    -52.290 min    -53.544 max    -51.135 n 50 fail 0
+vref         adc0 last   1592.894 mV   mean   1633.481 min   1592.894 max   1672.186 n 50 fail 0
+supply       adc0 last    157.828 %    mean    153.285 min    149.780 max    157.828 n 10 fail 0
+derived temp_delta        -70.234
+derived vib_peak            1.684
+alarm temp_in      raised 3 first cycle 13 last cycle 45
+alarm humid        quiet

@@ -1,0 +1,7 @@
+{
+  "file": "calib.c",
+  "lines": [25],
+  "window": 3,
+  "function": "calib_apply",
+  "mechanism": "calib_apply() dereferences s->cal, which calib_find() leaves NULL for sensors without a calibration table (humid2), so the first sample of humid2 causes a NULL pointer read (SIGSEGV). Fix: treat a NULL table as gain 1, offset 0."
+}

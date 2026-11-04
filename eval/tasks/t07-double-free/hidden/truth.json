@@ -1,0 +1,7 @@
+{
+  "file": "link.c",
+  "lines": [35],
+  "window": 3,
+  "function": "link_send",
+  "mechanism": "link_send() frees the packet on its failure path although the documented contract leaves ownership with the caller on failure. send_with_retry() then retries with the freed packet (use after free) and frees it again, so libc detects the double free and aborts (SIGABRT). Fix: do not free the packet when link_send() fails."
+}

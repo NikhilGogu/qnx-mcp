@@ -1,0 +1,11 @@
+{
+  "id": "v2-02-mp-deadlock",
+  "dir": "gateway",
+  "summary": "Two-process message-passing deadlock that only the unit's storaged configuration triggers",
+  "binaries": [
+    "gatewayd",
+    "storaged",
+    "feed"
+  ],
+  "issue": "On the field unit, records stopped flowing: `feed` never returns, and gatewayd and storaged are still running but no longer answer. The services were started from /data/opt/gateway on the target with the unit's configuration (/etc/gateway.conf and /etc/storaged.conf), and they are still in that state now. On the bench, with the example configuration, the same build works. We build with `make` in task/gateway."
+}

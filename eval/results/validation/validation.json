@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-03T16:28:40+00:00",
+  "results": {
+    "t01-calib-null bug": false,
+    "t01-calib-null fix": true,
+    "t02-thread-stack bug": false,
+    "t02-thread-stack fix": true,
+    "t03-socket-link bug": false,
+    "t03-socket-link fix": true,
+    "t04-deadlock bug": false,
+    "t04-deadlock fix": true,
+    "t05-msgreply bug": false,
+    "t05-msgreply fix": true,
+    "t06-resmgr-errno bug": false,
+    "t06-resmgr-errno fix": true,
+    "t07-double-free bug": false,
+    "t07-double-free fix": true,
+    "t08-no-timeout bug": false,
+    "t08-no-timeout fix": true
+  },
+  "all_valid": true
+}

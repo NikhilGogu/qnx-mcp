@@ -1,0 +1,5 @@
+Two files of this task's hidden fixture are symbolic links in the original repository. They are listed here
+instead of stored as links; recreate them before running the task:
+
+  ln -s e.state.3 tasks/v2-08-fd-leak/hidden/set2/e.state
+  ln -s pump.state.v42 tasks/v2-08-fd-leak/hidden/target/data/var/status/pump.state

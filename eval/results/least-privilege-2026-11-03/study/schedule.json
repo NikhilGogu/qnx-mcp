@@ -1,0 +1,1152 @@
+{
+  "name": "least-privilege-2026-11-03/study",
+  "seed": 20261107,
+  "models": [
+    "sonnet",
+    "haiku"
+  ],
+  "arms": "AC",
+  "schedule": [
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 3,
+      "arm": "A",
+      "target": "ead4d5a"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 3,
+      "arm": "C",
+      "target": "e59fc30"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 4,
+      "arm": "C",
+      "target": "e61df8c"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 4,
+      "arm": "A",
+      "target": "e78d387"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 5,
+      "arm": "A",
+      "target": "e582ad4"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 5,
+      "arm": "C",
+      "target": "ef291f1"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 1,
+      "arm": "C",
+      "target": "e6171db"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 1,
+      "arm": "A",
+      "target": "e681484"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 1,
+      "arm": "A",
+      "target": "ea1d986"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 1,
+      "arm": "C",
+      "target": "ef228b0"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 3,
+      "arm": "C",
+      "target": "e43e7ac"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 3,
+      "arm": "A",
+      "target": "e592beb"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 4,
+      "arm": "C",
+      "target": "e903aaa"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 4,
+      "arm": "A",
+      "target": "ede9b2d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 3,
+      "arm": "A",
+      "target": "eaa105c"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 3,
+      "arm": "C",
+      "target": "ea044a1"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 5,
+      "arm": "A",
+      "target": "e4b8b3d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 5,
+      "arm": "C",
+      "target": "e4748e3"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 2,
+      "arm": "C",
+      "target": "e84aa77"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 2,
+      "arm": "A",
+      "target": "ed75b42"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 1,
+      "arm": "C",
+      "target": "e9caaba"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 1,
+      "arm": "A",
+      "target": "ea33c3d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 3,
+      "arm": "A",
+      "target": "ed023de"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 3,
+      "arm": "C",
+      "target": "eea367e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 1,
+      "arm": "C",
+      "target": "e087a2e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 1,
+      "arm": "A",
+      "target": "eec1d19"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 4,
+      "arm": "C",
+      "target": "e25b2bd"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 4,
+      "arm": "A",
+      "target": "e1024e3"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 3,
+      "arm": "C",
+      "target": "e67570c"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 3,
+      "arm": "A",
+      "target": "e60b76f"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 2,
+      "arm": "A",
+      "target": "e3623ed"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 2,
+      "arm": "C",
+      "target": "edd54eb"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 5,
+      "arm": "A",
+      "target": "e2abdcc"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 5,
+      "arm": "C",
+      "target": "e9932eb"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 3,
+      "arm": "C",
+      "target": "e4d25ed"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 3,
+      "arm": "A",
+      "target": "ebd9d4a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 2,
+      "arm": "A",
+      "target": "e260bac"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 2,
+      "arm": "C",
+      "target": "e232527"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 2,
+      "arm": "A",
+      "target": "e7fd5a8"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 2,
+      "arm": "C",
+      "target": "ec2de17"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 5,
+      "arm": "C",
+      "target": "e161166"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 5,
+      "arm": "A",
+      "target": "e89bed9"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 1,
+      "arm": "C",
+      "target": "e53236e"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 1,
+      "arm": "A",
+      "target": "e01df90"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 5,
+      "arm": "A",
+      "target": "e90f8a7"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 5,
+      "arm": "C",
+      "target": "e1cfc80"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 1,
+      "arm": "A",
+      "target": "e7cb100"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 1,
+      "arm": "C",
+      "target": "e42449b"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 4,
+      "arm": "C",
+      "target": "e4b2c73"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 4,
+      "arm": "A",
+      "target": "e00ff1b"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 4,
+      "arm": "C",
+      "target": "e910668"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-05-hang-states",
+      "rep": 4,
+      "arm": "A",
+      "target": "e0f5b6d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 4,
+      "arm": "C",
+      "target": "e64d7d1"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 4,
+      "arm": "A",
+      "target": "eecbd9f"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 1,
+      "arm": "C",
+      "target": "e1d526d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 1,
+      "arm": "A",
+      "target": "e194eab"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 3,
+      "arm": "A",
+      "target": "eb5ae3a"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 3,
+      "arm": "C",
+      "target": "ec944f1"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 3,
+      "arm": "A",
+      "target": "e947696"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 3,
+      "arm": "C",
+      "target": "e84e361"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 2,
+      "arm": "A",
+      "target": "e7b3052"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 2,
+      "arm": "C",
+      "target": "e4f9993"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 1,
+      "arm": "A",
+      "target": "e969620"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 1,
+      "arm": "C",
+      "target": "e942308"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 5,
+      "arm": "A",
+      "target": "ef7b821"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 5,
+      "arm": "C",
+      "target": "ea83ffc"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 1,
+      "arm": "C",
+      "target": "e4f29ee"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 1,
+      "arm": "A",
+      "target": "e3f1320"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 3,
+      "arm": "A",
+      "target": "e0a1178"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 3,
+      "arm": "C",
+      "target": "e915118"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 4,
+      "arm": "A",
+      "target": "eaacc72"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 4,
+      "arm": "C",
+      "target": "eaffc70"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 5,
+      "arm": "A",
+      "target": "e81bb63"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 5,
+      "arm": "C",
+      "target": "e61d8fa"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 3,
+      "arm": "C",
+      "target": "ee49500"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 3,
+      "arm": "A",
+      "target": "ef019bd"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 5,
+      "arm": "C",
+      "target": "e4f7a42"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 5,
+      "arm": "A",
+      "target": "e57cd02"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 1,
+      "arm": "A",
+      "target": "eebfcb1"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 1,
+      "arm": "C",
+      "target": "e692d4b"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 4,
+      "arm": "A",
+      "target": "e79bd5e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 4,
+      "arm": "C",
+      "target": "e030b80"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 5,
+      "arm": "A",
+      "target": "eb0c77e"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 5,
+      "arm": "C",
+      "target": "ef8df0c"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 5,
+      "arm": "C",
+      "target": "e4eb9f8"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 5,
+      "arm": "A",
+      "target": "ee6f0f0"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 4,
+      "arm": "C",
+      "target": "e4112b7"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 4,
+      "arm": "A",
+      "target": "e36b830"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 4,
+      "arm": "A",
+      "target": "e214686"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 4,
+      "arm": "C",
+      "target": "e0ffac9"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 3,
+      "arm": "A",
+      "target": "ee5a53e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 3,
+      "arm": "C",
+      "target": "e255f93"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 2,
+      "arm": "A",
+      "target": "ea7b65d"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 2,
+      "arm": "C",
+      "target": "e7e8929"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 2,
+      "arm": "C",
+      "target": "ed6ecf4"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 2,
+      "arm": "A",
+      "target": "e2a8ac5"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 2,
+      "arm": "A",
+      "target": "eefa7ee"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 2,
+      "arm": "C",
+      "target": "ed5120c"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 4,
+      "arm": "C",
+      "target": "e8ec842"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 4,
+      "arm": "A",
+      "target": "e125ca6"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 3,
+      "arm": "C",
+      "target": "e1a50db"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 3,
+      "arm": "A",
+      "target": "ebc392a"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 2,
+      "arm": "A",
+      "target": "eec965a"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 2,
+      "arm": "C",
+      "target": "e4635b2"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 1,
+      "arm": "A",
+      "target": "e7593cc"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 1,
+      "arm": "C",
+      "target": "efbff69"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 3,
+      "arm": "C",
+      "target": "e98bad9"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 3,
+      "arm": "A",
+      "target": "e6c7c23"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 3,
+      "arm": "A",
+      "target": "eef6abf"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-06-worker-null",
+      "rep": 3,
+      "arm": "C",
+      "target": "e0922ff"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 2,
+      "arm": "A",
+      "target": "e58177a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 2,
+      "arm": "C",
+      "target": "e465d95"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 1,
+      "arm": "C",
+      "target": "e7baaad"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 1,
+      "arm": "A",
+      "target": "e92873c"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 4,
+      "arm": "C",
+      "target": "eddf0e2"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-01-config-overflow",
+      "rep": 4,
+      "arm": "A",
+      "target": "e2ae46a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 4,
+      "arm": "C",
+      "target": "edff5c9"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 4,
+      "arm": "A",
+      "target": "e2a9971"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 1,
+      "arm": "C",
+      "target": "e60a41e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 1,
+      "arm": "A",
+      "target": "eae83a6"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 1,
+      "arm": "A",
+      "target": "e0b9c67"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 1,
+      "arm": "C",
+      "target": "e19355b"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 1,
+      "arm": "A",
+      "target": "e28034a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 1,
+      "arm": "C",
+      "target": "e8e89af"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 2,
+      "arm": "A",
+      "target": "ede073a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 2,
+      "arm": "C",
+      "target": "efac608"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 4,
+      "arm": "A",
+      "target": "ec1373d"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-05-hang-states",
+      "rep": 4,
+      "arm": "C",
+      "target": "eadab8a"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 2,
+      "arm": "C",
+      "target": "e2e16ba"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 2,
+      "arm": "A",
+      "target": "e8eb81e"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 2,
+      "arm": "A",
+      "target": "e1855cc"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 2,
+      "arm": "C",
+      "target": "efaa2ff"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 2,
+      "arm": "C",
+      "target": "e459b2e"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-03-resmgr-slog2",
+      "rep": 2,
+      "arm": "A",
+      "target": "e87bdde"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 5,
+      "arm": "A",
+      "target": "e563fc2"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 5,
+      "arm": "C",
+      "target": "ebdc129"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 1,
+      "arm": "C",
+      "target": "e6ef05d"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-08-fd-leak",
+      "rep": 1,
+      "arm": "A",
+      "target": "e2d7051"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 4,
+      "arm": "C",
+      "target": "ebf6097"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 4,
+      "arm": "A",
+      "target": "e6f0c16"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 5,
+      "arm": "A",
+      "target": "e403980"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 5,
+      "arm": "C",
+      "target": "e71cc86"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 5,
+      "arm": "C",
+      "target": "e80960e"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-02-mp-deadlock",
+      "rep": 5,
+      "arm": "A",
+      "target": "e000878"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 3,
+      "arm": "C",
+      "target": "eae57eb"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-06-worker-null",
+      "rep": 3,
+      "arm": "A",
+      "target": "ed261a8"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 2,
+      "arm": "A",
+      "target": "e08461f"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-07-cmake-cross",
+      "rep": 2,
+      "arm": "C",
+      "target": "ecb26c9"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 5,
+      "arm": "A",
+      "target": "e2838d1"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-08-fd-leak",
+      "rep": 5,
+      "arm": "C",
+      "target": "e71f6a9"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 5,
+      "arm": "A",
+      "target": "e33efff"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-04-deep-expr",
+      "rep": 5,
+      "arm": "C",
+      "target": "ee69831"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 5,
+      "arm": "C",
+      "target": "e38c116"
+    },
+    {
+      "model": "sonnet",
+      "task": "v2-01-config-overflow",
+      "rep": 5,
+      "arm": "A",
+      "target": "e9886e5"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 2,
+      "arm": "A",
+      "target": "ee91aed"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-04-deep-expr",
+      "rep": 2,
+      "arm": "C",
+      "target": "ec45d16"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 4,
+      "arm": "A",
+      "target": "e224ba0"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-02-mp-deadlock",
+      "rep": 4,
+      "arm": "C",
+      "target": "e4d9a22"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 3,
+      "arm": "A",
+      "target": "e3fdec3"
+    },
+    {
+      "model": "haiku",
+      "task": "v2-07-cmake-cross",
+      "rep": 3,
+      "arm": "C",
+      "target": "e13210e"
+    }
+  ],
+  "config": {
+    "small_model": "global.anthropic.claude-haiku-5-5",
+    "effort": "high",
+    "max_turns": 80,
+    "budget_usd_per_trial": 1.5,
+    "wall_s": 1200,
+    "claude_code": "2.1.312",
+    "claude_bin": "/home/ubuntu/work/qnx-mcp-eval/runtime/bin/claude-2.1.312",
+    "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+    "skills_repo": "https://github.com/qnx/qnx-agent-skills",
+    "skills_commit": "52b43f8b6178a9c564cbcdd702c82d90e3fbde42",
+    "judge_model": "global.anthropic.claude-sonnet-5-5",
+    "region": "eu-west-1",
+    "max_parallel_trials": 4,
+    "models": {
+      "sonnet": "global.anthropic.claude-sonnet-5-5",
+      "haiku": "global.anthropic.claude-haiku-5-5"
+    },
+    "server_dir": "/home/ubuntu/work/qnx-mcp-eval/server-249d08ad4885"
+  },
+  "created": "2026-11-03T22:17:56+00:00"
+}

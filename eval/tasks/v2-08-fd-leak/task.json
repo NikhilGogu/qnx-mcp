@@ -1,0 +1,10 @@
+{
+  "id": "v2-08-fd-leak",
+  "dir": "status",
+  "summary": "File descriptor leak on an error path that only the unit's state files trigger",
+  "binaries": [
+    "statusd",
+    "statusctl"
+  ],
+  "issue": "On the field unit, `statusctl` answers `internal error` for every component (for example `statusctl fan`) once statusd has been running for a few minutes; after a restart of statusd it works again for a while. statusd and statusctl are installed in /data/opt/status on the target, statusd is running there now, and the unit's monitor has been polling it. On the bench we cannot reproduce it. We build with `make` in task/status."
+}

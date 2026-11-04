@@ -1,0 +1,59 @@
+{
+  "name": "screen-2026-11-03",
+  "seed": 20261104,
+  "schedule": [
+    {
+      "task": "t02-thread-stack",
+      "rep": 1,
+      "arm": "A",
+      "target": "e10d841"
+    },
+    {
+      "task": "t06-resmgr-errno",
+      "rep": 1,
+      "arm": "A",
+      "target": "e2eebc6"
+    },
+    {
+      "task": "t07-double-free",
+      "rep": 1,
+      "arm": "A",
+      "target": "e8178cc"
+    },
+    {
+      "task": "t04-deadlock",
+      "rep": 1,
+      "arm": "A",
+      "target": "efb819a"
+    },
+    {
+      "task": "t03-socket-link",
+      "rep": 1,
+      "arm": "A",
+      "target": "eb0d1be"
+    },
+    {
+      "task": "t08-no-timeout",
+      "rep": 1,
+      "arm": "A",
+      "target": "e550882"
+    }
+  ],
+  "config": {
+    "model": "global.anthropic.claude-sonnet-5-5",
+    "small_model": "global.anthropic.claude-haiku-5-5",
+    "effort": "high",
+    "max_turns": 80,
+    "budget_usd_per_trial": 2.5,
+    "wall_s": 1200,
+    "claude_code": "2.1.312",
+    "claude_bin": "/home/ubuntu/work/qnx-mcp-eval/runtime/bin/claude-2.1.312",
+    "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+    "skills_repo": "https://github.com/qnx/qnx-agent-skills",
+    "skills_commit": "52b43f8b6178a9c564cbcdd702c82d90e3fbde42",
+    "judge_model": "global.anthropic.claude-sonnet-5-5",
+    "region": "eu-west-1",
+    "max_parallel_trials": 4
+  },
+  "created": "2026-11-03T16:35:18+00:00"
+}

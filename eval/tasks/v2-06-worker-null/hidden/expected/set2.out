@@ -1,0 +1,30 @@
+sensorhub: 22 sensors, 3 derived, 3 rejected, 3 disabled, 40 cycles
+cab_temp     i2c0 last      5.423 C    mean      5.385 min      3.688 max      6.113 n 40 fail 0
+out_temp     i2c0 last    294.913 F    mean    296.229 min    292.325 max    299.413 n 40 fail 0
+motor_temp   i2c0 last    387.848 K    mean    386.055 min    384.005 max    387.954 n 40 fail 0
+oil_temp     i2c0 last      7.500 C    mean      9.287 min      7.312 max     11.000 n 40 fail 0
+bearing_temp i2c0 last     79.861 C    mean     79.435 min     77.375 max     80.200 n 40 fail 0
+baro         i2c1 last    102.152 kPa  mean    102.641 min    102.152 max    102.914 n 40 fail 0
+humid        i2c1 last     18.428 %RH  mean     19.245 min     18.260 max     20.437 n 5 fail 0
+baro_ref     i2c1 last    747.250 hPa  mean    744.938 min    738.500 max    747.500 n 40 fail 0
+humid_out    i2c1 last     45.348 %RH  mean     46.995 min     45.348 max     48.254 n 40 fail 0
+vib_x        spi0 last     -5.024 g    mean     -5.002 min     -5.072 max     -4.916 n 40 fail 0
+vib_y        spi0 last     -2.858 g    mean     -2.891 min     -2.985 max     -2.837 n 40 fail 0
+vib_z        spi0 last     -9.023 m/s2 mean     -9.495 min    -10.365 max     -8.942 n 40 fail 0
+hub_x        spi0 last     -0.516 g    mean     -0.483 min     -0.569 max     -0.405 n 40 fail 0
+hub_y        spi0 last      1.566 g    mean      1.565 min      1.533 max      1.591 n 40 fail 0
+hub_z        spi0 last     38.134 m/s2 mean     37.585 min     37.036 max     38.134 n 2 fail 0
+vref_main    adc0 last      1.651 V    mean      1.632 min      1.602 max      1.653 n 40 fail 0
+supply       adc0 last    153.972 %    mean    152.403 min    149.531 max    155.075 n 40 fail 0
+vref_aux2    adc0 last   2128.420 mV   mean   2098.011 min   2051.945 max   2128.420 n 40 fail 0
+sense_a      adc0 last     35.758 %    mean     36.810 min     35.758 max     37.737 n 40 fail 0
+sense_b      adc0 last    101.740 %    mean     99.615 min     96.547 max    101.740 n 40 fail 0
+sense_c      adc0 last    122.510 %    mean    120.349 min    116.493 max    124.033 n 40 fail 0
+rail_5v      adc0 last      1.204 V    mean      1.198 min      1.192 max      1.204 n 2 fail 0
+derived temp_spread       109.275
+derived shake              -0.516
+derived supply_avg        127.856
+alarm cab_temp     quiet
+alarm humid        raised 2 first cycle 7 last cycle 31 active
+alarm vib_z        quiet
+alarm rail_5v      raised 1 first cycle 14 last cycle 14 active

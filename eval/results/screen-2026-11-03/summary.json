@@ -1,0 +1,438 @@
+{
+  "stats": {
+    "trials": 6,
+    "scored": 6,
+    "cost_total_usd": 0.48,
+    "cost_mean_usd": 0.08,
+    "cost_max_usd": 0.1034,
+    "wall_mean_s": 46.4,
+    "wall_max_s": 123.2,
+    "judge_cost_usd": 0.0277
+  },
+  "trials": [
+    {
+      "task": "t02-thread-stack",
+      "arm": "A",
+      "rep": 1,
+      "target": "e10d841",
+      "started": "2026-11-03T16:35:18+00:00",
+      "ip": "192.168.122.132",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 28.5,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 6,
+      "assistant_messages": 5,
+      "tool_calls": 5,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 10,
+        "cache_write": 15942,
+        "cache_read": 102297,
+        "output": 2322
+      },
+      "cost_usd": 0.0733,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2322,
+          "cacheReadInputTokens": 102297,
+          "cacheCreationInputTokens": 15942,
+          "webSearchRequests": 0,
+          "costUSD": 0.0733247,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 458,
+          "cacheCreationEphemeral5mInputTokens": 15942,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "vibmon.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies the 512 KiB local array in analyse() (line 26) on a default-attribute thread overflowing QNX's small default stack, and fixes it with pthread_attr_setstacksize, matching the ground truth.",
+        "usage": {
+          "input": 1560,
+          "output": 95
+        },
+        "cost_usd": 0.0041
+      }
+    },
+    {
+      "task": "t03-socket-link",
+      "arm": "A",
+      "rep": 1,
+      "target": "eb0d1be",
+      "started": "2026-11-03T16:36:43+00:00",
+      "ip": "192.168.122.164",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 24.1,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 9,
+      "assistant_messages": 6,
+      "tool_calls": 8,
+      "tool_calls_by_name": {
+        "Bash": 5,
+        "Read": 3
+      },
+      "mcp_calls": 0,
+      "bash_calls": 5,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 12,
+        "cache_write": 17741,
+        "cache_read": 134015,
+        "output": 1966
+      },
+      "cost_usd": 0.0774,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 1966,
+          "cacheReadInputTokens": 134015,
+          "cacheCreationInputTokens": 17741,
+          "webSearchRequests": 0,
+          "costUSD": 0.077438,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 126,
+          "cacheCreationEphemeral5mInputTokens": 17741,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "Makefile"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies the missing -lsocket in the empty LDLIBS at Makefile line 5, explains that QNX keeps the socket API in libsocket rather than libc, and applies the matching fix.",
+        "usage": {
+          "input": 1205,
+          "output": 87
+        },
+        "cost_usd": 0.0033
+      }
+    },
+    {
+      "task": "t04-deadlock",
+      "arm": "A",
+      "rep": 1,
+      "target": "efb819a",
+      "started": "2026-11-03T16:35:33+00:00",
+      "ip": "192.168.122.79",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 50.3,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 8,
+      "assistant_messages": 6,
+      "tool_calls": 7,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 2
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 12,
+        "cache_write": 15732,
+        "cache_read": 127884,
+        "output": 2191
+      },
+      "cost_usd": 0.0741,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2191,
+          "cacheReadInputTokens": 127884,
+          "cacheCreationInputTokens": 15732,
+          "webSearchRequests": 0,
+          "costUSD": 0.0740524,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 142,
+          "cacheCreationEphemeral5mInputTokens": 15732,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "ledger.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Report identifies the ABBA lock-order inversion between from->lock and to->lock in transfer() at ledger.c:43-45 and fixes it by locking in id order, matching the ground truth.",
+        "usage": {
+          "input": 1368,
+          "output": 85
+        },
+        "cost_usd": 0.0036
+      }
+    },
+    {
+      "task": "t06-resmgr-errno",
+      "arm": "A",
+      "rep": 1,
+      "target": "e2eebc6",
+      "started": "2026-11-03T16:35:23+00:00",
+      "ip": "192.168.122.95",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 123.2,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 11,
+      "assistant_messages": 8,
+      "tool_calls": 10,
+      "tool_calls_by_name": {
+        "Bash": 6,
+        "Edit": 1,
+        "Read": 2,
+        "TaskStop": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 6,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 16,
+        "cache_write": 20476,
+        "cache_read": 198834,
+        "output": 3234
+      },
+      "cost_usd": 0.1034,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 3234,
+          "cacheReadInputTokens": 198834,
+          "cacheCreationInputTokens": 20476,
+          "webSearchRequests": 0,
+          "costUSD": 0.1034454,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 563,
+          "cacheCreationEphemeral5mInputTokens": 20476,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "sensord.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly identifies that io_devctl returns -1 instead of errno/EINVAL, so the client sees EOK and never falls back. The cited line 64 is wrong, but the file and function io_devctl are named, and the diff changes line 51.",
+        "usage": {
+          "input": 1336,
+          "output": 348
+        },
+        "cost_usd": 0.0062
+      }
+    },
+    {
+      "task": "t07-double-free",
+      "arm": "A",
+      "rep": 1,
+      "target": "e8178cc",
+      "started": "2026-11-03T16:35:28+00:00",
+      "ip": "192.168.122.45",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 21.6,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 7,
+      "assistant_messages": 6,
+      "tool_calls": 6,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 12,
+        "cache_write": 15542,
+        "cache_read": 128068,
+        "output": 2020
+      },
+      "cost_usd": 0.0719,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2020,
+          "cacheReadInputTokens": 128068,
+          "cacheCreationInputTokens": 15542,
+          "webSearchRequests": 0,
+          "costUSD": 0.0718858,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 77,
+          "cacheCreationEphemeral5mInputTokens": 15542,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "link.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly identifies link_send() freeing the packet on failure, causing use-after-free and double free in the caller's retry. It cites the wrong line number (74) but names the right function and file, and the diff removes the line at about 35.",
+        "usage": {
+          "input": 1262,
+          "output": 283
+        },
+        "cost_usd": 0.0054
+      }
+    },
+    {
+      "task": "t08-no-timeout",
+      "arm": "A",
+      "rep": 1,
+      "target": "e550882",
+      "started": "2026-11-03T16:37:02+00:00",
+      "ip": "192.168.122.80",
+      "harness_killed": false,
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 30.5,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 7,
+      "assistant_messages": 5,
+      "tool_calls": 6,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Read": 2
+      },
+      "mcp_calls": 0,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 10,
+        "cache_write": 16870,
+        "cache_read": 105581,
+        "output": 2859
+      },
+      "cost_usd": 0.0813,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2859,
+          "cacheReadInputTokens": 105581,
+          "cacheCreationInputTokens": 16870,
+          "webSearchRequests": 0,
+          "costUSD": 0.08134309999999999,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 431,
+          "cacheCreationEphemeral5mInputTokens": 16870,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "fix_location_hit": true,
+      "files_changed": [
+        "supervisor.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names supervisor.c:38, an unbounded MsgReceivePulse() with no timeout, as the cause. Its fix uses TimerTimeout with the remaining time, kills and reaps the worker on ETIMEDOUT, and exits 3, which matches the ground truth.",
+        "usage": {
+          "input": 1989,
+          "output": 115
+        },
+        "cost_usd": 0.0051
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "t04-deadlock",
+  "dir": "ledger",
+  "summary": "Deadlock between two threads (MUTEX states in pidin)",
+  "binaries": ["ledger"],
+  "issue": "ledger hangs on the QNX target. It prints `ledger: 500 transfers per worker` and then nothing, and never exits; we have to kill it. It should finish within a few seconds and print the final balances (the total must stay 200000). We built it with `make` in task/ledger and ran it from /tmp on the target."
+}

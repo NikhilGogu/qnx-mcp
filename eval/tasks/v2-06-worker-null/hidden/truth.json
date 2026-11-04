@@ -1,0 +1,9 @@
+{
+  "file": "src/registry.c",
+  "lines": [
+    47
+  ],
+  "window": 3,
+  "function": "bind_ref",
+  "mechanism": "bind_ref() rejects a ratio sensor only when its ref resolves to the wrong sensor; when the ref does not resolve at all, the sensor is kept with ref == NULL. On the unit, sense_d refers to Vref_main while the sensor is vref_main (names are case-sensitive), so ratio_read() dereferences s->ref->last_raw in the adc0 worker thread (one of five threads) on the first cycle. Fix: also reject the sensor when the ref is not found."
+}

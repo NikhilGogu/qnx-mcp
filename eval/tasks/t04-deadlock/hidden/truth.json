@@ -1,0 +1,7 @@
+{
+  "file": "ledger.c",
+  "lines": [43, 45],
+  "window": 3,
+  "function": "transfer",
+  "mechanism": "transfer() locks the source account first and then the destination. Worker 0 transfers a0->a1 and worker 1 a1->a0, so each holds one account mutex while waiting for the other (lock-order inversion; both threads end up MUTEX-blocked). Fix: always lock the two accounts in a fixed order (for example by id)."
+}

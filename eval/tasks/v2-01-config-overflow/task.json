@@ -1,0 +1,9 @@
+{
+  "id": "v2-01-config-overflow",
+  "dir": "sensorhub",
+  "summary": "Median window given in seconds is converted with the unit's bus rate after validation; the 48-sample window overflows a filter buffer and corrupts a neighbouring pointer, and the crash surfaces later in the report",
+  "binaries": [
+    "sensorhub"
+  ],
+  "issue": "sensorhub crashes on the field unit at the end of its run: after the sampling cycles it dies with `Memory fault (core dumped)` and prints no report. On the bench it works with examples/sensor.d. The unit runs it with the default options, so it reads the unit's own configuration in /etc/sensor.d on the target, which we have not changed recently. We build it with `make` in task/sensorhub."
+}

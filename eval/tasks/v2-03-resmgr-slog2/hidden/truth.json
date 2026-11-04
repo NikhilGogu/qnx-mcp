@@ -1,0 +1,9 @@
+{
+  "file": "acqd.c",
+  "lines": [
+    28
+  ],
+  "window": 3,
+  "function": "hw_errno table (rev E path: rev_e_set_trigger, hw_result)",
+  "mechanism": "On rev E boards acqd maps the comparator's HW_RANGE status to ENOTSUP instead of ERANGE (hw_errno table). The unit's /etc/acq.board is rev E with a +-2500 mV trigger range and /etc/acq.conf asks for 3300 mV, so SET_TRIGGER answers ENOTSUP; acqctl treats that as a board without a trigger input and turns the trigger off instead of clamping it. Only the slog2 messages of acqd (hw status 1) and acqctl (not supported) show it. Fix: map HW_RANGE to ERANGE."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "v2-05-hang-states",
+  "dir": "pipeline",
+  "summary": "Hang at end of input where the threads' blocked states (CONDVAR, NANOSLEEP) point to the cause",
+  "binaries": [
+    "pipeline"
+  ],
+  "issue": "pipeline never finishes on the field unit: it was started from /data/opt/pipeline on the target with the unit's configuration (/etc/pipeline.conf) and it is still running now, but it stopped making progress and never prints its summary. On the bench, `pipeline examples/pipeline.conf` finishes normally. We build with `make` in task/pipeline."
+}

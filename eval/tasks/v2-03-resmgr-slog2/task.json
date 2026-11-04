@@ -1,0 +1,10 @@
+{
+  "id": "v2-03-resmgr-slog2",
+  "dir": "acq",
+  "summary": "Resource manager returns the wrong errno for the unit's board; the mismatch is visible only in slog2",
+  "binaries": [
+    "acqd",
+    "acqctl"
+  ],
+  "issue": "On the field unit, triggered acquisitions never start: `acqctl status` shows `trigger off` although /etc/acq.conf on the unit asks for a trigger, and `acqctl apply` printed `acqctl: configuration applied`. On the bench, with the example configuration, the trigger works. acqd and acqctl are installed in /data/opt/acq on the target; acqd is running and the start-up script has already run `acqctl apply`. We build with `make` in task/acq."
+}

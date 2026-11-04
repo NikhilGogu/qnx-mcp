@@ -1,0 +1,9 @@
+{
+  "file": "pipeline.c",
+  "lines": [
+    53
+  ],
+  "window": 3,
+  "function": "reader",
+  "mechanism": "At end of input the reader pushes a single end marker, but each transform worker stops only when it pops one. With the unit's workers = 3 in /etc/pipeline.conf, one worker exits and the other two stay CONDVAR-blocked in queue_pop_batch() forever; main stays JOIN-blocked on them and the writer CONDVAR-blocked on the output queue, so the run never finishes and the last partial batch is never written. With one worker (the bench) it works. Fix: push one end marker per worker (or close the queue and wake all workers)."
+}

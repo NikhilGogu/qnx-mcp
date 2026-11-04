@@ -1,0 +1,7 @@
+{
+  "file": "cfgsrv.c",
+  "lines": [38, 39],
+  "window": 3,
+  "function": "handle",
+  "mechanism": "In handle(), the CFG_GET path for an unknown key logs a message and breaks without MsgReply/MsgError, so the client's MsgSend() stays REPLY-blocked on the server forever (name_attach channels have _NTO_CHF_UNBLOCK, so signals do not unblock it either). Fix: MsgError(rcvid, ENOENT) on that path, as the CFG_SET path does."
+}

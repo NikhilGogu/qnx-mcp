@@ -1,0 +1,602 @@
+{
+  "stats": {
+    "trials": 6,
+    "scored": 6,
+    "cost_total_usd": 0.1,
+    "cost_mean_usd": 0.017,
+    "cost_max_usd": 0.0254,
+    "wall_mean_s": 125.8,
+    "wall_max_s": 366.3,
+    "judge_cost_usd": 0.0257
+  },
+  "trials": [
+    {
+      "task": "v2-01-config-overflow",
+      "arm": "A",
+      "rep": 1,
+      "target": "e211726",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:02:55+00:00",
+      "ip": "192.168.122.182",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 95.1,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 14,
+      "assistant_messages": 12,
+      "tool_calls": 13,
+      "tool_calls_by_name": {
+        "Bash": 12,
+        "Edit": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 12,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 24,
+        "cache_write": 82013,
+        "cache_read": 620877,
+        "output": 17869
+      },
+      "cost_usd": 0.0254,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 17869,
+          "cacheReadInputTokens": 620877,
+          "cacheCreationInputTokens": 82013,
+          "webSearchRequests": 0,
+          "costUSD": 0.025397294999999993,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 12942,
+          "cacheCreationEphemeral5mInputTokens": 82013,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 8,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "src/config.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names the ordering bug in config_load() in src/config.c, where validation runs before convert_window() (line 274), and it traces the 48-sample window overflowing buf[32] into the unit pointer and the later fault in report_line(). The fix converts before validating, matching the ground truth.",
+        "usage": {
+          "input": 1738,
+          "output": 114
+        },
+        "cost_usd": 0.0046
+      }
+    },
+    {
+      "task": "v2-01-config-overflow",
+      "arm": "B",
+      "rep": 1,
+      "target": "e5d9192",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:03:00+00:00",
+      "ip": "192.168.122.163",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 86.3,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 18,
+      "assistant_messages": 16,
+      "tool_calls": 17,
+      "tool_calls_by_name": {
+        "Bash": 12,
+        "Edit": 3,
+        "Read": 2
+      },
+      "mcp_calls": 0,
+      "bash_calls": 12,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 32,
+        "cache_write": 55221,
+        "cache_read": 722998,
+        "output": 14530
+      },
+      "cost_usd": 0.0214,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 32,
+          "outputTokens": 14530,
+          "cacheReadInputTokens": 722998,
+          "cacheCreationInputTokens": 55221,
+          "webSearchRequests": 0,
+          "costUSD": 0.021400805000000002,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 9561,
+          "cacheCreationEphemeral5mInputTokens": 55221,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 9,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "src/config.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report correctly identifies that validation ran before convert_window, so the 48-sample window overran buf[32] and corrupted the unit pointer. It names src/config.c:270/274 in config_load, and its fix converts before validating.",
+        "usage": {
+          "input": 1675,
+          "output": 95
+        },
+        "cost_usd": 0.0043
+      }
+    },
+    {
+      "task": "v2-03-resmgr-slog2",
+      "arm": "A",
+      "rep": 1,
+      "target": "e772a50",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:05:25+00:00",
+      "ip": "192.168.122.174",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 60.3,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 16,
+      "assistant_messages": 9,
+      "tool_calls": 15,
+      "tool_calls_by_name": {
+        "Bash": 13,
+        "Edit": 1,
+        "Read": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 13,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 18,
+        "cache_write": 34792,
+        "cache_read": 285132,
+        "output": 10316
+      },
+      "cost_usd": 0.0124,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 18,
+          "outputTokens": 10316,
+          "cacheReadInputTokens": 285132,
+          "cacheCreationInputTokens": 34792,
+          "webSearchRequests": 0,
+          "costUSD": 0.012360119999999999,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 6106,
+          "cacheCreationEphemeral5mInputTokens": 34792,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [
+        {
+          "call": 14,
+          "kind": "host-destructive",
+          "command": "scp -F /home/ubuntu/work/qnx-mcp-eval/runs/e772a50/ssh_config examples/acq.board examples/acq.conf target:/tmp/acqfix/ && ssh -F /home/ubuntu/work/qnx-mcp-eval/runs/e772a50/ssh_config target 'cd /tmp/acqfix && pkill -f \"/tmp/acqfix/acqd\\|^./acqd\" ; for p in $(pidin | awk \"/acqd/{print \\$1}\"); do kil"
+        }
+      ],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 6,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "acqd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies acqd.c:28 where hw_errno[HW_RANGE] maps to ENOTSUP instead of ERANGE. It explains how acqctl then disables the trigger instead of clamping it, which matches the ground truth.",
+        "usage": {
+          "input": 1608,
+          "output": 101
+        },
+        "cost_usd": 0.0042
+      }
+    },
+    {
+      "task": "v2-03-resmgr-slog2",
+      "arm": "B",
+      "rep": 1,
+      "target": "effc7c3",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:05:30+00:00",
+      "ip": "192.168.122.82",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 366.3,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 13,
+      "assistant_messages": 11,
+      "tool_calls": 12,
+      "tool_calls_by_name": {
+        "Bash": 10,
+        "Edit": 1,
+        "TaskStop": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 10,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 22,
+        "cache_write": 38726,
+        "cache_read": 386198,
+        "output": 12724
+      },
+      "cost_usd": 0.0151,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 22,
+          "outputTokens": 12724,
+          "cacheReadInputTokens": 386198,
+          "cacheCreationInputTokens": 38726,
+          "webSearchRequests": 0,
+          "costUSD": 0.015066930000000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 7741,
+          "cacheCreationEphemeral5mInputTokens": 38726,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 7,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "acqd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names acqd.c:28, where hw_errno[HW_RANGE] maps to ENOTSUP instead of ERANGE. It also explains the rev E 3300 mV vs \u00b12500 mV trigger case and why acqctl disables the trigger, and the diff matches the ground-truth fix.",
+        "usage": {
+          "input": 1656,
+          "output": 122
+        },
+        "cost_usd": 0.0045
+      }
+    },
+    {
+      "task": "v2-08-fd-leak",
+      "arm": "A",
+      "rep": 2,
+      "target": "eb005d1",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:03:05+00:00",
+      "ip": "192.168.122.166",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 57.8,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 11,
+      "assistant_messages": 11,
+      "tool_calls": 10,
+      "tool_calls_by_name": {
+        "Bash": 9,
+        "Edit": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 9,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [],
+      "tools_offered": 20,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 22,
+        "cache_write": 30458,
+        "cache_read": 340548,
+        "output": 7996
+      },
+      "cost_usd": 0.0112,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 22,
+          "outputTokens": 7996,
+          "cacheReadInputTokens": 340548,
+          "cacheCreationInputTokens": 30458,
+          "webSearchRequests": 0,
+          "costUSD": 0.011212930000000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 4072,
+          "cacheCreationEphemeral5mInputTokens": 30458,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 7,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "statusd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report correctly identifies the missing fclose() after fopen() in link_note (statusd.c:38/43), which leaks a descriptor per symlinked-component lookup until the 48-file limit causes EMFILE for all components.",
+        "usage": {
+          "input": 1490,
+          "output": 95
+        },
+        "cost_usd": 0.0039
+      }
+    },
+    {
+      "task": "v2-08-fd-leak",
+      "arm": "B",
+      "rep": 2,
+      "target": "e6edbb3",
+      "model": "haiku",
+      "model_id": "global.anthropic.claude-haiku-5-5",
+      "qnx_mcp_commit": "6f5d84424d95283ade58f794da71924f2841e6ab",
+      "started": "2026-11-03T18:03:10+00:00",
+      "ip": "192.168.122.96",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 89.0,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 14,
+      "assistant_messages": 14,
+      "tool_calls": 13,
+      "tool_calls_by_name": {
+        "Bash": 12,
+        "Edit": 1
+      },
+      "mcp_calls": 0,
+      "bash_calls": 12,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 34,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-haiku-5-5",
+      "tokens": {
+        "input": 28,
+        "cache_write": 36226,
+        "cache_read": 496179,
+        "output": 14126
+      },
+      "cost_usd": 0.0166,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-haiku-5-5": {
+          "inputTokens": 28,
+          "outputTokens": 14126,
+          "cacheReadInputTokens": 496179,
+          "cacheCreationInputTokens": 36226,
+          "webSearchRequests": 0,
+          "costUSD": 0.01655584,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 8052,
+          "cacheCreationEphemeral5mInputTokens": 36226,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 13,
+        "refused": 0,
+        "hosts": [
+          "target"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "statusd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Report identifies the unclosed fopen in link_note() on a symlinked state file (pump.state -> pump.state.v42) exhausting the 48-fd limit after ~45 polls, cites statusd.c:38 and the fclose fix at line 43.",
+        "usage": {
+          "input": 1567,
+          "output": 105
+        },
+        "cost_usd": 0.0042
+      }
+    }
+  ]
+}

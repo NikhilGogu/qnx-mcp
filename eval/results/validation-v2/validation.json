@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-03T17:10:23+00:00",
+  "results": {
+    "v2-01-config-overflow bug": false,
+    "v2-01-config-overflow fix": false,
+    "v2-02-mp-deadlock bug": false,
+    "v2-02-mp-deadlock fix": true,
+    "v2-03-resmgr-slog2 bug": false,
+    "v2-03-resmgr-slog2 fix": true,
+    "v2-04-deep-expr bug": false,
+    "v2-04-deep-expr fix": false,
+    "v2-05-hang-states bug": false,
+    "v2-05-hang-states fix": true,
+    "v2-06-worker-null bug": false,
+    "v2-06-worker-null fix": false,
+    "v2-07-cmake-cross bug": false,
+    "v2-07-cmake-cross fix": false,
+    "v2-08-fd-leak bug": false,
+    "v2-08-fd-leak fix": true
+  },
+  "all_valid": false
+}

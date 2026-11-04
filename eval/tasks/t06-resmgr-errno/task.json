@@ -1,0 +1,7 @@
+{
+  "id": "t06-resmgr-errno",
+  "dir": "sensord",
+  "summary": "Resource manager returning the wrong status for a rejected request; the rejection is only visible in slog2",
+  "binaries": ["sensord", "sensorctl"],
+  "issue": "We run the sensor resource manager on the QNX target with `./sensord &`. After `./sensorctl set-rate 75`, sensorctl prints `rate: 75 Hz`, but `./sensorctl get-rate` afterwards still prints `rate: 10 Hz` and the sensor keeps sampling at 10 Hz. 75 Hz is not a supported rate, so per the README sensorctl should have fallen back to 50 Hz and printed `rate: 50 Hz (requested 75)`. Setting a supported rate (1, 10, 50, 100) works. We built both programs with `make` in task/sensord and ran them from /tmp on the target."
+}

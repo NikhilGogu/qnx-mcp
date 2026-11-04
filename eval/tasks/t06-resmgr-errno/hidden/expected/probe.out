@@ -1,0 +1,5 @@
+set 7 rc=22
+get rc=0 hz=100
+set 0 rc=22
+set 10 rc=0
+get rc=0 hz=10

@@ -1,0 +1,7 @@
+{
+  "id": "t08-no-timeout",
+  "dir": "supervisor",
+  "summary": "Supervisor blocks forever waiting for a ready pulse; needs a timeout",
+  "binaries": ["supervisor", "worker"],
+  "issue": "supervisor hangs forever when its worker fails to start. Example on the QNX target: `./supervisor /tmp/missing.conf` prints `supervisor: started worker <pid>` and `worker: cannot open /tmp/missing.conf`, and then hangs. Our boot script waits for it, so the whole start-up stalls. The README requires: if the worker has not reported ready within 2 seconds, supervisor prints `supervisor: worker not ready after 2 s`, kills the worker if it is still running and exits with status 3. The normal case (`./supervisor worker.conf`) must keep working. We built it with `make` in task/supervisor and ran it from /tmp on the target (both binaries and worker.conf in the same directory)."
+}

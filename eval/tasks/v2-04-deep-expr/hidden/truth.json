@@ -1,0 +1,9 @@
+{
+  "file": "src/expr.c",
+  "lines": [
+    189
+  ],
+  "window": 3,
+  "function": "eval",
+  "mechanism": "eval() evaluates a reference to an earlier derived channel by recursing into that channel's expression instead of using the value already computed this cycle. The unit's /etc/sensor.d/derived.cfg chains 4000 intermediate channels (_p1.._p4000, each using the one before), so evaluating them recurses about 8000 frames deep on the derive worker, which has the default 256 KiB QNX thread stack, and overflows it. Fix: use chans[n->chan].value (channels are evaluated in file order); a larger stack alone also stops the crash but keeps the quadratic work."
+}

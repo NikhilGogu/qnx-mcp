@@ -1,0 +1,7 @@
+{
+  "id": "t02-thread-stack",
+  "dir": "vibmon",
+  "summary": "Thread with a large stack array that overflows the default QNX pthread stack but not the Linux one",
+  "binaries": ["vibmon"],
+  "issue": "vibmon runs fine on our Linux test rig, but on the QNX target it dies right after start:\n\n    # ./vibmon\n    vibmon: analysing 65536 samples (seed 42)\n    Memory fault (core dumped)\n\nOn Linux the same source prints `rms=0.879203 peak=1.979275` for the default run. We need the same results on QNX. We built it with `make` in task/vibmon and ran it from /tmp on the target."
+}

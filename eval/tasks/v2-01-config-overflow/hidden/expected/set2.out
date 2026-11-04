@@ -1,0 +1,19 @@
+sensorhub: 14 sensors, 1 derived, 8 rejected, 2 disabled, 40 cycles
+cab_temp     i2c0 last      5.423 C    mean      5.385 min      3.688 max      6.113 n 40 fail 0
+out_temp     i2c0 last    294.913 F    mean    296.229 min    292.325 max    299.413 n 40 fail 0
+motor_temp   i2c0 last    387.848 K    mean    386.055 min    384.005 max    387.954 n 40 fail 0
+oil_temp     i2c0 last      7.500 C    mean      9.287 min      7.312 max     11.000 n 40 fail 0
+bearing_temp i2c0 last     79.861 C    mean     79.435 min     77.375 max     80.200 n 40 fail 0
+humid_out    i2c1 last     45.348 %RH  mean     46.995 min     45.348 max     48.254 n 40 fail 0
+vib_y        spi0 last     -2.858 g    mean     -2.891 min     -2.985 max     -2.837 n 40 fail 0
+vib_z        spi0 last     -9.068 m/s2 mean     -9.451 min    -10.365 max     -8.852 n 40 fail 0
+hub_y        spi0 last      1.566 g    mean      1.565 min      1.533 max      1.591 n 40 fail 0
+hub_z        spi0 last     38.134 m/s2 mean     37.585 min     37.036 max     38.134 n 2 fail 0
+vref_aux2    adc0 last   2101.050 mV   mean   2111.193 min   2051.945 max   2155.790 n 40 fail 0
+sense_a      adc0 last     35.758 %    mean     36.810 min     35.758 max     37.737 n 40 fail 0
+sense_c      adc0 last    122.510 %    mean    120.349 min    116.493 max    124.033 n 40 fail 0
+rail_5v      adc0 last      1.180 V    mean      1.195 min      1.180 max      1.208 n 10 fail 0
+derived temp_spread       109.275
+alarm cab_temp     quiet
+alarm vib_z        quiet
+alarm rail_5v      raised 1 first cycle 3 last cycle 3 active

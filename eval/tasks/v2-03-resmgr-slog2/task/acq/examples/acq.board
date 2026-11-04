@@ -1,0 +1,8 @@
+# bench board
+rev = C
+max_rate_hz = 20000
+max_gain = 16
+trig_min_mv = -5000
+trig_max_mv = 5000
+has_ac = 1
+has_trigger = 1

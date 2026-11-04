@@ -1,0 +1,8 @@
+# field unit board
+rev = E
+max_rate_hz = 5000
+max_gain = 16
+trig_min_mv = -2500
+trig_max_mv = 2500
+has_ac = 0
+has_trigger = 1

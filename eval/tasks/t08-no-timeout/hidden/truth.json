@@ -1,0 +1,7 @@
+{
+  "file": "supervisor.c",
+  "lines": [38],
+  "window": 3,
+  "function": "main",
+  "mechanism": "supervisor waits for the worker's ready pulse with MsgReceivePulse() and no timeout. If the worker exits or stalls before sending the pulse, supervisor stays RECEIVE-blocked on its channel forever. Fix: bound the wait (for example TimerTimeout(CLOCK_MONOTONIC, _NTO_TIMEOUT_RECEIVE, ...) re-armed with the remaining time), and on ETIMEDOUT print the message, kill and reap the worker and exit 3."
+}

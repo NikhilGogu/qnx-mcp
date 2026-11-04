@@ -1,0 +1,7 @@
+{
+  "id": "t05-msgreply",
+  "dir": "cfgsvc",
+  "summary": "Message-passing server that forgets to reply on an error path (client REPLY-blocked forever)",
+  "binaries": ["cfgsrv", "cfgctl"],
+  "issue": "On the QNX target we start the configuration server with `./cfgsrv &` and query it with cfgctl. `./cfgctl get rate` prints `rate=50` as expected, but asking for a key that does not exist, for example `./cfgctl get colour`, never returns: no output, and Ctrl-C does not stop it either. Expected: `cfgctl: no such key: colour` on stderr and exit status 2, the same as `./cfgctl set colour red` does. We built both programs with `make` in task/cfgsvc and ran them from /tmp on the target."
+}

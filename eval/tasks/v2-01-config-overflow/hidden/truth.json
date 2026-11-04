@@ -1,0 +1,9 @@
+{
+  "file": "src/config.c",
+  "lines": [
+    274
+  ],
+  "window": 3,
+  "function": "config_load",
+  "mechanism": "config_load() validates a sensor before convert_window() turns a window given in seconds into samples, so the converted value is never range-checked. On the unit, vib_y has filter median and window 2s on spi0, which /etc/sensor.d/buses.conf runs at 24 Hz: 48 samples. filter_apply() then writes the median ring buffer buf[MAX_WINDOW=32] up to index 47, overwriting the unit pointer and stats that follow filt in struct sensor; report_line() later calls unit_convert() through the corrupted pointer and faults in the main thread. Fix: convert before validating (reject the sensor)."
+}

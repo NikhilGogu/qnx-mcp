@@ -1,0 +1,977 @@
+{
+  "stats": {
+    "trials": 8,
+    "scored": 8,
+    "cost_total_usd": 1.63,
+    "cost_mean_usd": 0.204,
+    "cost_max_usd": 0.2744,
+    "wall_mean_s": 68.5,
+    "wall_max_s": 154.4,
+    "judge_cost_usd": 0.0483
+  },
+  "trials": [
+    {
+      "task": "v2-01-config-overflow",
+      "arm": "C",
+      "rep": 1,
+      "target": "ec6f70f",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:08:41+00:00",
+      "ip": "192.168.122.12",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 53.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 18,
+      "assistant_messages": 12,
+      "tool_calls": 17,
+      "tool_calls_by_name": {
+        "Bash": 6,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 2,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__file_get": 2,
+        "mcp__qnx__file_list": 1,
+        "mcp__qnx__get_crash": 1
+      },
+      "mcp_calls": 8,
+      "bash_calls": 6,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 24,
+        "cache_write": 45000,
+        "cache_read": 471966,
+        "output": 3901
+      },
+      "cost_usd": 0.1988,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 3901,
+          "cacheReadInputTokens": 471966,
+          "cacheCreationInputTokens": 45000,
+          "webSearchRequests": 0,
+          "costUSD": 0.1987546,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 1087,
+          "cacheCreationEphemeral5mInputTokens": 45000,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {},
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 24,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.12"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "src/config.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names the validate-before-convert_window ordering in config_load (src/config.c, near line 270/274), the 2s window at 24 Hz giving 48 samples, the overflow of buf[32] overwriting the unit pointer, and the crash in unit_convert from report_line, which matches the ground truth.",
+        "usage": {
+          "input": 1625,
+          "output": 121
+        },
+        "cost_usd": 0.0045
+      }
+    },
+    {
+      "task": "v2-02-mp-deadlock",
+      "arm": "C",
+      "rep": 1,
+      "target": "ede5046",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:08:16+00:00",
+      "ip": "192.168.122.54",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 154.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 37,
+      "assistant_messages": 17,
+      "tool_calls": 36,
+      "tool_calls_by_name": {
+        "Bash": 6,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 5,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__file_get": 2,
+        "mcp__qnx__file_list": 1,
+        "mcp__qnx__process_stop": 3,
+        "mcp__qnx__processes": 4,
+        "mcp__qnx__run_poll": 1,
+        "mcp__qnx__run_start": 4,
+        "mcp__qnx__run_stop": 5
+      },
+      "mcp_calls": 27,
+      "bash_calls": 6,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 34,
+        "cache_write": 48160,
+        "cache_read": 753025,
+        "output": 7858
+      },
+      "cost_usd": 0.2744,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 7858,
+          "cacheReadInputTokens": 753025,
+          "cacheCreationInputTokens": 48160,
+          "webSearchRequests": 0,
+          "costUSD": 0.2743505,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 1171,
+          "cacheCreationEphemeral5mInputTokens": 48160,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {
+        "path_not_allowed": 2,
+        "process_not_allowed": 3,
+        "timeout": 1
+      },
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 62,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.54"
+        ]
+      },
+      "fix_location_hit": false,
+      "files_changed": [
+        "gatewayd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly describes the lock held across MsgSend to storaged and the control thread blocking on count_lock under quota_check=gateway; the file and main-loop section match, though the cited line numbers don't match line 53.",
+        "usage": {
+          "input": 1854,
+          "output": 404
+        },
+        "cost_usd": 0.0077
+      }
+    },
+    {
+      "task": "v2-03-resmgr-slog2",
+      "arm": "C",
+      "rep": 1,
+      "target": "e81a322",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:06:24+00:00",
+      "ip": "192.168.122.95",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 54.6,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 22,
+      "assistant_messages": 11,
+      "tool_calls": 21,
+      "tool_calls_by_name": {
+        "Bash": 3,
+        "Edit": 1,
+        "Read": 3,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 1,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__file_get": 2,
+        "mcp__qnx__logs": 3,
+        "mcp__qnx__process_stop": 1,
+        "mcp__qnx__processes": 1,
+        "mcp__qnx__run_start": 1,
+        "mcp__qnx__run_stop": 1,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 13,
+      "bash_calls": 3,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 22,
+        "cache_write": 42877,
+        "cache_read": 435289,
+        "output": 4779
+      },
+      "cost_usd": 0.1986,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 22,
+          "outputTokens": 4779,
+          "cacheReadInputTokens": 435289,
+          "cacheCreationInputTokens": 42877,
+          "webSearchRequests": 0,
+          "costUSD": 0.1985554,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 1354,
+          "cacheCreationEphemeral5mInputTokens": 42877,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {
+        "process_not_allowed": 1
+      },
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 30,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.95"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "acqd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report identifies the HW_RANGE\u2192ENOTSUP mapping at acqd.c:28 on rev E, which acqctl misreads as no trigger input and turns the trigger off, and the diff changes it to ERANGE.",
+        "usage": {
+          "input": 1651,
+          "output": 97
+        },
+        "cost_usd": 0.0043
+      }
+    },
+    {
+      "task": "v2-04-deep-expr",
+      "arm": "C",
+      "rep": 1,
+      "target": "e9b7090",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:06:14+00:00",
+      "ip": "192.168.122.222",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 51.9,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 16,
+      "assistant_messages": 10,
+      "tool_calls": 15,
+      "tool_calls_by_name": {
+        "Bash": 5,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 2,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__file_get": 1,
+        "mcp__qnx__file_list": 1,
+        "mcp__qnx__get_crash": 1
+      },
+      "mcp_calls": 7,
+      "bash_calls": 5,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 20,
+        "cache_write": 41381,
+        "cache_read": 365234,
+        "output": 3436
+      },
+      "cost_usd": 0.1744,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 3436,
+          "cacheReadInputTokens": 365234,
+          "cacheCreationInputTokens": 41381,
+          "webSearchRequests": 0,
+          "costUSD": 0.17437589999999997,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 655,
+          "cacheCreationEphemeral5mInputTokens": 41381,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {},
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 21,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.222"
+        ]
+      },
+      "fix_location_hit": false,
+      "files_changed": [
+        "src/expr.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report names src/expr.c:189 in eval, where case N_DERIVED recurses into the chain's expression, and ties the ~8000-frame recursion to the derive worker's default stack overflowing. Its fix only enlarges the stack, which the ground truth says also stops the crash, so the mechanism is identified correctly.",
+        "usage": {
+          "input": 1670,
+          "output": 127
+        },
+        "cost_usd": 0.0046
+      }
+    },
+    {
+      "task": "v2-05-hang-states",
+      "arm": "C",
+      "rep": 1,
+      "target": "e4e0388",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:06:19+00:00",
+      "ip": "192.168.122.71",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 49.1,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 18,
+      "assistant_messages": 10,
+      "tool_calls": 17,
+      "tool_calls_by_name": {
+        "Bash": 5,
+        "Edit": 1,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 1,
+        "mcp__qnx__deploy_and_run": 1,
+        "mcp__qnx__file_get": 1,
+        "mcp__qnx__file_list": 2,
+        "mcp__qnx__file_put": 2,
+        "mcp__qnx__processes": 1
+      },
+      "mcp_calls": 8,
+      "bash_calls": 5,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 20,
+        "cache_write": 31302,
+        "cache_read": 328352,
+        "output": 3959
+      },
+      "cost_usd": 0.1507,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 3959,
+          "cacheReadInputTokens": 328352,
+          "cacheCreationInputTokens": 31302,
+          "webSearchRequests": 0,
+          "costUSD": 0.1507202,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 875,
+          "cacheCreationEphemeral5mInputTokens": 31302,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {
+        "path_not_allowed": 1
+      },
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 21,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.71"
+        ]
+      },
+      "fix_location_hit": false,
+      "files_changed": [
+        "pipeline.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Correctly identifies the single end marker from the reader reaching only one of the 3 workers, leaving the rest blocked and main stuck in join; it names the reader section, though the cited line numbers (35-36) are off.",
+        "usage": {
+          "input": 1517,
+          "output": 432
+        },
+        "cost_usd": 0.0074
+      }
+    },
+    {
+      "task": "v2-06-worker-null",
+      "arm": "C",
+      "rep": 1,
+      "target": "e07021c",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:08:15+00:00",
+      "ip": "192.168.122.181",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 40.5,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 19,
+      "assistant_messages": 10,
+      "tool_calls": 18,
+      "tool_calls_by_name": {
+        "Bash": 4,
+        "Edit": 1,
+        "Read": 1,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 2,
+        "mcp__qnx__deploy_and_run": 2,
+        "mcp__qnx__file_get": 4,
+        "mcp__qnx__file_list": 1,
+        "mcp__qnx__get_crash": 1,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 11,
+      "bash_calls": 4,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 20,
+        "cache_write": 43318,
+        "cache_read": 366556,
+        "output": 3099
+      },
+      "cost_usd": 0.176,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 3099,
+          "cacheReadInputTokens": 366556,
+          "cacheCreationInputTokens": 43318,
+          "webSearchRequests": 0,
+          "costUSD": 0.1759806,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 324,
+          "cacheCreationEphemeral5mInputTokens": 43318,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {},
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 31,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.181"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "src/registry.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report gives the missing NULL-ref rejection in bind_ref (registry.c) as the cause, with the Vref_main/vref_main case mismatch, and its diff changes line 47.",
+        "usage": {
+          "input": 1526,
+          "output": 240
+        },
+        "cost_usd": 0.0055
+      }
+    },
+    {
+      "task": "v2-07-cmake-cross",
+      "arm": "C",
+      "rep": 1,
+      "target": "e8ea57f",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:06:29+00:00",
+      "ip": "192.168.122.204",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 79.4,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 24,
+      "assistant_messages": 20,
+      "tool_calls": 23,
+      "tool_calls_by_name": {
+        "Bash": 15,
+        "Read": 1,
+        "ToolSearch": 1,
+        "bash": 1,
+        "mcp__qnx__deploy_and_run": 1,
+        "mcp__qnx__run_poll": 1,
+        "mcp__qnx__run_start": 2,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 5,
+      "bash_calls": 15,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 40,
+        "cache_write": 40780,
+        "cache_read": 713770,
+        "output": 6426
+      },
+      "cost_usd": 0.2377,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 40,
+          "outputTokens": 6426,
+          "cacheReadInputTokens": 713770,
+          "cacheCreationInputTokens": 40780,
+          "webSearchRequests": 0,
+          "costUSD": 0.23766700000000002,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 806,
+          "cacheCreationEphemeral5mInputTokens": 40780,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {
+        "path_not_allowed": 1
+      },
+      "remote_binary": [],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 15,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.204"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "apps/telemd/CMakeLists.txt",
+        "apps/telemd/telem.h",
+        "libs/core/CMakeLists.txt",
+        "libs/core/src/clock.c",
+        "libs/net/CMakeLists.txt",
+        "libs/net/src/addr.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "Report identifies the __unix__ guard pulling in sys/sysinfo.h on QNX in clock.c (lines 5 and 10) and all the other QNX-specific issues, including the static core library; it uses netinet/in.h rather than gulliver.h, but that is a valid fix.",
+        "usage": {
+          "input": 3517,
+          "output": 352
+        },
+        "cost_usd": 0.0106
+      }
+    },
+    {
+      "task": "v2-08-fd-leak",
+      "arm": "C",
+      "rep": 1,
+      "target": "e94ef1b",
+      "model": "sonnet",
+      "model_id": "global.anthropic.claude-sonnet-5-5",
+      "qnx_mcp_commit": "249d08ad488500b4ca5d30ff3432b47a4293cacf",
+      "started": "2026-11-03T22:08:30+00:00",
+      "ip": "192.168.122.97",
+      "harness_killed": false,
+      "other_targets_changed": {
+        "stopped": [],
+        "started": []
+      },
+      "oracle_pass": true,
+      "agent_rc": 0,
+      "wall_capped": false,
+      "wall_s": 64.7,
+      "result_subtype": "success",
+      "terminal_reason": "completed",
+      "num_turns": 27,
+      "assistant_messages": 17,
+      "tool_calls": 26,
+      "tool_calls_by_name": {
+        "Bash": 6,
+        "Edit": 1,
+        "Read": 2,
+        "ToolSearch": 1,
+        "mcp__qnx__build": 1,
+        "mcp__qnx__deploy_and_run": 5,
+        "mcp__qnx__file_list": 2,
+        "mcp__qnx__process_stop": 1,
+        "mcp__qnx__processes": 1,
+        "mcp__qnx__run_start": 3,
+        "mcp__qnx__run_stop": 2,
+        "mcp__qnx__target_status": 1
+      },
+      "mcp_calls": 16,
+      "bash_calls": 6,
+      "subagent_tool_calls": 0,
+      "mcp_servers": [
+        {
+          "name": "qnx",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "tools_offered": 42,
+      "web_tools_offered": [],
+      "model_seen": "global.anthropic.claude-sonnet-5-5",
+      "tokens": {
+        "input": 34,
+        "cache_write": 39064,
+        "cache_read": 655406,
+        "output": 5893
+      },
+      "cost_usd": 0.2222,
+      "cost_source": "claude-code total_cost_usd (list prices)",
+      "model_usage": {
+        "global.anthropic.claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 5893,
+          "cacheReadInputTokens": 655406,
+          "cacheCreationInputTokens": 39064,
+          "webSearchRequests": 0,
+          "costUSD": 0.22219860000000005,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 1064,
+          "cacheCreationEphemeral5mInputTokens": 39064,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "canonicalModel": "claude-sonnet-5-5",
+          "provider": "bedrock",
+          "costBasis": "list"
+        }
+      },
+      "unsafe": [],
+      "mcp_errors": {
+        "path_not_allowed": 1,
+        "process_not_allowed": 1
+      },
+      "remote_binary": [
+        {
+          "tool": "deploy_and_run",
+          "path": "/data/opt/status/statusctl",
+          "args": [
+            "fan"
+          ]
+        }
+      ],
+      "remote_binary_shell": 0,
+      "remote_binary_system": 0,
+      "skills": [
+        "alpine-qnx-porting",
+        "aports-patch-creation",
+        "qnx-apk-packaging",
+        "qnx-mcp",
+        "qnx-platform-facts",
+        "qnx-port-reporting",
+        "qnx-porting",
+        "skill-authoring"
+      ],
+      "guard": {
+        "calls": 0,
+        "refused": 0,
+        "hosts": []
+      },
+      "mcp_ssh": {
+        "calls": 39,
+        "refused": 0,
+        "hosts": [
+          "192.168.122.97"
+        ]
+      },
+      "fix_location_hit": true,
+      "files_changed": [
+        "statusd.c"
+      ],
+      "judge": {
+        "root_cause": true,
+        "location": true,
+        "notes": "The report correctly identifies that link_note() fopen()s the symlinked state file without closing it, leaking one descriptor per pump query until the 48-file limit causes EMFILE for every component; it names statusd.c:38 and link_note, and adds fclose().",
+        "usage": {
+          "input": 1334,
+          "output": 106
+        },
+        "cost_usd": 0.0037
+      }
+    }
+  ]
+}

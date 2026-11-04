@@ -1,0 +1,7 @@
+{
+  "id": "t01-calib-null",
+  "dir": "sensor_report",
+  "summary": "NULL dereference in a calibration path (crash, core, backtrace)",
+  "binaries": ["sensor_report"],
+  "issue": "sensor_report crashes on the QNX target since we added the humidity sensor (humid2) to sensors.cfg:\n\n    # ./sensor_report sensors.cfg\n    Memory fault (core dumped)\n\nhumid2 has no calibration table yet. Sensors without a calibration table should be reported with their raw average and the \"(uncalibrated)\" marker, as the README says; the other sensors must be reported exactly as before. We built it with `make` in task/sensor_report and copied sensor_report and sensors.cfg to /tmp on the target."
+}
