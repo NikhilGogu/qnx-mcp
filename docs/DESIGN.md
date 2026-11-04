@@ -119,7 +119,7 @@ The agent is treated as capable, fallible and possibly prompt-injected (it reads
 The server binary is `qnx-mcp` from the venv (`pip install -e .`). Environment variables are listed in the README. Tested clients (sanitized transcripts in `docs/evidence/`):
 
 * **Claude Code 2.1.312**: `claude mcp add -s project qnx -- ssh -T <box> env "QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*'" QNX_MCP_TARGETS_DIR=... <venv>/bin/qnx-mcp`, then a headless `claude -p` session: the init event showed the server `connected` with 17 `mcp__qnx__*` tools, the model listed them and called `target_status` (26.7 s for the whole session).
-* **Codex CLI 0.160.0** (profile astra): `codex exec` with `-c mcp_servers.qnx.command="ssh"` and `-c mcp_servers.qnx.args=[...]`; the transcript shows an `mcp_tool_call` to `target_status` with structured content (18.3 s).
+* **Codex CLI 0.160.0**: `codex exec` with `-c mcp_servers.qnx.command="ssh"` and `-c mcp_servers.qnx.args=[...]`; the transcript shows an `mcp_tool_call` to `target_status` with structured content (18.3 s).
 * **Cursor and VS Code**: config snippets in the README; untested.
 
 ## 7. Codelab outline
