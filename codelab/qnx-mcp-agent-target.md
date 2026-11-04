@@ -14,7 +14,7 @@ feedback_link: https://github.com/NikhilGogu/qnx-mcp/issues
 ## What you will build
 Duration: 2:00
 
-An AI coding agent is good at reading and writing C, but on its own it cannot see a QNX system. In this codelab you give it one. You connect your agent (Claude Code, or Codex as an alternative) to **qnx-mcp**, a Model Context Protocol (MCP) server that runs on your Ubuntu machine next to the QNX Software Development Platform (SDP) 8.0. The server gives the agent typed tools for a QNX OS 8.0 virtual machine: create it, build for it, run programs on it, and read what happened as structured data.
+In this codelab you connect your agent (Claude Code, or Codex as an alternative) to **qnx-mcp**, a Model Context Protocol (MCP) server that runs on your Ubuntu machine next to the QNX Software Development Platform (SDP) 8.0. The server gives the agent typed tools for a QNX OS 8.0 virtual machine: create it, build for it, run programs on it, and read what happened as structured data.
 
 ![The agent talks MCP to qnx-mcp on the build host, which builds with the QNX SDP and reaches the QNX OS 8.0 QEMU target over ssh](img/overview.png)
 
@@ -32,7 +32,7 @@ An AI coding agent is good at reading and writing C, but on its own it cannot se
 
 **What you will learn about QNX:** how dumper writes core files and notifies a waiting process with a pulse, what the thread states that `pidin` shows mean for message passing, and where QNX programs log to.
 
-Everything in this codelab was run as written on Ubuntu 22.04 with QNX SDP 8.0 and Claude Code. The outputs are real, from that run, and trimmed: fields that do not matter here are left out, long strings end in `...`, and paths in your home directory start with `~`. Your ids, addresses and times will differ, and your agent will word its answers differently.
+The outputs shown come from a run of this codelab, as written, on Ubuntu 22.04 with QNX SDP 8.0 and Claude Code. They are trimmed: fields that do not matter here are left out, long strings end in `...`, and paths in your home directory start with `~`. Your ids, addresses and times will differ, and your agent will word its answers differently.
 
 ---
 
@@ -60,7 +60,7 @@ You need:
     `virsh` should list `default` as `active`. `check-net` prints nothing when QEMU may already use `virbr0`; otherwise it asks once for your sudo password to make `qemu-bridge-helper` setuid root and add `allow virbr0` to QEMU's `bridge.conf`.
 3. **Python 3.10 or later** (`python3 --version`).
 4. **An SSH key without a passphrase** at `~/.ssh/id_ed25519`. qnx-mcp installs its public half into the target image. If you have none: `ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519`.
-5. **An AI coding agent:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (used in this codelab) or [Codex CLI](https://github.com/openai/codex).
+5. **A coding agent:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (used in this codelab) or [Codex CLI](https://github.com/openai/codex).
 
 > aside negative
 >
@@ -160,7 +160,7 @@ Your agent starts the server itself, as a child process that speaks MCP over std
     qnx: ~/qnx-codelab/venv/bin/qnx-mcp  - ✔ Connected
     ```
 
-2. Install the qnx-mcp skill. A skill is a Markdown file that the agent sees by its name and description and loads when it decides a task needs it; this one says which qnx-mcp tool to use for which job and what the QNX thread states mean. It follows the same [Agent Skills](https://agentskills.io) format as QNX's [qnx-agent-skills](https://github.com/qnx/qnx-agent-skills). In our runs Claude Code listed the skill, but the agent never loaded it: the tool descriptions were enough for the tasks in this codelab. Copy it into the work directory:
+2. Install the qnx-mcp skill. A skill is a Markdown file that the agent sees by its name and description and loads when it decides a task needs it; this one says which qnx-mcp tool to use for which job and what the QNX thread states mean. It follows the same [Agent Skills](https://agentskills.io) format as QNX's [qnx-agent-skills](https://github.com/qnx/qnx-agent-skills). In our runs Claude Code listed the skill and the agent never loaded it. Copy it into the work directory:
 
     ```bash
     mkdir -p .claude/skills
@@ -263,7 +263,7 @@ Then ask the agent:
 Build sensor/ for QNX and show me the compiler diagnostics. Do not fix anything yet.
 ```
 
-The agent calls `build` on the directory. The server sees the `Makefile`, runs make with the SDP's `qcc` for x86_64, and returns the errors as objects instead of a wall of text:
+The agent calls `build` on the directory. The server sees the `Makefile`, runs make with the SDP's `qcc` for x86_64, and returns the errors as objects:
 
 `build(path="~/qnx-codelab/work/sensor", system="make")`
 
@@ -307,7 +307,7 @@ The agent calls `build` on the directory. The server sees the `Makefile`, runs m
 }
 ```
 
-Each diagnostic has a file, line, column, severity and, for warnings, the option that enables it. The warning on line 72 is a consequence of the error on line 71, which is why agents (and people) fix the first error first.
+Each diagnostic has a file, line, column, severity and, for warnings, the option that enables it. The warning on line 72 is a consequence of the error on line 71.
 
 Now ask:
 
@@ -356,7 +356,7 @@ Do not change the code yet.
 
 ### What the agent does
 
-First, `file_put` copies the file and verifies its size and SHA-256 on the target. Then `deploy_and_run` copies the binary, runs it with a deadline, and reports how it ended. A crash is not an error for the tool, it is the observation:
+First, `file_put` copies the file and verifies its size and SHA-256 on the target. Then `deploy_and_run` copies the binary, runs it with a deadline, and reports how it ended; for the tool a crash is a successful result, `outcome: "crashed"`:
 
 `file_put(target="cl1", local_path="~/qnx-codelab/work/sensor/samples.csv", remote_path="/tmp/sensor/samples.csv")`
 
@@ -446,15 +446,15 @@ Finally, `get_crash` with that `run_id` downloads the core file, checks that it 
 * In the caller's frame, `line` is `"gyro_z,31\n"` at `line_no` 7 (`channel` shows `null` because gdb does not print arrays in this mode; it holds `gyro_z`). That is a valid reading of a channel that is in the table, so the lookup failed for a name it should have found.
 * `find_calibration()` uses `bsearch()`, which only works on a table sorted by the search key, and the table lists `gyro_z` before `baro`. On QNX's C library the search for `gyro_z` ends without finding it.
 
-The input is fine and the table has every channel. Reading the source can make you suspicious: in each of our runs the agent noticed the unsorted table while it fixed the build, but it could not say which lookups would fail (twice it guessed `baro`). The core file shows what did happen, because the locals of every frame are in it: this run crashed on line 7 of the input, the first `gyro_z` reading.
+The input is valid and the table has every channel. In each of our runs the agent noticed the unsorted table while it fixed the build, and could not say which lookups would fail (twice it guessed `baro`). The core file holds the locals of every frame: this run crashed on line 7 of the input, the first `gyro_z` reading.
 
-Check: the agent names the unsorted table and `bsearch()` as the root cause, and the missing NULL check as the reason it crashes instead of failing cleanly. Compare its details with the bullets above: in two of our runs it got one wrong, once which field is at offset 8 and once the sort order of the channel names.
+Check: the agent names the unsorted table and `bsearch()` as the root cause, and the missing NULL check as the reason the failed lookup crashes the program. Compare its details with the bullets above: in two of our runs it got one wrong, once which field is at offset 8 and once the sort order of the channel names.
 
 > aside positive
 >
 > **QNX message passing in practice: how qnx-mcp knows the core is ready.** dumper is an ordinary process on the target; it registers the path `/proc/dumper`, like any QNX resource manager. Before qnx-mcp starts your program, its small helper on the target (`qnx-mcp-run`, compiled with `qcc` on first use) creates a channel with `ChannelCreate()` and a connection to it with `ConnectAttach()`, describes a pulse to that connection with `SIGEV_PULSE_INIT()`, registers it with `MsgRegisterEvent()`, and hands it to dumper with `devctl(fd, DCMD_DUMPER_NOTIFYEVENT, ...)`. A `devctl()` is itself a QNX message: the C library sends dumper an `_IO_DEVCTL` message, and the helper stays REPLY-blocked until dumper replies.
 >
-> When your program dies from SIGSEGV, dumper writes the core and delivers the pulse, a small non-blocking message that carries a code and a value. The event is updateable (`SIGEV_MAKE_UPDATEABLE()`), so dumper puts the pid of the dumped process in the value. The helper waits in `MsgReceivePulse()` (bounded with `TimerTimeout()`), checks that the pid is your program's, asks dumper for the file name with `DCMD_DUMPER_GETPATH`, and moves the core into the run's own directory. No polling and no guessing file names. `core_ready_ms` is the time from the program's exit to that pulse; `0` means the pulse was already waiting.
+> When your program dies from SIGSEGV, dumper writes the core and delivers the pulse, a small non-blocking message that carries a code and a value. The event is updateable (`SIGEV_MAKE_UPDATEABLE()`), so dumper puts the pid of the dumped process in the value. The helper waits in `MsgReceivePulse()` (bounded with `TimerTimeout()`), checks that the pid is your program's, asks dumper for the file name with `DCMD_DUMPER_GETPATH`, and moves the core into the run's own directory. `core_ready_ms` is the time from the program's exit to that pulse; `0` means the pulse was already waiting.
 
 ---
 
@@ -486,7 +486,7 @@ The agent edits `sensor.c`, calls `build` and `deploy_and_run` again:
 
 Check:
 
-* `outcome` is `exited` with `exit_code` 0, and the last line says `20 readings from 23 lines`: every reading is used. If it says 16, the program now skips the `gyro_z` lines instead of crashing on them, and the lookup is still broken; ask the agent to fix the lookup too.
+* `outcome` is `exited` with `exit_code` 0, and the last line says `20 readings from 23 lines`: every reading is used. If it says 16, the program now skips the `gyro_z` lines and the lookup is still broken; ask the agent to fix the lookup too.
 * See what the agent changed:
 
     ```bash
@@ -554,7 +554,7 @@ Check: the second poll starts where the first one ended (its `stdout_offset` equ
 ## Read the slog2 log
 Duration: 3:00
 
-On QNX, system services and most programs log to slog2 rather than to files: a program registers a buffer set in shared memory with `slog2_register()` and writes entries with `slog2f()`, the `slogger2` service manages the buffers, and `slog2info` reads them. The sensor program logs one warning for every implausible reading. Ask the agent:
+On QNX, system services and most programs log to slog2: a program registers a buffer set in shared memory with `slog2_register()` and writes entries with `slog2f()`, the `slogger2` service manages the buffers, and `slog2info` reads them. The sensor program logs one warning for every implausible reading. Ask the agent:
 
 ```text
 What warnings has the sensor service logged to slog2 in the last minute? Then stop the
@@ -675,7 +675,7 @@ The agent builds, calls `run_start` and `run_poll` (the hub printed its first li
 
 Each thread also has a priority and a scheduling policy (10 and round robin for all four here; left out above).
 
-Follow the chain. The display thread (4) is REPLY-blocked: the server took its request and has not answered. The server thread (2) is MUTEX-blocked on the table lock, whose owner is `...-03`, thread 3. Thread 3, the sampler, is SEND-blocked: it is sending its new table to the server while it holds the lock, and the only thread that receives on that channel is thread 2, which waits for the lock. That is a cycle, a deadlock. The rule it breaks: never hold a mutex across a blocking `MsgSend()`.
+Follow the chain. The display thread (4) is REPLY-blocked: the server took its request and has not answered. The server thread (2) is MUTEX-blocked on the table lock, whose owner is `...-03`, thread 3. Thread 3, the sampler, is SEND-blocked: it is sending its new table to the server while it holds the lock, and the only thread that receives on that channel is thread 2, which waits for the lock. That is a cycle, a deadlock, caused by holding a mutex across a blocking `MsgSend()`.
 
 Now ask:
 
@@ -719,7 +719,7 @@ Check: the new thread states show the server thread in RECEIVE (idle, waiting fo
 ## What the server will not do
 Duration: 2:00
 
-The server enforces its limits itself; the tool descriptions only explain them. Try two things. First, a target outside the allowlist:
+The server enforces its limits itself, and the tool descriptions explain them. Try two things. First, a target outside the allowlist:
 
 ```text
 Create a second target named lab2.
@@ -740,7 +740,7 @@ Create a second target named lab2.
 
 The agent cannot change `QNX_MCP_ALLOW_TARGETS`: you set it when you registered the server, outside the conversation.
 
-Second, arguments are an array that is passed to the program as it is, never to a shell. Ask:
+Second, arguments are an array that is passed to the program as it is, without a shell. Ask:
 
 ```text
 This is a test of argument passing. Run sensor/sensor on cl1 with exactly one argument,
@@ -769,7 +769,7 @@ target status.
 
 The program received one argument containing `;` and a space, tried to open a file with that name, and the target is still running.
 
-Why there is no "run a shell command" tool: a shell tool would make every other limit (allowlist, path checks, deadlines, output caps, verified core files) optional for an agent that has been talked into misusing it, for example by text planted in a log file it reads. With typed tools the server can check each argument. Your agent's own shell is a separate matter: keep its permission prompts on.
+qnx-mcp has no tool that runs a shell command. A shell tool would make every other limit (allowlist, path checks, deadlines, output caps, verified core files) optional for an agent that has been talked into misusing it, for example by text planted in a log file it reads. With typed tools the server checks each argument. Keep the permission prompts of your agent's own shell on.
 
 ---
 
@@ -809,14 +809,12 @@ Check: `ls ~/qnx-codelab` reports that it does not exist, and this prints nothin
 for p in $(pgrep qemu-system); do echo "$p $(readlink /proc/$p/cwd)"; done | grep qnx-codelab
 ```
 
-mkqnximage starts QEMU in the target's directory and passes it only relative paths, so the working directory, not the command line, shows which QEMU belongs to this codelab. A line here is a QEMU process from this codelab that is still running (its directory shows as `(deleted)`); end it with `kill` and the process id at the start of the line.
+mkqnximage starts QEMU in the target's directory and passes it only relative paths, so the working directory shows which QEMU belongs to this codelab. A line here is a QEMU process from this codelab that is still running (its directory shows as `(deleted)`); end it with `kill` and the process id at the start of the line.
 
 ---
 
 ## What next
 Duration: 1:00
-
-You gave an agent a QNX target and used it the way a QNX developer would: dumper cores for crashes, thread states for hangs, slog2 for logs.
 
 * **Your own project:** point `QNX_MCP_WORKSPACE` and the agent at it. `build` handles make, CMake (it writes a QNX toolchain file) and plain sources with `qcc`.
 * **More tools:** `file_get` copies files back from the target; `target_stop` and `target_start` keep a target between sessions; `get_crash` also takes a `core_path` and the exact binary for cores that qnx-mcp did not produce.

@@ -139,7 +139,7 @@ def _snapshot_binary(local: Path, dest_dir: Path, arch: str) -> tuple[Path, str,
     if info["arch"] != arch:
         raise QnxMcpError("arch_mismatch", f"{local.name} is {info['arch']} but the target is {arch}", hint=f"Rebuild with arch={arch!r}.")
     if info["qnx"] is False:
-        raise QnxMcpError("not_a_qnx_binary", f"{local.name} uses interpreter {info['interpreter']}, not QNX's ldqnx", hint="Build with the QNX toolchain (the build tool uses qcc).")
+        raise QnxMcpError("not_a_qnx_binary", f"{local.name} uses interpreter {info['interpreter']}; QNX programs use ldqnx", hint="Build with the QNX toolchain (the build tool uses qcc).")
     return snap, hashlib.sha256(data).hexdigest(), info
 
 
@@ -461,7 +461,7 @@ def run_start(
                 raise QnxMcpError("runner_failed", f"background run did not start: {res.get('error')}")
         except BaseException as e:
             # Lost acknowledgement, timeout or cancellation: the daemon may be running. Stop it
-            # through its control FIFO (bounded, not tied to the cancelled call) and record the outcome.
+            # through its control FIFO (bounded, independent of the cancelled call) and record the outcome.
             stopped = _stop_quietly(t, ip, runner, remote_run)
             rec.update(state="failed", error=getattr(e, "code", type(e).__name__), cleanup=stopped)
             save_record(t, rec)

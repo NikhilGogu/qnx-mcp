@@ -6,7 +6,7 @@ license: Apache-2.0
 
 # qnx-mcp: which tool for which job
 
-The `qnx` MCP server runs on the build host, where the QNX SDP 8.0 and QEMU live. Every tool returns JSON. Success has `ok: true`; failure has `ok: false` and `error: {code, message, hint}`. Read the `hint`: it names the next action. A crash is not an error: `deploy_and_run` succeeds with `outcome: "crashed"`.
+The `qnx` MCP server runs on the build host, where the QNX SDP 8.0 and QEMU live. Every tool returns JSON. Success has `ok: true`; failure has `ok: false` and `error: {code, message, hint}`. Read the `hint`: it names the next action. A crash is a successful result: `deploy_and_run` returns `ok: true` and `outcome: "crashed"`.
 
 In Claude Code the tools are called `mcp__qnx__<tool>` and may be deferred; load the ones you need first (for example ToolSearch `select:mcp__qnx__build,mcp__qnx__deploy_and_run,mcp__qnx__get_crash`).
 
@@ -53,7 +53,7 @@ Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `targ
 
 **Crash.** `build(path)` then `deploy_and_run(target, binary=artifacts[0].path, args=[...])`. If `outcome` is `crashed`, call `get_crash(target, run_id)` with that `run_id`; do not look for the core yourself, dumper told the runner where it is. Read `summary`, `user_frame` (innermost frame in your sources) and its `locals`: a pointer local of `0x0`, or a small `fault_address` such as `0x8`, means a NULL pointer, the small number being the offset of the field that was read. Then look at the caller's frame and locals to see where the bad value came from, and only then change the code. After a fix, rebuild and run again: a `core_mismatch` from `get_crash` means you passed a different build than the one that crashed.
 
-**Hang.** Start the program with `run_start`, give it a moment, then `run_poll` (no new output is a hint, not proof) and `processes(target, name, include_threads=true)`. Thread states on QNX:
+**Hang.** Start the program with `run_start`, give it a moment, then `run_poll` (no new output is only a hint) and `processes(target, name, include_threads=true)`. Thread states on QNX:
 
 * `RECEIVE`: a server thread waiting in `MsgReceive` for a client. Normal for an idle server.
 * `SEND`: a client called `MsgSend` and the server has not received the message yet; the server is busy or stuck. `blocked_on` is the server's pid.
@@ -63,7 +63,7 @@ Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `targ
 
 Follow the chain: a REPLY-blocked client points at a server; look at that server's threads; a MUTEX-blocked thread points at the owner thread; a cycle is a deadlock. Stop the run with `run_stop`, fix, rebuild, start again and check that the server threads are back in RECEIVE.
 
-**Service and logs.** `run_start` the service, `run_poll` with `stdout_offset` set to the previous `stdout_next` to read only new output, `logs(target, process=<name>, min_severity="warning")` for what it logged, `run_stop` at the end. Programs log to slog2 buffers in memory, not to files. When a program ends, slogger2 keeps its buffer set on a delete queue of 16 (default) and drops the oldest when more arrive; every SSH login, so every qnx-mcp tool call, adds a few. Read the log while the program runs, or right after it ends.
+**Service and logs.** `run_start` the service, `run_poll` with `stdout_offset` set to the previous `stdout_next` to read only new output, `logs(target, process=<name>, min_severity="warning")` for what it logged, `run_stop` at the end. Programs log to slog2 buffers in memory. When a program ends, slogger2 keeps its buffer set on a delete queue of 16 (default) and drops the oldest when more arrive; every SSH login, so every qnx-mcp tool call, adds a few. Read the log while the program runs, or right after it ends.
 
 **No shell on the target.** Everything a task needs goes through these tools. Find things with `processes` (the `path` column is the executable as it was started: without the leading `/` for an absolute start, for example `tmp/hub`, or as typed for a relative one, for example `./statusd`; `process_stop` reads the full path from `/proc` itself, so pass the pid either way) and `file_list`; read files with `file_get`; write them with `file_put`. To restart a service: `processes(target, name)` for its pid and path, `process_stop(target, pid)` (if `still_running` is true, call it again with `kill_after_grace=true`), fix and rebuild, then `run_start(target, binary=<new build>)`, or `run_start(target, remote_binary=<its path>)` to start the installed program again, and check `logs(target, process=<name>)`. A crash of a program started with `remote_binary` needs `get_crash(target, run_id, binary)`; the result says so in `next_step`. Its `provenance.verified` is true only when the build ID in the core matches your binary; `verified: false` with `evidence: "pid and path match; build ID not available"` means the backtrace may name wrong lines, so say so in your answer.
 
@@ -73,7 +73,7 @@ Follow the chain: a REPLY-blocked client points at a server; look at that server
 * `args` is an argv array, never a shell command line: no pipes, redirections or globbing.
 * Build for the target's architecture (`arch` of `build` must match `target_status(name).arch`).
 * `build` runs the project's own make or cmake files on the build host. Only build trees you trust.
-* There is no shell tool on purpose. If a task needs something the tools cannot do, say so and ask the user, instead of working around the server with your own ssh commands.
+* There is no shell tool. If a task needs something the tools cannot do, say so and ask the user; do not work around the server with your own ssh commands.
 * `target_not_allowed` means the target is outside the server's allowlist (`QNX_MCP_ALLOW_TARGETS`). Do not try other names; ask the user.
 * `target_busy` means another call holds the target's lock (for example a long `target_create`); wait and retry.
 * `process_not_allowed` means `process_stop` will not touch that process (pid 1, procnto, a critical process, qnx-mcp's runner, or an executable in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` or outside `/tmp` and `/data`). Do not look for another way to stop it; report it. Use `run_stop` for runs that qnx-mcp started.

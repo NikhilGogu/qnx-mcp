@@ -36,10 +36,10 @@ Typical loop:
   5. Services and long programs: run_start -> run_poll (pass back stdout_next/stderr_next) -> run_stop.
   6. processes (pidin as JSON) and logs (slog2info, filtered) inspect the system, also while a run is active.
   7. file_put / file_get move fixtures and results (sizes and SHA-256 are verified); file_list lists a target directory.
-  8. Programs already installed on the target: deploy_and_run / run_start with remote_binary instead of binary;
+  8. Programs already installed on the target: deploy_and_run / run_start with remote_binary and no binary;
      process_stop ends a process qnx-mcp did not start (only executables below /tmp or /data, never system processes).
 Every tool returns JSON with ok=true, or ok=false plus error {code, message, hint}; follow the hint.
-Paths in build/deploy/get_crash/file_* arguments marked "host" are paths on the build host, not on the target.
+Paths in build/deploy/get_crash/file_* arguments marked "host" are paths on the build host.
 Never assume a target is yours unless target_list shows it; the server refuses names outside its allowlist.
 """
 
@@ -463,7 +463,7 @@ def _call(fn: Callable[[], dict[str, Any]]) -> CallToolResult:
         return _result(fn())
     except QnxMcpError as e:
         return _result({"ok": False, "error": e.to_dict()})
-    except Exception as e:  # keep the agent informed instead of dropping the session
+    except Exception as e:  # report the error to the agent and keep the session open
         log.error("internal error: %s", traceback.format_exc())
         return _result({"ok": False, "error": {"code": "internal_error", "message": f"{type(e).__name__}: {e}"}})
 
@@ -612,7 +612,7 @@ async def build(
     "Returns outcome (exited | crashed | killed | timeout | stopped | exec_failed), exit_code or signal_name, and for crashes the exact core_path "
     "obtained from dumper (DCMD_DUMPER_NOTIFYEVENT pulse, then DCMD_DUMPER_GETPATH), moved into the run's own directory. "
     "Checks the ELF arch and loader first. Arguments are an array, never interpreted by a shell. For long-running programs use run_start. "
-    "To run a program that is already installed on the target, pass remote_binary (a target path) instead of binary: an executable regular file "
+    "To run a program that is already installed on the target, pass remote_binary (a target path) and no binary: an executable regular file "
     "below /tmp or /data (QNX_MCP_REMOTE_BINARY_ROOTS) and outside /tmp/qnx-mcp, never a shell or anything in /proc/boot, /bin, /sbin, /usr or "
     "/system (checked by real path on the target). get_crash then needs binary=<host path of its unstripped build> to symbolise a crash.",
     annotations=_ann(False, True, False),
@@ -636,7 +636,7 @@ async def deploy_and_run(
     description="Like deploy_and_run, but the program runs in the background (its own session on the target) so the call returns at once. "
     "Output goes to files on the target (capped per stream); read it with run_poll using offsets, end it with run_stop. "
     "timeout_s is a hard limit on its lifetime. processes and logs keep working while it runs. Crashes leave a core for get_crash(run_id). "
-    "remote_binary (a target path) instead of binary starts a program that is installed on the target, for example to restart a service "
+    "remote_binary (a target path, with no binary) starts a program that is installed on the target, for example to restart a service "
     "(same rules as deploy_and_run: below /tmp or /data, never a shell or a system program).",
     annotations=_ann(False, True, False),
 )

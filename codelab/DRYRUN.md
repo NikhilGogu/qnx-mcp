@@ -6,7 +6,7 @@ Where the codelab says to ask the agent, the prompt was given, as written, to a 
 
 Deviations from the text, the same in every pass:
 
-* `CODELAB` was `~/cl-dryrun/pass<N>/qnx-codelab` instead of `~/qnx-codelab`, so passes do not share state.
+* `CODELAB` was `~/cl-dryrun/pass<N>/qnx-codelab` (the text has `~/qnx-codelab`), so passes do not share state.
 * `git clone https://github.com/NikhilGogu/qnx-mcp.git` was redirected (`url.<bundle>.insteadOf` in a private `GIT_CONFIG_GLOBAL`) to a git bundle of the local repository, because the codelab files are not pushed yet. The public repository answered (`git ls-remote` showed `main` at 06e4aef) but lacks `codelab/` and `skills/`.
 * `sudo apt install ...` ran as `apt-get -s install ...` (simulated: the box is shared and nothing may be upgraded); all packages were already installed. `sudo adduser` ran with `sudo -n` (the user was already in both groups). Logging out and in was not needed.
 * The interactive `claude` start was replaced by the headless turns. The Codex section was not run in a session; its configuration block was checked with `codex mcp list` (Codex CLI 0.160.0, temporary `CODEX_HOME`), which listed `qnx` as `enabled` with `tool_timeout_sec: 600`.
@@ -18,7 +18,7 @@ Costs are the `total_cost_usd` of the last turn of each pass (cumulative over th
 
 | Step | Result |
 |---|---|
-| 3 Install | The first clone failed: `warning: remote HEAD refers to nonexistent ref`. Harness error (the bundle had no `HEAD`), not the text; bundle recreated, step repeated: 9 s. |
+| 3 Install | The first clone failed: `warning: remote HEAD refers to nonexistent ref`. Harness error (the bundle had no `HEAD`); bundle recreated, step repeated: 9 s. |
 | 4 to 6 | As written. |
 | 6 Fix the compile error | While fixing the typo the agent read `sensor.c` and said that `find_calibration()` returns NULL for an unknown channel and nothing checks it. The crash in that version came from a channel name with a trailing space in `samples.csv`, so the source gave the bug away. |
 
@@ -108,7 +108,7 @@ Over passes 1 to 3 no session called the Skill tool: Claude Code listed `qnx-mcp
 
 Verdict: every command and prompt ran as written and every Check held, including the new step 6 prompt. Pass 3 needed no change to a command, a prompt or a Check. It led to four changes of prose, made after the pass (in the commit that adds this file):
 
-1. Step 4: a skill is loaded when the agent decides a task needs it; in our runs the agent never loaded it, because the tool descriptions were enough.
+1. Step 4: a skill is loaded when the agent decides a task needs it; in our runs the agent never loaded it.
 2. Step 6: the agent mentioned other problems in every run (the earlier "ours did" was less exact).
 3. Step 7: the agent noticed the table in each run but could not say which lookups would fail (twice it guessed `baro`; in pass 3 it named no channel).
 4. Step 7, Check: compare the agent's details with the text; in two runs it got one wrong (the field at offset 8 in pass 2, the sort order in pass 3).

@@ -1,21 +1,21 @@
 # qnx-mcp
 
-qnx-mcp is a Model Context Protocol (MCP) server that gives AI coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
+qnx-mcp is a Model Context Protocol (MCP) server that gives coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
 
-Status: v0.3.0. v0.1 was revised after two reviews; v0.2 added the tools an agent needs when it has no shell on the target (`file_list`, `process_stop`, and `remote_binary` for `deploy_and_run` and `run_start`) and v0.2.1 addressed their review (docs/DESIGN.md section 10). v0.3.0 follows the least-privilege study ("Least privilege, measured" below): `process_stop` handles services started with a relative path, and `remote_binary` refuses shells and system programs. Everything below was run against QNX OS 8.0 x86_64 QEMU targets; the evidence is in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
+Status: v0.3.0. v0.2 added the tools an agent needs when it has no shell on the target (`file_list`, `process_stop`, and `remote_binary` for `deploy_and_run` and `run_start`), and v0.2.1 addressed the review findings on them; every review finding and its status is in docs/DESIGN.md section 10. v0.3.0 fixes two gaps found in the study under "Debugging without a target shell" below: `process_stop` handles services started with a relative path, and `remote_binary` refuses shells and system programs. Test logs, target observations, tool versions and client session transcripts are in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
 
 Tutorial: the codelab [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/) (about 45 minutes; source in [codelab/](codelab/qnx-mcp-agent-target.md), dry runs in [codelab/DRYRUN.md](codelab/DRYRUN.md)). The agent skill file is [skills/qnx-mcp/SKILL.md](skills/qnx-mcp/SKILL.md).
 
-## Why this is more than SSH
+## What the tools do
 
-An agent with plain SSH has to compose shell commands, guess where cores land, pick the right gdb and sysroot, and parse free text. qnx-mcp does these things on the target and the host, and returns objects:
+qnx-mcp composes the commands, finds the cores, picks the matching gdb and sysroot and parses the output, on the target and on the host, and returns objects:
 
-* **Native crash notification.** A small C helper on the target (`qnx-mcp-run`) registers a pulse with dumper (`DCMD_DUMPER_NOTIFYEVENT`) before the program starts. When the program dies from a signal that dumper handles, the helper waits for the pulse carrying that pid and asks `DCMD_DUMPER_GETPATH` for the exact core path, then moves the core into the run's own directory. Measured in the example below: the whole crashing run took 44 ms, and dumper's completion pulse was already waiting when the helper saw the program exit (`core_ready_ms: 0`).
-* **Verified crash provenance.** Each run keeps a snapshot of the exact binary that was deployed. `get_crash` downloads the core with a size and SHA-256 check and refuses it (`core_mismatch`) unless the executable the core names is the run's content-addressed binary, the pid in the core is the run's pid, and the GNU build ID in the executable's note in the core's memory matches. A rebuilt binary, a binary without a build ID and a modified snapshot are all refused; this is tested.
+* **Crash notification from dumper.** A small C helper on the target (`qnx-mcp-run`) registers a pulse with dumper (`DCMD_DUMPER_NOTIFYEVENT`) before the program starts. When the program dies from a signal that dumper handles, the helper waits for the pulse carrying that pid and asks `DCMD_DUMPER_GETPATH` for the exact core path, then moves the core into the run's own directory. In the example below the whole crashing run took 44 ms, and dumper's completion pulse was already waiting when the helper saw the program exit (`core_ready_ms: 0`).
+* **Verified crash provenance.** Each run keeps a snapshot of the exact binary that was deployed. `get_crash` downloads the core with a size and SHA-256 check and refuses it (`core_mismatch`) unless the executable the core names is the run's content-addressed binary, the pid in the core is the run's pid, and the GNU build ID in the executable's note in the core's memory matches. A rebuilt binary, a binary without a build ID and a modified snapshot are refused (`test_crash_slice`).
 * **Bounded runs.** Every run has a wall-clock deadline, capped output (truncation is reported), stdin on `/dev/null`, its own process group, and the whole group is killed when the program ends, so a forked child does not outlive the run. If the client cancels a call, the server kills its ssh and the helper notices the closed session and kills the program. Long-running programs get `run_start`, `run_poll` (output cursors) and `run_stop`.
-* **Structured system state.** `processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack, so an agent can see which thread faulted and which threads were waiting on it.
+* **Structured system state.** `processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack and the id of the thread that faulted.
 
-## Example (real output, abridged)
+## Example (abridged)
 
 From the v0.1 test run (`docs/evidence/test-run-v0.1.log`), the crash demo in `examples/crash_demo`:
 
@@ -131,7 +131,7 @@ Every tool returns JSON as MCP `structuredContent` (and as text). Success has `o
 | `target_destroy` | Stop and delete a managed target (`confirm` must repeat the name) |
 | `target_status` | State, IP, SSH probe, target clock, dumper arguments and core naming, host key policy |
 | `build` | qcc, make or cmake with the SDP; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
-| `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`. With `remote_binary` instead of `binary`: a program already on the target, below `/tmp` or `/data`, never a shell or a system program |
+| `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`. With `remote_binary` (and no `binary`): a program already on the target, below `/tmp` or `/data`, never a shell or a system program |
 | `run_start` / `run_poll` / `run_stop` | Background runs with output cursors (`max_kb` up to 1024), lifetime limit, per-server ownership of run ids; stop goes through the owning runner's control FIFO. `run_start` also takes `remote_binary` |
 | `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack. For a `remote_binary` run, `run_id` plus the host build as `binary` |
 | `file_put` / `file_get` | One file each way, size and SHA-256 verified; no directory, symlink or symlinked-parent destinations; never replaces a file unless `overwrite` |
@@ -140,7 +140,7 @@ Every tool returns JSON as MCP `structuredContent` (and as text). Success has `o
 | `process_stop` | Stop a process qnx-mcp did not start, only if its executable is below `/tmp` or `/data` (the executable in `/proc/<pid>/exefile`, which also covers services started with a relative path, and its resolved path, checked on the target at call time); never pid 1, procnto, a critical process, the runner or anything in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system`. SIGTERM (or another signal), then SIGKILL after `grace_s` if `kill_after_grace` |
 | `logs` | `slog2info` as JSON, filtered by buffer, process, time, severity, text |
 
-More real outputs (from the v0.1 test run, `docs/evidence/test-run-v0.1.log`):
+More outputs from the v0.1 test run (`docs/evidence/test-run-v0.1.log`):
 
 `target_status(name="tb")`
 ```json
@@ -180,9 +180,9 @@ More real outputs (from the v0.1 test run, `docs/evidence/test-run-v0.1.log`):
 
 ## Without a shell on the target (v0.2 and later)
 
-An agent that has qnx-mcp and no shell can still look at directories, restart a program installed on the target and stop a hung one. Real outputs from `docs/evidence/test-run.log` (`tests/test_shellfree_e2e.py`), abridged:
+With qnx-mcp and no shell on the target, an agent can list directories, restart a program installed on the target and stop a hung one. Outputs from `docs/evidence/test-run.log` (`tests/test_shellfree_e2e.py`), abridged:
 
-`file_list(target="tb", path="/tmp/qnx-mcp-test/l1059391")` (`alink` and `boot` are symlinks the test made; they are described, not followed)
+`file_list(target="tb", path="/tmp/qnx-mcp-test/l1059391")` (`alink` and `boot` are symlinks the test made; `file_list` never follows links)
 ```json
 {"path": "/tmp/qnx-mcp-test/l1059391", "real_path": "/data/var/tmp/qnx-mcp-test/l1059391", "real_path_verified": true, "complete": true, "total_entries": 4, "returned": 4, "truncated": false, "entries": [
  {"name": "a.txt", "type": "file", "size": 6, "mode": "0644", "mtime_iso": "2026-11-04T00:39:20Z"},
@@ -203,7 +203,7 @@ The crash demo installed on the target and run the same way crashes, and `next_s
  "provenance": {"source": "remote_run", "core_executable": "/tmp/qnx-mcp-test/r1059391/bin/crash_demo", "core_pid": 164540438, "pid_match": true, "executable_match": true,
   "core_build_id": "c65158d019120da0f95c3df1a466d88b", "build_id_match": true, "evidence": "build ID, executable path and pid match", "verified": true}}
 ```
-A rebuilt binary is refused with `core_mismatch` (different build ID). The same program linked with `--build-id=none` still gets a backtrace, but with `"verified": false` and `"evidence": "pid and path match; build ID not available (the binary has none)"`: nothing ties that binary to the code that ran.
+A rebuilt binary is refused with `core_mismatch` (different build ID). The same program linked with `--build-id=none` gets a backtrace with `"verified": false` and `"evidence": "pid and path match; build ID not available (the binary has none)"`.
 
 `process_stop(target="tb", pid=167637014)` of a program that was started outside qnx-mcp:
 ```json
@@ -225,9 +225,13 @@ Services started with a relative path, the way the evaluation's field services a
 
 A program that execs `/system/bin/sleep` when it gets SIGTERM, stopped with `grace_s=1, kill_after_grace=true`, returns an error with `details.signal_sent: true`: "SIGTERM was sent to process 169095190 and it did not exit; SIGKILL was not sent because its start time differs (the pid was reused, or the program called exec)".
 
-## Least privilege, measured
+## Debugging without a target shell
 
-The evaluation in [eval/](eval) (protocol preregistered in [eval/PROTOCOL.md](eval/PROTOCOL.md); tasks, harness, summaries and every trial transcript in [eval/results/raw.tar.xz](eval/results)) asked whether an agent with qnx-mcp and no shell on the target fixes the same QNX bugs as an agent with a root shell. Arm A had QNX's agent skills plus a root shell over SSH; arm C had the same skills plus qnx-mcp 0.2.1, and its ssh, scp and sftp refused the target (the agents kept a shell on the build host for their workspace). Eight seeded bugs whose fault needs evidence from the target (a buffer overflow, a deadlock across processes, a resource manager whose error shows in slog2, a stack overflow, a hang, a NULL dereference in a worker thread, a CMake cross-build, a file descriptor leak), 5 trials per task, arm and model, Claude Sonnet 5.5 and Haiku 5.5 in Claude Code 2.1.312: 160 trials, all scored ([summary](eval/results/least-privilege-2026-11-03/summary.md)).
+The evaluation in [eval/](eval) gave agents eight seeded QNX bugs whose fault needs evidence from the target (a buffer overflow, a deadlock across processes, a resource manager whose error shows in slog2, a stack overflow, a hang, a NULL dereference in a worker thread, a CMake cross-build, a file descriptor leak). The protocol is preregistered in [eval/PROTOCOL.md](eval/PROTOCOL.md); tasks, harness, summaries and every trial transcript are in [eval/results/raw.tar.xz](eval/results).
+
+* Arm A: QNX's agent skills and a root shell on the target over SSH.
+* Arm C: the same skills and qnx-mcp 0.2.1. The agent's ssh, scp and sftp were PATH wrappers that refused the target, and every transcript was reviewed. The agents ran as the same Unix user as the harness and kept a shell on the build host for their workspace.
+* 5 trials per task, arm and model, with Claude Sonnet 5.5 and Haiku 5.5 in Claude Code 2.1.312: 160 trials, all scored ([summary](eval/results/least-privilege-2026-11-03/summary.md)). An oracle with unseen inputs scored each fix, and a blind judge scored the stated root cause.
 
 | model | arm | oracle pass | root cause (blind judge) | median turns [range] | median cost USD [range] | median wall s |
 |---|---|---|---|---|---|---|
@@ -236,24 +240,28 @@ The evaluation in [eval/](eval) (protocol preregistered in [eval/PROTOCOL.md](ev
 | Haiku 5.5 | A (root shell) | 40/40 | 40/40 | 16 [10-44] | 0.019 [0.013-0.038] | 103 |
 | Haiku 5.5 | C (qnx-mcp, no shell) | 40/40 | 39/40 | 37 [20-64] | 0.028 [0.021-0.051] | 115 |
 
-Costs: without a shell the agents needed about twice the turns and paid 61 percent (Sonnet) and 47 percent (Haiku) more per trial at the median; paired by task and repetition, C minus A was +10 turns and +0.067 USD for Sonnet, +18 turns and +0.008 USD for Haiku. The study's agents cost 15.31 USD and all of phase 3 (smoke test, pilot, study, blind judge) 17.98 USD, as Claude Code's list-price estimates. No arm C agent tried ssh, scp or sftp, and qnx-mcp's own 3643 ssh and scp calls reached only the trial targets. Two gaps in qnx-mcp 0.2.1 showed up and are fixed in 0.3.0: `process_stop` refused services started with a relative path (23 of 80 arm C trials; the agents then checked their fix with their own copy of the service), and `remote_binary` would have started a shell or a system program as root (no agent did).
+Arm C needed about twice the turns and cost 61 percent (Sonnet) and 47 percent (Haiku) more per trial at the median. Paired by task and repetition, C minus A was +10 turns and +0.067 USD for Sonnet, and +18 turns and +0.008 USD for Haiku. The study's agents cost 15.31 USD, and all of phase 3 (smoke test, pilot, study, blind judge) 17.98 USD, by Claude Code's list-price estimates. No arm C agent tried ssh, scp or sftp, and qnx-mcp's own 3643 ssh and scp calls reached only the trial targets.
 
-What it does not show:
+Two gaps in qnx-mcp 0.2.1 showed up; 0.3.0 fixes both:
 
-* Both arms passed every trial, so it does not show that qnx-mcp makes agents better or more successful; with 40 of 40, each pass rate is only bounded above 0.91 (95 percent).
-* Arm C's isolation was a PATH wrapper that refused ssh, scp and sftp to the target, plus a review of every transcript, not enforcement by the operating system: the agents ran as the same Unix user with a shell on the build host.
-* One root-cause miss (Haiku, arm C, v2-02) is a judge parse failure: the judge returned no parsable verdict and it is counted as a miss, as recorded.
-* The v2-04 oracle accepts a stack-size workaround: a Sonnet arm A agent enlarged the thread stack, which the judge rated as masking the unbounded recursion, and the oracle still passed.
-* The tasks are our own small programs on QEMU, with one client and two models; costs are list-price estimates.
+* `process_stop` refused services started with a relative path (23 of 80 arm C trials; the agents then checked their fix with their own copy of the service).
+* `remote_binary` would have started a shell or a system program as root (no agent did).
+
+Limits:
+
+* Both arms passed the oracle in every trial; with 40 of 40, the 95 percent lower bound of each pass rate is 0.91.
+* One root-cause miss (Haiku, arm C, v2-02) is a judge parse failure: the judge returned no parsable verdict, and the trial counts as a miss.
+* The v2-04 oracle accepts a stack-size workaround: a Sonnet arm A agent enlarged the thread stack, the judge rated that as masking the unbounded recursion, and the oracle passed it.
+* The tasks are our own small programs on QEMU, with one client and two models.
 
 ## Security model
 
-The agent is treated as capable but fallible and possibly prompt-injected. The server enforces the limits; tool descriptions only explain them.
+The agent is treated as capable, fallible and possibly prompt-injected. The server enforces the limits, and the tool descriptions explain them.
 
-**What the v0.2 path rules are for.** The rules on `process_stop`, `file_list` and `remote_binary` protect against mistakes: an agent stopping a system process, starting qnx-mcp's own runner, or misreading where a directory is. They do not stop an agent that sets out to break them, because `deploy_and_run` already runs any program the agent builds, as root, and such a program can stop any process or change any file. Since v0.3.0 `remote_binary` refuses shells and system programs, so qnx-mcp itself does not hand a shell to an agent whose client keeps it away from the target's shell; an agent can still build a program that does what a shell does. The races that remain are listed under Limitations.
+**Scope of the path rules (v0.2 and later).** The rules on `process_stop`, `file_list` and `remote_binary` guard against mistakes: an agent stopping a system process, starting qnx-mcp's own runner, or misreading where a directory is. They do not stop an agent that sets out to break them: `deploy_and_run` runs any program the agent builds, as root, and such a program can stop any process or change any file. Since v0.3.0 `remote_binary` refuses shells and system programs; a program the agent builds can still do what a shell does. The races that remain are listed under Limitations.
 
 * **Targets.** Names must match `[a-z][a-z0-9_-]{0,31}` and the allowlist; an unset or empty allowlist refuses everything. A target directory that is a symlink, or resolves outside the targets dir, is refused. `target_destroy` only deletes mkqnximage directories directly inside the targets dir.
-* **Target identity.** mkqnximage generates the image's SSH host keys on the host (`--sshd-pregen=yes`, its default; `target_create` passes it explicitly). They are stored in `local/misc_files/` of the target directory and copied to `/data/var/ssh` on the image's persistent data partition, so they survive reboots (tested: SSH with `StrictHostKeyChecking=yes` after stop and start). qnx-mcp pins them under `HostKeyAlias=qnx-mcp-<name>`, so an address change cannot switch machines unnoticed: a VM that does not present the pinned key gets `host_key_mismatch`. A target without pre-generated keys is refused (`host_key_missing`) unless `QNX_MCP_TRUST_FIRST_USE=1` is set, which pins whatever key answers first (weaker; not tested against a real image). Expired DHCP leases are ignored; `mkqnximage --getip` is the fallback.
+* **Target identity.** mkqnximage generates the image's SSH host keys on the host (`--sshd-pregen=yes`, its default; `target_create` passes it explicitly). They are stored in `local/misc_files/` of the target directory and copied to `/data/var/ssh` on the image's persistent data partition, so they survive reboots (tested: SSH with `StrictHostKeyChecking=yes` after stop and start). qnx-mcp pins them under `HostKeyAlias=qnx-mcp-<name>`; a VM that does not present the pinned key gets `host_key_mismatch`, whatever its address. A target without pre-generated keys is refused (`host_key_missing`) unless `QNX_MCP_TRUST_FIRST_USE=1` is set, which pins whatever key answers first (weaker; not tested against a real image). Expired DHCP leases are ignored; `mkqnximage --getip` is the fallback.
 * **No shell tool.** Remote commands are fixed argument lists; agent arguments are quoted one by one. A test passes `$(touch ...)`, `; touch ...`, backticks, quotes, `*`, a newline and U+2028 and checks that the program receives them unchanged.
 * **Validated paths.** Remote paths must be normalised (no `//`, `.`, `..` or trailing `/`) and use `[A-Za-z0-9._+/-]` only. `file_put` writes only below `/tmp` or `/data` and never into qnx-mcp's own directory, also not through an alias such as `/data/var/tmp/qnx-mcp` (the runner compares real paths); parents are opened one by one without following symlinks, directories and symlinks are refused as destinations, and installation is atomic. `file_get` stages the download in the server state and installs it through a descriptor of the destination directory without changing that directory, never replacing a file or following a symlink unless `overwrite` is set for a regular file. With `QNX_MCP_WORKSPACE` set, every host path, and every source file read for backtraces (paths come from DWARF), must resolve inside it; source context is only read from C/C++ source files.
 * **Listing.** `file_list` reads one directory anywhere on the target (as `file_get` reads any file) and never follows links inside it; the directory itself may be reached through a link. `real_path` is resolved separately and `real_path_verified` says whether it names the directory that was read (same device and inode, checked after reading). A failed `readdir` gives `complete: false`. Output is bounded (`max_entries` at most 1000, and the runner gives up after 30 s).
@@ -262,7 +270,7 @@ The agent is treated as capable but fallible and possibly prompt-injected. The s
 * **Builds run code.** `build` runs the project's own make or cmake files, which can execute anything on the build host. Only point it at trees you trust.
 * **Bounded execution.** Host commands run in their own process group with timeouts and capped output; cancelled calls kill their processes. Target programs have deadlines and output caps; cores are size-limited before download and after decompression.
 * **Locking.** Per-target `flock`: exclusive for lifecycle changes, shared for runs, probes and inspection, so `processes` works during a run and `target_stop` waits for runs in progress (both tested). Waiting fails with `target_busy` after 120 s.
-* **Privileges.** Programs run as root on the target, because mkqnximage development images log in as root. Use disposable development targets. The v0.2 tools do not add a shell: an agent still cannot run a command line, but a program it builds and runs can do anything root can.
+* **Privileges.** Programs run as root on the target, because mkqnximage development images log in as root, and a program the agent builds and runs can do anything root can. Use disposable development targets.
 * **Data.** Cores, logs, run records and binary snapshots stay in the state directory (mode 0700, files 0600) on the build host.
 
 ## Tests
@@ -277,7 +285,7 @@ QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2
   python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py                       # builds, boots and destroys tb2
 ```
 
-Last full run on the build box (v0.3.0, 4 Nov 2026, with `QNX_MCP_TARGETS_DIR` set to the box's targets directory): 92 passed in 161.1 s (67 unit, 5 offline MCP, 2 skill, 3 SDK build, 9 slice end-to-end, 3 shell-free end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log); the v0.1 run is [test-run-v0.1.log](docs/evidence/test-run-v0.1.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio, the same way an agent does.
+Last full run on the build box (v0.3.0, 4 Nov 2026, with `QNX_MCP_TARGETS_DIR` set to the box's targets directory): 92 passed in 161.1 s (67 unit, 5 offline MCP, 2 skill, 3 SDK build, 9 slice end-to-end, 3 shell-free end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log); the v0.1 run is [test-run-v0.1.log](docs/evidence/test-run-v0.1.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio.
 
 ## Limitations
 
@@ -285,21 +293,17 @@ Last full run on the build box (v0.3.0, 4 Nov 2026, with `QNX_MCP_TARGETS_DIR` s
 * **Root on the target.** Programs run as root, because mkqnximage development images log in as root. Use disposable development targets.
 * **setsid escapes.** A descendant that calls `setsid()` leaves the program's process group and is not killed at the end of a run (`process_stop` may end it afterwards, since its executable is below `/tmp`; not tested with an escaped process).
 * **Races that remain in the v0.2 tools** (see the threat model under Security model):
-  * `process_stop`: the process can still exec or change between the last check and a signal. The path rules judge the path the process was started with and what it resolves to now, so a symlink replaced after launch, or a hard link to a system program placed below `/tmp`, can mislead them. The creation token is taken by `process_stop` itself, not when the agent last called `processes`. It signals one process, not its children.
-  * `remote_binary`: the file can be replaced between the check and the start; the runner repeats the path rules, not a content check, so the SHA-256 in the run record describes the file at check time. Shells are recognised by name: a copy of a shell renamed and placed below `/tmp` passes.
+  * `process_stop`: the process can still exec or change between the last check and a signal. The path rules judge the path the process was started with and what it resolves to now, so a symlink replaced after launch, or a hard link to a system program placed below `/tmp`, can mislead them. The creation token is taken by `process_stop` itself, so it does not cover the time since the agent's last `processes` call. Children of the process are not signalled.
+  * `remote_binary`: the file can be replaced between the check and the start; the runner repeats only the path rules, so the SHA-256 in the run record describes the file at check time. Shells are recognised by name: a copy of a shell renamed and placed below `/tmp` passes.
   * `file_list`: an entry's metadata and its link target are read one after the other and can describe different versions of it.
   * Address: a stale lease is noticed only when ssh fails to connect, and the command is then retried once at a rediscovered address; images that share host keys (a copied target directory) cannot be told apart.
-* **Unverified SDK libraries.** Frames inside shared libraries are resolved against the SDK's copies on the build host, not verified against the libraries on the image; a custom image with different builds can give wrong library frames (gdb's warnings are returned in `gdb_warnings`).
-* **Current source, not preserved source.** Source lines in a backtrace are read from the files on the build host at the time of `get_crash`; if you edited them after building, the lines shown are the edited ones.
+* **Unverified SDK libraries.** Frames inside shared libraries are resolved against the SDK's copies on the build host and are not checked against the libraries on the image; a custom image with different builds can give wrong library frames (gdb's warnings are returned in `gdb_warnings`).
+* **Source lines from the current files.** Source lines in a backtrace are read from the files on the build host at the time of `get_crash`; if you edited them after building, the lines shown are the edited ones.
 * **Lossy text decoding.** Program output, logs and gdb text are decoded as UTF-8 with replacement characters; byte counts and output cursors are exact, but binary output is not reproduced exactly in text fields.
-* Unique core names: qnx-mcp moves each core into its run's directory right after dumper reports it. Images created by `target_create` (without `--secpol`) also run dumper with sequential names (`-n`). On other images (`core_naming: "fixed"`), a second crash of a program with the same name in the moment between the dump and the move could overwrite the first core; `get_crash` then reports `core_mismatch` (pid check) instead of a wrong backtrace.
+* Unique core names: qnx-mcp moves each core into its run's directory right after dumper reports it. Images created by `target_create` (without `--secpol`) also run dumper with sequential names (`-n`). On other images (`core_naming: "fixed"`), a second crash of a program with the same name in the moment between the dump and the move could overwrite the first core; `get_crash` then reports `core_mismatch` (pid check).
 * Background runs are detached from the ssh session that started them but do not survive a target reboot (`run_poll` then reports `lost`; this path is not tested).
-* Only QEMU targets created by mkqnximage on a libvirt network are supported; real boards and aarch64 targets are not yet. Host-side disk use is limited by record and size caps, not by a quota.
+* Only QEMU targets created by mkqnximage on a libvirt network are supported; real boards and aarch64 targets are not yet. Host-side disk use is limited by record and size caps; there is no quota.
 * On the shared test box, 3 of 13 mkqnximage builds reported success but left no `output/disk-qemu`, at times when other agents were running mkqnximage builds; `target_create` now rebuilds once with `--clean` in that case. The cause is not known.
-
-## How this was built
-
-qnx-mcp was written by AI coding agents (Claude Opus 5.5 in Claude Code) working for our team on a build box with QNX SDP 8.0 and QEMU, and reviewed by a second model (GPT-6 Astra in Codex CLI) before each release; its findings and what we did about them are in docs/DESIGN.md section 10. Every result in this README comes from a command that ran against QNX OS 8.0, and the logs are in docs/evidence.
 
 ## Licence
 

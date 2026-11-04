@@ -1,6 +1,6 @@
 # Black-box probes on a QNX 8.0 x86_64 QEMU target (3 Nov 2026)
 
-Small programs of our own (built with `qcc -Vgcc_ntox86_64`, run on a copy of the golden image) used to design the tasks. No QNX binaries were inspected.
+Small programs of our own (built with `qcc -Vgcc_ntox86_64`, run on a copy of the golden image) used to design the tasks.
 
 | Question | Result |
 |---|---|

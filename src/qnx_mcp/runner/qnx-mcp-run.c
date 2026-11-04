@@ -37,7 +37,7 @@
  * signal, so it is enforced even if the main loop is blocked. A descendant that calls setsid() escapes
  * the group; that is not containable here.
  *
- * Crash handling uses the dumper's client interface instead of guessing file names: before the
+ * Crash handling asks dumper for the core's file name through its client interface: before the
  * program starts we register an updateable pulse with DCMD_DUMPER_NOTIFYEVENT, so dumper writes the
  * dumped pid into the pulse value. If the program dies from a signal that dumper handles, we wait
  * (bounded) for the pulse carrying its pid and ask DCMD_DUMPER_GETPATH for the exact core path.
@@ -991,7 +991,7 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
                     if (exec_got == sizeof exec_buf) {
                         memcpy(&r->exec_errno, exec_buf, sizeof r->exec_errno);
                         if (r->exited) {
-                            r->exited = 0; /* the 127 came from the failed exec, not the program */
+                            r->exited = 0; /* the 127 came from the failed exec */
                         }
                     }
                     close(exec_rd);

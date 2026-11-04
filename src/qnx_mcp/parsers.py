@@ -249,7 +249,7 @@ def parse_mi_output(text: str) -> dict[str, Any]:
     """Split GDB/MI output into result records by token, stream records and async records.
 
     A result record whose body does not parse is kept as {"class": ..., "malformed": True}
-    so callers can refuse it instead of treating it as an empty success. Results without
+    so callers can refuse it. Results without
     a token are kept apart from tokened ones, and a token seen twice is reported.
     """
     results: dict[str, dict[str, Any]] = {}

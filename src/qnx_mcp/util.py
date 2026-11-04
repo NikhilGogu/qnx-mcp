@@ -301,14 +301,14 @@ def _kill_group(p: subprocess.Popen) -> None:
 
 
 class _Drain:
-    """Reads one pipe to EOF in a thread, keeping at most cap bytes (the rest is counted, not stored).
+    """Reads one pipe to EOF in a thread, keeping at most cap bytes (the rest is only counted).
     Data is available at any time, so a reader that never sees EOF still yields what arrived."""
 
     def __init__(self, stream: Any, cap: int, sink: Any = None):
         self.kept = bytearray()
         self.total = 0
         self.cap = cap
-        self.sink = sink  # file object: stream into it instead of memory, stop at cap
+        self.sink = sink  # file object: stream into it, stop at cap
         self.exceeded = False
         self.thread = threading.Thread(target=self._run, args=(stream,), daemon=True)
         self.thread.start()
@@ -415,7 +415,7 @@ def run(
         if p.stdin is not None:
             with contextlib.suppress(OSError, ValueError):
                 p.stdin.close()
-        grace = time.monotonic() + 2  # one shared grace period, not one per pipe
+        grace = time.monotonic() + 2  # one grace period shared by all pipes
         for d in drains:
             d.thread.join(timeout=max(0.0, grace - time.monotonic()))
         if any(d.thread.is_alive() for d in drains):
