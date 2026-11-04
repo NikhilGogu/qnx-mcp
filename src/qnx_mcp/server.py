@@ -380,7 +380,7 @@ class ProcessStopResult(_M):
     args: str | None
     ppid: int | None
     uid: int | None
-    executable: str | None = Field(description="Executable path the process manager reports (what pidin shows), made absolute")
+    executable: str | None = Field(description="The executable as /proc/<pid>/exefile gives it (absolute, also for a relative start)")
     real_path: str | None = Field(description="That path with symlinks resolved; both had to be below /tmp or /data")
     start_ns: int | None = Field(None, description="The process's start time in ns, its creation token: checked again before each signal")
     signal: str
@@ -612,8 +612,9 @@ async def build(
     "Returns outcome (exited | crashed | killed | timeout | stopped | exec_failed), exit_code or signal_name, and for crashes the exact core_path "
     "obtained from dumper (DCMD_DUMPER_NOTIFYEVENT pulse, then DCMD_DUMPER_GETPATH), moved into the run's own directory. "
     "Checks the ELF arch and loader first. Arguments are an array, never interpreted by a shell. For long-running programs use run_start. "
-    "To run a program that is already installed on the target, pass remote_binary (a target path) instead of binary; it must be an executable "
-    "regular file outside /tmp/qnx-mcp, and get_crash then needs binary=<host path of its unstripped build> to symbolise a crash.",
+    "To run a program that is already installed on the target, pass remote_binary (a target path) instead of binary: an executable regular file "
+    "below /tmp or /data (QNX_MCP_REMOTE_BINARY_ROOTS) and outside /tmp/qnx-mcp, never a shell or anything in /proc/boot, /bin, /sbin, /usr or "
+    "/system (checked by real path on the target). get_crash then needs binary=<host path of its unstripped build> to symbolise a crash.",
     annotations=_ann(False, True, False),
 )
 async def deploy_and_run(
@@ -625,7 +626,7 @@ async def deploy_and_run(
     cwd: Annotated[str | None, Field(description="Working directory on the target")] = None,
     max_output_kb: Annotated[int, Field(ge=1, le=4096, description="Cap for each of stdout and stderr")] = 64,
     core_wait_s: Annotated[float, Field(ge=0, le=300, description="How long to wait for dumper to finish a core")] = 15,
-    remote_binary: Annotated[str | None, Field(description="Instead of binary: absolute path of an executable already on the target, e.g. /data/home/svc/bin/sensord")] = None,
+    remote_binary: Annotated[str | None, Field(description="Instead of binary: absolute path of an executable already on the target below /tmp or /data, e.g. /data/opt/svc/sensord")] = None,
 ) -> Annotated[CallToolResult, RunResult]:
     return await _acall(lambda: ops.deploy_and_run(CFG, target, binary, args, timeout_s, env, cwd, max_output_kb, core_wait_s, remote_binary))
 
@@ -635,7 +636,8 @@ async def deploy_and_run(
     description="Like deploy_and_run, but the program runs in the background (its own session on the target) so the call returns at once. "
     "Output goes to files on the target (capped per stream); read it with run_poll using offsets, end it with run_stop. "
     "timeout_s is a hard limit on its lifetime. processes and logs keep working while it runs. Crashes leave a core for get_crash(run_id). "
-    "remote_binary (a target path) instead of binary starts a program that is installed on the target, for example to restart a service.",
+    "remote_binary (a target path) instead of binary starts a program that is installed on the target, for example to restart a service "
+    "(same rules as deploy_and_run: below /tmp or /data, never a shell or a system program).",
     annotations=_ann(False, True, False),
 )
 async def run_start(
@@ -764,8 +766,8 @@ async def file_list(
 @mcp.tool(
     title="Stop a process on a QNX target",
     description="Stop a process that qnx-mcp did not start (for runs use run_stop), for example a hung program or a service you want to restart. "
-    "Allowed only when its executable lives below /tmp or /data, checked on the target at call time: the path pidin reports for that pid, "
-    "and the same path with symlinks resolved. The process is identified by pid and start time; the start time, critical flag and executable "
+    "Allowed only when its executable lives below /tmp or /data, checked on the target at call time: the executable in /proc/<pid>/exefile "
+    "(which also covers services started with a relative path such as ./statusd) and the same path with symlinks resolved. The process is identified by pid and start time; the start time, critical flag and executable "
     "are checked again right before each signal, and nothing is sent if they changed. Never pid 1, procnto, a critical process, qnx-mcp's runner, or anything in /proc/boot, /bin, /sbin, "
     "/usr or /system; refusals are process_not_allowed errors that name the rule. Sends signal (default TERM), waits up to grace_s for the "
     "process to exit and, with kill_after_grace, then sends SIGKILL. The result says what was stopped and whether it exited.",

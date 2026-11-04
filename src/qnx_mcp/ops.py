@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -38,6 +39,8 @@ LIST_MAX = 1000
 STOP_ROOTS = ("/tmp", "/data")
 SYSTEM_DIRS = ("/proc/boot", "/bin", "/sbin", "/usr", "/system")
 STOP_SIGNALS = ("TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "KILL")
+# remote_binary never starts these, wherever they are (QNX's own small shells included)
+SHELL_NAMES = ("sh", "ksh", "mksh", "pdksh", "bash", "dash", "ash", "zsh", "csh", "tcsh", "fish", "esh", "fesh", "uesh", "toybox", "busybox", "toysh")
 _sha_cache: dict[tuple[str, int, int], str] = {}
 _sha_lock = threading.Lock()
 
@@ -262,6 +265,9 @@ def _program(cfg: Config, t: Target, binary: str | None, remote_binary: str | No
         if _in_managed_dir(remote):
             raise QnxMcpError("path_not_allowed", f"remote_binary may not be inside {REMOTE_ROOT}: {remote}",
                               hint="Run your own builds with binary=<host path>; remote_binary is for programs installed on the target.")
+        why = remote_binary_refusal(cfg, remote)
+        if why:
+            raise QnxMcpError("path_not_allowed", f"remote_binary {remote} is refused: {why}", hint=_REMOTE_HINT)
         return {"remote_binary": True, "binary": None, "binary_snapshot": None, "binary_sha256": None, "build_id": None, "remote_path": remote}
     local = check_host_path(cfg, binary, "binary")
     if not REMOTE_NAME_RE.fullmatch(local.name):
@@ -273,6 +279,28 @@ def _program(cfg: Config, t: Target, binary: str | None, remote_binary: str | No
         raise
     return {"remote_binary": False, "binary": str(local), "binary_snapshot": str(snap), "binary_sha256": sha, "build_id": info.get("build_id"),
             "remote_path": f"{REMOTE_ROOT}/apps/{sha[:16]}/{local.name}", "size": info["size"]}
+
+
+_REMOTE_HINT = ("remote_binary starts programs installed below the allowed roots (QNX_MCP_REMOTE_BINARY_ROOTS, default /tmp and /data), "
+                "never a shell or a system program; build what you need and run it with binary=<host path>.")
+
+
+def remote_binary_refusal(cfg: Config, path: str) -> str | None:
+    """Why remote_binary must not start this path (as given; the runner applies the same rules to its real path)."""
+    if os.path.basename(path) in SHELL_NAMES:
+        return "it is a shell"
+    for d in SYSTEM_DIRS:
+        if path == d or path.startswith(d + "/"):
+            return f"it is in {d}, a system directory"
+    if not any(path.startswith(r.rstrip("/") + "/") for r in cfg.remote_binary_roots):
+        return f"it is not below {' or '.join(cfg.remote_binary_roots) or 'any allowed root (QNX_MCP_REMOTE_BINARY_ROOTS is empty)'}"
+    return None
+
+
+def _policy_argv(cfg: Config) -> list[str]:
+    """The runner's program policy for remote_binary (checked by real path on the target, before and at the start)."""
+    return ["-x", REMOTE_ROOT, *[x for r in cfg.remote_binary_roots for x in ("-A", r)], *[x for d in SYSTEM_DIRS for x in ("-F", d)],
+            *[x for n in SHELL_NAMES for x in ("-N", n)]]
 
 
 def _runner_refusal(text: str) -> tuple[str, str | None, dict[str, Any]] | None:
@@ -291,12 +319,12 @@ def _install_program(t: Target, ip: str, prog: dict[str, Any], remote_run: str) 
         return prepare(t, ip, [(Path(prog["binary_snapshot"]), prog["remote_path"], prog["binary_sha256"], prog["size"], "0755")], [remote_run], prune=True)
     runner = prepare(t, ip, [], [remote_run], prune=True)
     remote = prog["remote_path"]
-    r = t.ssh([runner, "-H", remote, "-x", REMOTE_ROOT], timeout=60, what="remote_binary check", ip=ip, check=False)
+    r = t.ssh([runner, "-H", remote, *_policy_argv(t.cfg)], timeout=60, what="remote_binary check", ip=ip, check=False)
     refused = _runner_refusal(r.out)
     if refused:
-        msg, err, _ = refused
-        if "own directory" in msg:
-            raise QnxMcpError("path_not_allowed", f"{remote} resolves into {REMOTE_ROOT}", hint="remote_binary is for programs installed on the target, not qnx-mcp's files.")
+        msg, err, rep_ = refused
+        if msg.startswith("refused: "):
+            raise QnxMcpError("path_not_allowed", f"remote_binary {remote} is refused: {msg[9:]} (it resolves to {rep_.get('real_path')})", hint=_REMOTE_HINT)
         if msg == "open" and err == "No such file or directory":
             raise QnxMcpError("file_not_found", f"{remote} does not exist on {t.name}", hint="Check the path with file_list or processes (path column).")
         raise QnxMcpError("invalid_argument", f"{remote} cannot be run: {msg}" + (f" ({err})" if err else ""), hint="remote_binary must name an executable regular file.")
@@ -308,9 +336,9 @@ def _install_program(t: Target, ip: str, prog: dict[str, Any], remote_run: str) 
     return runner
 
 
-def _program_argv(prog: dict[str, Any]) -> list[str]:
+def _program_argv(cfg: Config, prog: dict[str, Any]) -> list[str]:
     """Runner options before '--': a target program is checked again just before it starts."""
-    return ["-x", REMOTE_ROOT] if prog["remote_binary"] else []
+    return _policy_argv(cfg) if prog["remote_binary"] else []
 
 
 def _record_fields(prog: dict[str, Any]) -> dict[str, Any]:
@@ -356,7 +384,7 @@ def deploy_and_run(
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
         }
         save_record(t, rec)
-        argv = [runner, "-S", *opts, *_program_argv(prog), "-R", remote_run, "--", prog["remote_path"], *args]
+        argv = [runner, "-S", *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args]
         try:
             r = t.ssh(argv, timeout=timeout_s + core_wait_s + 30, what="deploy_and_run", ip=ip, check=False, hold_stdin=True,
                       max_output=12 * max_output_kb * 1024 + (1 << 20))  # JSON escaping can grow a byte to 6, two streams
@@ -364,8 +392,8 @@ def deploy_and_run(
                 raise QnxMcpError("runner_failed", "the runner's report was larger than its budget and was cut off")
             refused = _runner_refusal(r.out) if prog["remote_binary"] else None
             if refused:
-                raise QnxMcpError("path_not_allowed" if "own directory" in refused[0] else "invalid_argument",
-                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint="It changed after the check; name an executable outside /tmp/qnx-mcp.")
+                raise QnxMcpError("path_not_allowed" if refused[0].startswith("refused: ") else "invalid_argument",
+                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint=_REMOTE_HINT)
             res = _parse_runner(r.out, "deploy_and_run")
         except BaseException as e:
             rec.update(state="failed", error=getattr(e, "code", type(e).__name__))
@@ -422,12 +450,12 @@ def run_start(
         save_record(t, rec)  # ownership is on disk before anything is launched
         _reconcile_starts(t, ip, exclude=rid)
         try:
-            r = t.ssh([runner, "-B", remote_run, *opts, *_program_argv(prog), "-R", remote_run, "--", prog["remote_path"], *args],
+            r = t.ssh([runner, "-B", remote_run, *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args],
                       timeout=30, what="run_start", ip=ip, check=False)
             refused = _runner_refusal(r.out) if prog["remote_binary"] else None
             if refused:
-                raise QnxMcpError("path_not_allowed" if "own directory" in refused[0] else "invalid_argument",
-                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint="It changed after the check; name an executable outside /tmp/qnx-mcp.")
+                raise QnxMcpError("path_not_allowed" if refused[0].startswith("refused: ") else "invalid_argument",
+                                  f"{prog['remote_path']} was refused just before it started: {refused[0]}", hint=_REMOTE_HINT)
             res = _parse_runner(r.out, "run_start")
             if not res.get("started"):
                 raise QnxMcpError("runner_failed", f"background run did not start: {res.get('error')}")
@@ -778,18 +806,22 @@ def list_result(target: str, remote: str, res: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def stop_refusal(pid: int, name: str | None, path: str | None) -> str | None:
-    """Why process_stop must leave this process alone, judged from what pidin reports (None: allowed so far;
-    the runner checks again on the target through the process itself, including the real path)."""
+def same_executable(shown: str | None, exefile: str | None) -> bool:
+    """pidin's path (relative to / for an absolute start, else as typed, e.g. './statusd') names the executable
+    in /proc/<pid>/exefile (the start directory joined with a relative path): equal, or its tail after a '/'."""
+    return bool(shown and exefile) and (shown == exefile or exefile.endswith("/" + shown))
+
+
+def stop_refusal(pid: int, name: str | None, exefile: str | None) -> str | None:
+    """Why process_stop must leave this process alone, judged from its executable as /proc/<pid>/exefile gives it
+    (None: allowed so far; the runner checks again through the process itself, including the real path)."""
     if pid <= 1:
         return "pid 1 is procnto, the QNX microkernel and process manager"
-    if (name or "").startswith("procnto") or "procnto" in os.path.basename(path or ""):
+    if (name or "").startswith("procnto") or "procnto" in os.path.basename(exefile or ""):
         return "it is procnto, the QNX microkernel and process manager"
-    if not path:
-        return "pidin reports no executable path for it"
-    exe = path if path.startswith("/") else "/" + path  # pidin shows most paths without the leading '/'
-    if any(c in ("", ".", "..") for c in exe.split("/")[1:]):
-        return f"its executable path {path!r} is not a plain absolute path"
+    if not exefile or not exefile.startswith("/"):
+        return "its executable path cannot be read from /proc/<pid>/exefile"
+    exe = posixpath.normpath(exefile)  # './x' and 'sub/../x' from relative starts
     for d in SYSTEM_DIRS:
         if exe == d or exe.startswith(d + "/"):
             return f"its executable {exe} is in {d}, a system directory"
@@ -822,10 +854,13 @@ def process_stop(cfg: Config, target: str, pid: int, signal: str = "TERM", grace
             raise QnxMcpError("process_not_found", f"no process {pid} on {target}", hint="Call processes to find the pid (it may have exited).")
         ident = _parse_runner(ident_text, "process discovery")
         proc = found[0]
-        about = {k: proc.get(k) for k in ("pid", "ppid", "name", "path", "args")}
+        about = {k: proc.get(k) for k in ("pid", "ppid", "name", "path", "args")} | {"exefile": ident.get("exefile")}
         if ident.get("path") != proc.get("path"):
             raise QnxMcpError("process_not_found", f"process {pid} changed while it was inspected", hint="Call processes again and retry with the current pid.", process=about)
-        why = "it is a critical process" if ident.get("critical") else stop_refusal(pid, proc.get("name"), proc.get("path"))
+        if ident.get("exefile") and not same_executable(proc.get("path"), ident["exefile"]):
+            raise QnxMcpError("process_not_allowed", f"process {pid}: /proc/{pid}/exefile ({ident['exefile']}) and pidin ({proc.get('path')}) name different executables",
+                              hint=hint, process=about)
+        why = "it is a critical process" if ident.get("critical") else stop_refusal(pid, proc.get("name"), ident.get("exefile"))
         if why:
             raise QnxMcpError("process_not_allowed", f"process {pid} ({proc.get('name')}) is not stopped: {why}", hint=hint, process=about)
         argv = [runner, "-Z", str(pid), "-T", str(ident["start_ns"]), "-q", proc["path"], "-s", "SIG" + signal, "-w", str(int(grace_s * 1000)),
@@ -979,6 +1014,8 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")
     add("targets_dir", True, str(cfg.targets_dir))
+    add("remote_binary_roots", True, (":".join(cfg.remote_binary_roots) or "none: every remote_binary is refused")
+        + " (QNX_MCP_REMOTE_BINARY_ROOTS; shells and /proc/boot, /bin, /sbin, /usr, /system are always refused)")
     add("workspace", True, ", ".join(str(w) for w in cfg.workspace) if cfg.workspace else "not set: host paths are not confined (set QNX_MCP_WORKSPACE to confine them)")
     for c in checks:
         if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):

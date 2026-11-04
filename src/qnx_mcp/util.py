@@ -56,6 +56,7 @@ class Config:
     leases: Path
     workspace: tuple[Path, ...] = ()
     trust_first_use: bool = False
+    remote_binary_roots: tuple[str, ...] = ("/tmp", "/data")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -65,6 +66,11 @@ class Config:
         # No default: an unset or empty allowlist allows nothing ("*" must be explicit).
         allow = tuple(p.strip() for p in env.get("QNX_MCP_ALLOW_TARGETS", "").split(",") if p.strip())
         workspace = tuple(Path(p).expanduser() for p in env.get("QNX_MCP_WORKSPACE", "").split(os.pathsep) if p.strip())
+        # Set but empty, or only invalid entries: no root, so every remote_binary is refused (fails closed).
+        roots = env.get("QNX_MCP_REMOTE_BINARY_ROOTS")
+        rb_roots = ("/tmp", "/data") if roots is None else tuple(
+            r.strip() for r in roots.split(os.pathsep)
+            if REMOTE_PATH_RE.fullmatch(r.strip()) and not any(c in ("", ".", "..") for c in r.strip().split("/")[1:]))
         return cls(
             sdp_env=Path(env.get("QNX_MCP_SDP_ENV", str(home / "qnx800" / "qnxsdp-env.sh"))),
             targets_dir=Path(env.get("QNX_MCP_TARGETS_DIR", str(base / "targets"))),
@@ -74,6 +80,7 @@ class Config:
             leases=Path(env.get("QNX_MCP_DHCP_LEASES", "/var/lib/libvirt/dnsmasq/virbr0.status")),
             workspace=workspace,
             trust_first_use=env.get("QNX_MCP_TRUST_FIRST_USE", "") == "1",
+            remote_binary_roots=rb_roots,
         )
 
     def allowed(self, name: str) -> bool:
