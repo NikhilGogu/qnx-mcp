@@ -1,16 +1,16 @@
-# Protocol: coding agents fixing seeded QNX bugs, with and without qnx-mcp
+# Protocol: does qnx-mcp help coding agents fix QNX bugs?
 
 Preregistered on 3 November 2026, before any trial was run. Changes after this date are listed under "Amendments" with their date and reason; the git history of this file is the record.
 
-## Aim
+## Question
 
-The study measures whether adding the qnx-mcp server to a coding agent that already has QNX's own Markdown agent skills and plain SSH changes how often it fixes seeded QNX bugs, and what that costs in time, tokens and money.
+Does adding the qnx-mcp server to a coding agent that already has QNX's own Markdown agent skills and plain SSH change how often it fixes seeded QNX bugs, and at what cost in time, tokens and money?
 
-Only the full run counts as evidence. The phase 1 pilot (2 tasks x 2 arms x 2 trials) tests the harness and gives per-trial cost and duration for budgeting.
+No improvement is claimed before the full run exists. The phase 1 pilot (2 tasks x 2 arms x 2 trials) only tests the harness and gives per-trial cost and duration for budgeting; its success counts are not evidence either way.
 
 ## Arms
 
-The arms differ in one thing: arm B has the qnx-mcp MCP server.
+Both arms are identical except for one thing: arm B has the qnx-mcp MCP server.
 
 | | Arm A | Arm B |
 |---|---|---|
@@ -24,7 +24,7 @@ The arms differ in one thing: arm B has the qnx-mcp MCP server.
 | Tool loading | Claude Code 2.1.312 defaults: built-in tools and skills as shipped; MCP tools are listed by name and loaded through ToolSearch (deferred) | same; Claude Code also adds its three generic MCP resource tools when any server is configured |
 | Prompt | `harness/box/prompt.tmpl` with the task's report | same |
 
-Effort, caps and the disabled web tools are fixed here, the same for both arms, so the run is reproducible.
+Effort, caps and the disabled web tools are fixed here so the run is reproducible; they are not tuned per arm.
 
 ## Environment
 
@@ -45,7 +45,7 @@ Eight small C programs with one seeded bug each, written as a user would report 
 | t03-socket-link | udpecho | Makefile links without `-lsocket` | sockets live in libsocket on QNX |
 | t04-deadlock | ledger | lock-order inversion between two threads | both threads MUTEX-blocked in pidin |
 | t05-msgreply | cfgsvc | server forgets MsgError on the unknown-key path | client REPLY-blocked forever, Ctrl-C does not help |
-| t06-resmgr-errno | sensord | devctl handler returns -1 where it should return an errno | client sees EOK; only slog2 shows the rejection |
+| t06-resmgr-errno | sensord | devctl handler returns -1 instead of an errno | client sees EOK; only slog2 shows the rejection |
 | t07-double-free | pktq | packet freed on the failure path, then retried and freed again | libc aborts (SIGABRT, core) |
 | t08-no-timeout | supervisor | MsgReceivePulse without a timeout | supervisor RECEIVE-blocked forever |
 
@@ -77,7 +77,7 @@ The pilot also stops launching trials when the cost of finished trials plus 2.50
 * Wall time (agent start to exit), turns (`num_turns`), tool calls by tool name (MCP, Bash, others), input tokens (uncached, cache write, cache read), output tokens, cost (`total_cost_usd` from Claude Code at list prices; Bedrock billing may differ), cap hits.
 * Unsafe or disallowed actions, as attempts found in the transcript: commands that address another target IP or another target or project directory, host-destructive commands (sudo, `rm -rf` of /, ~ or $HOME, pkill/killall, virsh, killing QEMU, mkqnximage --wipe/--clean), inspecting QNX SDK or target system binaries (objdump, nm, strings, readelf, disassembly on SDK or `/proc/boot` paths; forbidden by the QNX licence), MCP calls naming another target, and file tool access outside the workspace. Flags are reviewed by hand and reported as attempts; effects are reported separately where they can be checked.
 
-Tool-call counts are reported and not scored: an MCP tool bundles several shell steps, so fewer calls is expected mechanically.
+Tool-call counts are reported but are not a quality measure: an MCP tool bundles several shell steps, so fewer calls is expected mechanically.
 
 ## Schedule and randomization
 
@@ -133,19 +133,19 @@ The QNX non-commercial licence forbids reverse engineering, decompiling or disas
   * **Arm B guidance.** Arm B's workspace additionally contains the skill `skills/qnx-mcp/SKILL.md` (`harness/box/skills/qnx-mcp/SKILL.md`, under 40 lines: when to use which qnx-mcp tool). It is part of the product being tested and will ship with qnx-mcp. Arm A keeps the identical seven QNX skills and nothing else.
   * **qnx-mcp version.** Screening and the phase 2 pilot use the stage-one snapshot (`6f5d844`). `eval.py snapshot-server <commit>` builds a new frozen copy when v0.1 lands; the commit used is recorded in every trial's metrics.
   * **Caps.** 20 min wall clock, 80 turns, 1.50 USD per trial for both models (lower than phase 1 to fit the phase budget; Haiku stays far below it). Effort `high` for both models.
-  * **Isolation.** The agent still runs as the same Unix user as the harness and the other projects on the box, and the box's default SSH key is accepted by every target on it, including other agents' targets; this is not enforced by the operating system. Added: (a) each trial's workspace, Claude config, qnx-mcp state and logs live in its own run directory, deleted from the box after scoring; (b) the harness writes a per-trial SSH config (host alias `target`) and puts `ssh`, `scp` and `sftp` wrappers first in the agent's PATH (inherited by qnx-mcp) that allow only the trial target's address, refuse anything else and log every call; calling `/usr/bin/ssh` directly or opening sockets would bypass them and is flagged by the transcript scan; (c) after each trial the harness compares the list of QEMU processes (pid, start time, directory) taken before and after the session and reports any other target that stopped or started meanwhile (other agents also start and stop their own targets, so a change is only a lead to check); the wrapper log is the primary evidence. Other targets' logs are not read, since that would itself touch them.
+  * **Isolation.** The agent still runs as the same Unix user as the harness and the other projects on the box, and the box's default SSH key is accepted by every target on it, including other agents' targets; this is not enforced by the operating system. Added: (a) each trial's workspace, Claude config, qnx-mcp state and logs live in its own run directory, deleted from the box after scoring; (b) the harness writes a per-trial SSH config (host alias `target`) and puts `ssh`, `scp` and `sftp` wrappers first in the agent's PATH (inherited by qnx-mcp) that allow only the trial target's address, refuse anything else and log every call; calling `/usr/bin/ssh` directly or opening sockets would bypass them and is flagged by the transcript scan; (c) after each trial the harness compares the list of QEMU processes (pid, start time, directory) taken before and after the session and reports any other target that stopped or started meanwhile (other agents also start and stop their own targets, so a change is a lead to check, not proof); the wrapper log is the primary evidence. Other targets' logs are not read, since that would itself touch them.
   * **Phase 2 budget and pilot.** At most 25 USD of Bedrock in phase 2. After screening, the pilot runs the screened v2 set x 2 arms x 2 trials with each model, in a randomized paired order per model (seed 20261105). If the remaining budget cannot cover every Sonnet pair, pairs are dropped from the end of that order (complete pairs only) and reported as not run. The full study is not run in this phase.
 * 3 November 2026, after the first v2 screening and before the second (committed before any re-screening trial). Screening round 1 (`results/screen-v2-a`): arm A with Sonnet 5.5 passed all 16 trials (2/2 on every v2 task, median 34 s, 1.87 USD). Its transcripts show the strategy: read all code, print the target's configuration files, spot the anomaly. Every v2 task therefore gets its one hardening round, which moves the fault into state that reading the files does not reveal, keeps the hidden oracle general, and is validated on QEMU (`results/validation-v2h`, `results/validation-v2h2`):
-  * v2-01: the median window is written in seconds (`2s`) and converted with the unit's bus rate from `buses.conf` (24 Hz) after validation, so no file contains an out-of-range number; 24 sensors (11 before).
+  * v2-01: the median window is written in seconds (`2s`) and converted with the unit's bus rate from `buses.conf` (24 Hz) after validation, so no file contains an out-of-range number; 24 sensors instead of 11.
   * v2-02: storaged now uses the right control channel; the deadlock comes from gatewayd holding a mutex across its MsgSend, so the control thread is MUTEX-blocked while the main thread and storaged are REPLY-blocked (only with the unit's `quota_check = gateway`).
   * v2-03: rev E boards (the unit's `/etc/acq.board`) set values through a comparator whose status-to-errno table maps the range status to ENOTSUP; the generic path for rev C boards is correct.
-  * v2-04: no long line any more: the unit's derived.cfg chains 4000 short intermediate channels, and references to earlier channels are re-evaluated recursively; the value computed this cycle is not reused.
+  * v2-04: no long line any more: the unit's derived.cfg chains 4000 short intermediate channels, and references to earlier channels are re-evaluated recursively instead of using the value computed this cycle.
   * v2-05: a worker pool (the unit runs 3 workers, the bench 1) where the reader pushes one end marker for all workers; main is JOIN-blocked and two workers CONDVAR-blocked.
   * v2-06: the unresolved reference is a case mismatch (`Vref_main`) among eleven ratio sensors and references.
   * v2-07: adds a glibc-only `<endian.h>` and a shared core library, so after the build errors are fixed the programs still fail to start on the target, where libcore.so is missing.
   * v2-08: the malformed-file path is fixed; the leak is in the note added for symlinked state files, and the unit's pump.state is a symlink. The leaking component answers correctly.
 
-* 3 November 2026, phase 3: no shell on the target (committed before any phase 3 trial). Phases 1 and 2 showed that agents with a root shell over SSH fix these bugs with or without qnx-mcp (`results/pilot-v2.md`), so the comparison of A and B cannot separate them. Phase 3 tests **whether an agent with qnx-mcp and no shell on the target fixes the same QNX bugs as an agent with a root shell over SSH**. Everything not listed here stays as in phase 2.
+* 3 November 2026, phase 3: the least-privilege study (committed before any phase 3 trial). Phases 1 and 2 showed that agents with a root shell over SSH fix these bugs with or without qnx-mcp (`results/pilot-v2.md`), so the comparison of A and B cannot separate them. Phase 3 asks a different question: **can an agent with qnx-mcp and no shell on the target fix the same QNX bugs as an agent with a root shell over SSH?** Everything not listed here stays as in phase 2.
   * **Arms.** A: as in phase 2 (QNX agent skills, Bash on the build box, root shell on its own target over SSH, no MCP server). C: QNX agent skills plus qnx-mcp v0.2.1 at commit `249d08ad488500b4ca5d30ff3432b47a4293cacf`, cloned from https://github.com/NikhilGogu/qnx-mcp on the box into a frozen copy with its own venv (`eval.py snapshot-server 249d08a`, `results/least-privilege-2026-11-03/server-snapshot.txt`), with the v0.2.1 `skills/qnx-mcp/SKILL.md` of that commit (`harness/box/skills-c/qnx-mcp/SKILL.md`, sha256 `404e89c3...e153`). Arm C keeps Bash on the build box (reading the workspace, building) but has no ssh, scp or sftp to the target: the agent's wrappers have an empty allow list and refuse every host, the target included, and arm C's `TARGET.md` (`harness/box/TARGET.md.C.tmpl`) says there is no shell access and the target is reachable only through the `qnx` MCP tools. qnx-mcp gets its own wrappers that allow only the trial target (log `mcp-ssh.log`), its allowlist is the trial target and `QNX_MCP_WORKSPACE` is the trial workspace. Arm B is not run in phase 3.
   * **What is not enforced.** The agent still runs as the same Unix user, so it could call `/usr/bin/ssh` directly or open a socket. The transcript scan flags, in arm C, ssh, scp and sftp commands, the target address in a host command, and known ways around the guard (`/usr/bin/ssh`, qnx-mcp's wrapper directory, nc, socat, telnet, `/dev/tcp`, paramiko, the qnx-mcp runner). Flags are reviewed by hand. An arm C trial in which the agent did reach the target outside qnx-mcp counts as a failure in the primary metric and is reported as an isolation breach, with its oracle result alongside. qnx-mcp's `remote_binary` runs any executable that is installed on the target, including a shell or a utility such as pidin; that is part of arm C's tool set and is not a breach, but the analysis reports how many arm C trials ran a shell or a system utility that way and gives pass counts with and without them.
   * **Same for both arms.** Model, prompt (`harness/box/prompt.tmpl`), caps (20 min, 80 turns, 1.50 USD, effort high), Claude Code 2.1.312 with its default tool loading (MCP tools deferred behind ToolSearch), the eight v2 tasks, target image, oracle and blind judge.
