@@ -10,13 +10,17 @@
  *       output goes to dir/stdout and dir/stderr, the final report to dir/status.json
  *   qnx-mcp-run -P dir -O out_off -E err_off -L max     poll a background run (output from cursors)
  *   qnx-mcp-run -K dir [-w wait_ms]                     stop a background run through its control FIFO
- *   qnx-mcp-run -H file [-x dir]                        size, mode, SHA-256 and real path of a regular file;
- *       -x refuses a file whose real path is inside dir
+ *   qnx-mcp-run -H file [policy]                        size, mode, SHA-256 and real path of a regular file;
+ *       with a policy, refuse a program it does not allow
  *   qnx-mcp-run -l dir -L max                           the first max entries of a directory by name (lstat)
- *   qnx-mcp-run -Y pid                                  identity of a process: start time (ns), executable path, flags
+ *   qnx-mcp-run -Y pid                                  identity of a process: start time (ns), executable paths, flags
  *   qnx-mcp-run -Z pid -T start_ns -q path -s SIGNAME -w grace_ms [-f] -A root... -F dir...  stop a process that
- *       qnx-mcp did not start, if it is still the process with that start time, its executable path is path and
- *       lies inside a root and outside every dir; -f sends SIGKILL when it has not exited after grace_ms
+ *       qnx-mcp did not start, if it is still the process with that start time, the process manager still shows
+ *       path, and its executable (/proc/<pid>/exefile) lies inside a root and outside every dir; -f sends SIGKILL
+ *       when it has not exited after grace_ms
+ * Policy (-H, runs, -Z): -x dir (qnx-mcp's own directory), -A root and -F dir (repeatable), -N name (a program
+ *   name to refuse, repeatable). A program is allowed if, as given (lexically normalised) and by its real path,
+ *   it is outside dir and every -F dir, inside some -A root (when any is given), and neither name is an -N name.
  *   qnx-mcp-run -X file -L max                          copy at most max bytes of a regular file to stdout (raw)
  *   qnx-mcp-run -G dir -k keep -a age_s [-p name]...    prune run or app directories that are not in use
  *   qnx-mcp-run -D rel -r root [-x dir] [-c] [-I tmp [-n]]  check, or install tmp as, root/rel without
@@ -25,7 +29,7 @@
  * Run options: -t timeout_ms, -m max bytes kept per stream, -w core_wait_ms, -C cwd,
  *   -e NAME=VALUE (repeatable), -R dir (move the core file there and lock dir/active while running),
  *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here),
- *   -x dir (refuse a program that is not an executable regular file or whose real path is inside dir).
+ *   policy options (refuse a program that is not an executable regular file or that the policy does not allow).
  *
  * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
  * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
@@ -293,23 +297,117 @@ static int inside(const char *path, const char *dir)
     return under(path, dir) || (realpath(dir, real) != NULL && under(path, real));
 }
 
-/* A program that -x allows: an executable regular file whose real path is not inside forbidden. */
-static void check_program(const char *prog, const char *forbidden)
+struct policy {
+    const char *managed; /* -x */
+    char **roots;        /* -A */
+    int nroots;
+    char **forbid;       /* -F */
+    int nforbid;
+    char **names;        /* -N */
+    int nnames;
+};
+
+static int policy_set(const struct policy *p)
+{
+    return p->managed != NULL || p->nroots || p->nforbid || p->nnames;
+}
+
+/* "." and "x/.." removed without resolving links: the path as it was given, in normal form. */
+static void lexical(const char *in, char *out, size_t n)
+{
+    char buf[PATH_MAX];
+    size_t len = 0;
+    snprintf(buf, sizeof buf, "%s", in);
+    out[0] = '\0';
+    char *save = NULL;
+    for (char *c = strtok_r(buf, "/", &save); c != NULL; c = strtok_r(NULL, "/", &save)) {
+        if (strcmp(c, ".") == 0) {
+            continue;
+        }
+        if (strcmp(c, "..") == 0) {
+            char *slash = strrchr(out, '/');
+            len = slash ? (size_t)(slash - out) : 0;
+            out[len] = '\0';
+            continue;
+        }
+        len += (size_t)snprintf(out + len, len < n ? n - len : 0, "/%s", c);
+    }
+    if (out[0] == '\0') {
+        snprintf(out, n, "/");
+    }
+}
+
+static const char *base_name(const char *path)
+{
+    const char *b = strrchr(path, '/');
+    return b ? b + 1 : path;
+}
+
+/* NULL if the policy allows the program at path (absolute, as given) whose real path is real, else why not. */
+static const char *policy_refusal(const struct policy *p, const char *path, const char *real)
+{
+    char norm[PATH_MAX];
+    lexical(path, norm, sizeof norm);
+    if (p->managed != NULL && (inside(norm, p->managed) || inside(real, p->managed))) {
+        return "it is inside qnx-mcp's own directory";
+    }
+    for (int i = 0; i < p->nforbid; i++) {
+        if (inside(norm, p->forbid[i]) || inside(real, p->forbid[i])) {
+            return "it is in a system directory";
+        }
+    }
+    for (int i = 0; i < p->nnames; i++) {
+        if (strcmp(base_name(norm), p->names[i]) == 0 || strcmp(base_name(real), p->names[i]) == 0) {
+            return "it is a shell";
+        }
+    }
+    if (p->nroots) {
+        int a = 0, b = 0;
+        for (int i = 0; i < p->nroots; i++) {
+            a |= inside(norm, p->roots[i]);
+            b |= inside(real, p->roots[i]);
+        }
+        if (!a || !b) {
+            return "it is outside the allowed roots";
+        }
+    }
+    return NULL;
+}
+
+static void refuse_exe(const char *what, const char *exe, const char *real)
+{
+    static char msg[160];
+    snprintf(msg, sizeof msg, "refused: %s", what);
+    j_head(stdout);
+    fputs(",\"usage_error\":", stdout);
+    j_cstr(stdout, msg);
+    fputs(",\"executable\":", stdout);
+    j_cstr(stdout, exe);
+    fputs(",\"real_path\":", stdout);
+    j_cstr(stdout, real);
+    puts("}");
+    fflush(stdout);
+    exit(2);
+}
+
+/* A program that a run may start: an executable regular file that the policy allows, checked right before the fork. */
+static void check_program(const char *prog, const struct policy *pol)
 {
     struct stat st;
     char real[PATH_MAX];
+    const char *why;
     if (stat(prog, &st) == -1 || realpath(prog, real) == NULL) {
         fail("program not found", errno);
     }
-    if (inside(real, forbidden)) {
-        fail("program is inside qnx-mcp's own directory", 0);
+    if ((why = policy_refusal(pol, prog, real)) != NULL) {
+        refuse_exe(why, prog, real);
     }
     if (!S_ISREG(st.st_mode) || (st.st_mode & 0111) == 0 || access(prog, X_OK) == -1) {
         fail("program is not an executable regular file", 0);
     }
 }
 
-static int mode_hash(const char *path, const char *forbidden)
+static int mode_hash(const char *path, const struct policy *pol)
 {
     /* O_NONBLOCK: opening a FIFO must not wait for a writer; it is refused below like any non-regular file */
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -324,8 +422,9 @@ static int mode_hash(const char *path, const char *forbidden)
     if (realpath(path, real) == NULL) {
         fail("realpath", errno);
     }
-    if (forbidden != NULL && inside(real, forbidden)) {
-        fail("inside qnx-mcp's own directory", 0);
+    const char *why = policy_set(pol) ? policy_refusal(pol, path, real) : NULL;
+    if (why != NULL) {
+        refuse_exe(why, path, real);
     }
     struct sha256 c;
     sha256_init(&c);
@@ -1770,6 +1869,39 @@ static void fail_changed(const char *why)
     fail(msg, 0);
 }
 
+/* /proc/<pid>/exefile: the path of the executable used to run the process (QNX documents it; for a relative start
+ * it is the start directory joined with the relative path). The caller holds the process's ctl descriptor, which
+ * keeps the pid from being reused while this is read by name. */
+static int read_exefile(long pid, char *out, size_t n)
+{
+    char p[64];
+    snprintf(p, sizeof p, "/proc/%ld/exefile", pid);
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd == -1) {
+        return errno;
+    }
+    ssize_t k = read(fd, out, n - 1);
+    int e = errno;
+    close(fd);
+    if (k <= 0) {
+        return k == 0 ? ENOENT : e;
+    }
+    out[k] = '\0';
+    k = (ssize_t)strlen(out); /* the file ends with a NUL */
+    while (k > 0 && (out[k - 1] == '\n' || out[k - 1] == ' ')) {
+        out[--k] = '\0';
+    }
+    return out[0] == '/' ? 0 : EINVAL;
+}
+
+/* The process manager's path (what pidin shows: relative to / for absolute starts, else as typed) names the same
+ * executable as exefile: exefile equals it or ends with "/" plus it. */
+static int same_executable(const char *shown, const char *exefile)
+{
+    size_t a = strlen(shown), b = strlen(exefile);
+    return strcmp(shown, exefile) == 0 || (b > a && exefile[b - a - 1] == '/' && strcmp(exefile + b - a, shown) == 0);
+}
+
 /* -Y pid: what process_stop needs to recognise the process later (the start time is its creation token). */
 static int mode_pinfo(long pid)
 {
@@ -1789,27 +1921,17 @@ static int mode_pinfo(long pid)
     if ((e = proc_exe(fd, &x)) != EOK) {
         fail("executable path", e);
     }
+    char exefile[PATH_MAX];
+    int ee = read_exefile(pid, exefile, sizeof exefile);
     close(fd);
     j_head(stdout);
+    fputs(",\"exefile\":", stdout);
+    j_cstr(stdout, ee == 0 ? exefile : NULL);
     printf(",\"pid\":%ld,\"start_ns\":%llu,\"ppid\":%ld,\"critical\":%s,\"exiting\":%s,\"path\":", pid, (unsigned long long)info.start_time,
            (long)info.parent, info.crit_proc ? "true" : "false", (info.flags & (_NTO_PF_TERMING | _NTO_PF_ZOMBIE)) ? "true" : "false");
     j_cstr(stdout, x.d.path);
     puts("}");
     return 0;
-}
-
-static void refuse_exe(const char *what, const char *exe, const char *real)
-{
-    j_head(stdout);
-    fputs(",\"usage_error\":", stdout);
-    j_cstr(stdout, what);
-    fputs(",\"executable\":", stdout);
-    j_cstr(stdout, exe);
-    fputs(",\"real_path\":", stdout);
-    j_cstr(stdout, real);
-    puts("}");
-    fflush(stdout);
-    exit(2);
 }
 
 static int mode_pstop(long pid, uint64_t token, const char *expect, const char *signame, long grace_ms, int force, char **roots, int nroots,
@@ -1847,23 +1969,20 @@ static int mode_pstop(long pid, uint64_t token, const char *expect, const char *
     if (info.crit_proc) {
         fail("refused: critical process", 0);
     }
-    char exe[PATH_MAX + 2], real[PATH_MAX];
-    snprintf(exe, sizeof exe, "%s%s", dbg.d.path[0] == '/' ? "" : "/", dbg.d.path); /* pidin shows most paths without the leading '/' */
+    char exe[PATH_MAX], real[PATH_MAX];
+    if ((e = read_exefile(pid, exe, sizeof exe)) != 0) {
+        fail("refused: the executable path cannot be read from /proc", e);
+    }
+    if (!same_executable(dbg.d.path, exe)) {
+        fail("refused: /proc/<pid>/exefile and the process manager name different executables", 0);
+    }
     if (realpath(exe, real) == NULL) {
         fail("refused: the executable path does not resolve", errno);
     }
-    for (int i = 0; i < nforbid; i++) {
-        if (inside(exe, forbid[i]) || inside(real, forbid[i])) {
-            refuse_exe("refused: the executable is in a system or qnx-mcp directory", exe, real);
-        }
-    }
-    int in_exe = 0, in_real = 0;
-    for (int i = 0; i < nroots; i++) {
-        in_exe |= inside(exe, roots[i]);
-        in_real |= inside(real, roots[i]);
-    }
-    if (!in_exe || !in_real) {
-        refuse_exe("refused: the executable is outside the allowed roots", exe, real);
+    struct policy pol = {NULL, roots, nroots, forbid, nforbid, NULL, 0};
+    const char *refusal = policy_refusal(&pol, exe, real);
+    if (refusal != NULL) {
+        refuse_exe(refusal, exe, real);
     }
     int st = proc_state(fd);
     if (st < 0) {
@@ -1935,8 +2054,8 @@ int main(int argc, char *argv[])
     o.max_bytes = 65536;
     const char *bg_dir = NULL, *poll_dir = NULL, *stop_dir = NULL, *hash_path = NULL, *prune_dir = NULL, *cat_path = NULL;
     const char *dest = NULL, *root = NULL, *forbidden = NULL, *install = NULL, *list_dir = NULL, *expect = NULL, *signame = NULL;
-    char *protect[MAX_PROTECT], *roots[MAX_ROOTS], *forbid[MAX_ROOTS];
-    int nprotect = 0, create = 0, no_replace = 0, nroots = 0, nforbid = 0, force = 0;
+    char *protect[MAX_PROTECT], *roots[MAX_ROOTS], *forbid[MAX_ROOTS], *names[MAX_ROOTS * 2];
+    int nprotect = 0, create = 0, no_replace = 0, nroots = 0, nforbid = 0, force = 0, nnames = 0;
     long stop_pid = 0, info_pid = 0;
     unsigned long long token = 0;
     long keep = 20, age_s = 300;
@@ -1944,7 +2063,7 @@ int main(int argc, char *argv[])
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:N:")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -1986,6 +2105,12 @@ int main(int argc, char *argv[])
         case 'Z': stop_pid = num_arg(optarg, 0, LONG_MAX); break;
         case 'q': expect = optarg; break;
         case 'Y': info_pid = num_arg(optarg, 1, LONG_MAX); break;
+        case 'N':
+            if (nnames == MAX_ROOTS * 2) {
+                fail("too many -N", 0);
+            }
+            names[nnames++] = optarg;
+            break;
         case 'T': {
             char *end = NULL;
             errno = 0;
@@ -2011,8 +2136,9 @@ int main(int argc, char *argv[])
         default: fail("unknown option", 0);
         }
     }
+    struct policy pol = {forbidden, roots, nroots, forbid, nforbid, names, nnames};
     if (hash_path != NULL) {
-        return mode_hash(hash_path, forbidden);
+        return mode_hash(hash_path, &pol);
     }
     if (list_dir != NULL) {
         return mode_list(list_dir, max_chunk);
@@ -2045,8 +2171,8 @@ int main(int argc, char *argv[])
         fail("missing program", 0);
     }
     o.prog = &argv[optind];
-    if (forbidden != NULL) {
-        check_program(o.prog[0], forbidden); /* checked again here, just before the program starts */
+    if (policy_set(&pol)) {
+        check_program(o.prog[0], &pol); /* checked again here, just before the program starts */
     }
 
     struct sigaction sa;
