@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +65,10 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
 
     # /bin and /etc hold the host files these cases use; the default workspace is tested in test_default_workspace_confines_host_paths.
     ws = os.pathsep.join(["/bin", "/etc", str(tmp_path)])
+    # A host binary that is not a QNX one. /bin/ls can be a symlink to a file outside /bin, so use a copy
+    # inside the workspace.
+    host_ls = str(tmp_path / "ls")
+    shutil.copy(os.path.realpath("/bin/ls"), host_ls)
 
     async def go():
         async with mcp_client({**_env(tmp_path), "QNX_MCP_WORKSPACE": ws}) as c:
@@ -73,8 +78,8 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("target_status", {"name": "t0"}, "target_not_allowed"),
                 ("processes", {"target": "tb9"}, "target_down"),
                 ("logs", {"target": "tb9"}, "target_down"),
-                ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls"}, "not_a_qnx_binary"),
-                ("run_start", {"target": "tb9", "binary": "/bin/ls"}, "not_a_qnx_binary"),
+                ("deploy_and_run", {"target": "tb9", "binary": host_ls}, "not_a_qnx_binary"),
+                ("run_start", {"target": "tb9", "binary": host_ls}, "not_a_qnx_binary"),
                 ("deploy_and_run", {"target": "tb9", "binary": "relative/path"}, "invalid_argument"),
                 ("target_create", {"name": "tb9", "options": ["--ip=10.0.0.1"]}, "invalid_argument"),
                 ("target_create", {"name": "tb5", "cpus": 9}, "invalid_argument"),  # rejected by the input schema itself
@@ -104,7 +109,7 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/tmp/qnx-mcp/bin/qnx-mcp-run-0"}, "path_not_allowed"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/tmp/qnx-mcp"}, "path_not_allowed"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/data/../tmp/qnx-mcp/bin/x"}, "invalid_argument"),
-                ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls", "remote_binary": "/data/svc"}, "invalid_argument"),
+                ("deploy_and_run", {"target": "tb9", "binary": host_ls, "remote_binary": "/data/svc"}, "invalid_argument"),
                 ("run_start", {"target": "tb9"}, "invalid_argument"),
                 ("run_start", {"target": "tb9", "remote_binary": "/data/svc"}, "target_down"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/proc/boot/ksh"}, "path_not_allowed"),
