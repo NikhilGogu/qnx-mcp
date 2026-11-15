@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    # Runs the tests that need no QNX target: tests/test_units.py,
+    # tests/test_mcp_offline.py and tests/test_skill.py.
+    # The live-target tests (test_slice_e2e.py, test_shellfree_e2e.py,
+    # test_lifecycle_e2e.py) and the SDK build tests (test_build_sdk.py) need
+    # a QNX SDP and a running QEMU target, so they are not run on hosted runners.
+    # The on-target C runner (src/qnx_mcp/runner/qnx-mcp-run.c) includes QNX
+    # headers and is compiled with qcc on first use, so it is not compiled here.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e '.[test]'
+      - name: Offline tests
+        working-directory: tests
+        run: python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py
