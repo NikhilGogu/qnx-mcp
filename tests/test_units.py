@@ -500,3 +500,199 @@ def test_remote_binary_policy(tmp_path):
     assert remote_binary_refusal(narrow, "/data/opt/status/statusctl") is None and remote_binary_refusal(narrow, "/tmp/sv/stress")
     closed = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path), "QNX_MCP_REMOTE_BINARY_ROOTS": ""})
     assert closed.remote_binary_roots == () and "QNX_MCP_REMOTE_BINARY_ROOTS" in remote_binary_refusal(closed, "/tmp/x")
+
+
+# ---------------------------------------------------------------- build arguments and the workspace
+
+def _fake_sdp(tmp_path: Path) -> tuple[Config, Path, Path]:
+    """An SDP whose qcc, q++, make and cmake only record their argv, so a test sees exactly what build() would run."""
+    from qnx_mcp import sdk
+    sdk._env_cache.clear()
+    bin_ = tmp_path / "fakebin"
+    bin_.mkdir()
+    log = tmp_path / "argv.log"
+    for tool in ("qcc", "q++", "make", "cmake"):
+        (bin_ / tool).write_text(f'#!/bin/sh\nprintf "%s\\n" "{tool}" "$@" "--end--" >> "{log}"\n')
+        (bin_ / tool).chmod(0o755)
+    env_sh = tmp_path / "qnxsdp-env.sh"
+    env_sh.write_text(f'export QNX_HOST={tmp_path}/host QNX_TARGET={tmp_path}/target PATH="{bin_}:$PATH"\n')
+    ws = (tmp_path / "ws").resolve()
+    (ws / "proj" / "include").mkdir(parents=True)
+    (ws / "proj" / "main.c").write_text("int main(void) { return 0; }\n")
+    cfg = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(env_sh), "QNX_MCP_STATE_DIR": str(tmp_path / "state"),
+                           "QNX_MCP_WORKSPACE": str(ws), "PATH": os.environ["PATH"]})
+    return cfg, ws, log
+
+
+def _recorded(log: Path) -> list[list[str]]:
+    calls, cur = [], []
+    for line in log.read_text().splitlines() if log.exists() else []:
+        if line == "--end--":
+            calls.append(cur)
+            cur = []
+        else:
+            cur.append(line)
+    return calls
+
+
+def test_build_passes_allowed_arguments(tmp_path: Path):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    cflags = ["-g", "-O0", "-Wall", "-Wextra", "-Werror=format", "-Wno-unused", "-DREBUILT=1", "-UNDEBUG", "-fno-inline", "-fPIC",
+              "-std=c11", "-march=x86-64", "-pthread", "-I" + str(proj / "include"), "-Iinclude"]
+    ldflags = ["-Wl,--build-id=none", "-lsocket", "-lm", "-L" + str(proj)]
+    r = build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
+    assert r["ok"], r
+    (qcc,) = _recorded(log)
+    for a in cflags + ldflags:
+        assert a in qcc, (a, qcc)
+    (proj / "Makefile").write_text("all:\n\t@:\n")
+    make_args = ["all", "clean", "-k", "-j4", "-j", "2", "-s", "CFLAGS=-O2 -g -DX=1", "LDLIBS=-lsocket", "V=1"]
+    assert build(cfg, str(proj), system="make", make_args=make_args)["ok"]
+    make = _recorded(log)[1]
+    assert make[:3] == ["make", "-C", str(proj)] and make[4:] == make_args, make
+    assert build(cfg, str(proj / "main.c"), cflags=["-g", "-O2"])["ok"]  # the aarch64/qcc flow of test_build_sdk.py
+
+
+def test_build_cmake_arguments(tmp_path: Path, monkeypatch):
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "CMakeLists.txt").write_text("project(x C)\n")
+    monkeypatch.setattr(sdk.shutil, "which", lambda name, path=None: str(tmp_path / "fakebin" / name))
+    r = sdk.build(cfg, str(proj), cflags=["-g", "-O1"], make_args=["--target", "hello", "--clean-first", "-v"])
+    assert r["ok"], r
+    configure, build_ = _recorded(log)
+    assert "-DCMAKE_C_FLAGS=-g -O1" in configure and build_[-4:] == ["--target", "hello", "--clean-first", "-v"], (configure, build_)
+    for bad in (["--", "-f", "x.mk"], ["--target", "$(id)"], ["-DFOO=1"]):
+        with pytest.raises(QnxMcpError) as e:
+            sdk.build(cfg, str(proj), make_args=bad)
+        assert e.value.code == "invalid_argument"
+    assert len(_recorded(log)) == 2
+
+
+# Each of these could make the host run a command or touch a file outside the project; build() must refuse it before running anything.
+REJECTED = [
+    ("make_args", "--eval=$(info QNXMCP_MARKER)"),
+    ("make_args", "-f"),
+    ("make_args", "-fother.mk"),
+    ("make_args", "--file=other.mk"),
+    ("make_args", "--makefile=other.mk"),
+    ("make_args", "-C"),
+    ("make_args", "--directory=/"),
+    ("make_args", "-I/tmp"),
+    ("make_args", "-e"),
+    ("make_args", "SHELL=/bin/sh"),
+    ("make_args", ".SHELLFLAGS=-c"),
+    ("make_args", "MAKEFLAGS=-f/x"),
+    ("make_args", "MAKEFILES=/tmp/x.mk"),
+    ("make_args", "CC=/tmp/cc"),
+    ("make_args", "CFLAGS=-O2;touch x"),
+    ("make_args", "CFLAGS=$(info x)"),
+    ("make_args", "CFLAGS=`id`"),
+    ("make_args", "CFLAGS=-wrapper,/bin/sh"),
+    ("make_args", "V=$(info x)"),
+    ("make_args", "all\nclean"),
+    ("make_args", "../outside"),
+    ("make_args", "/abs/target"),
+    ("make_args", "-j0x"),
+    ("cflags", "-wrapper"),
+    ("cflags", "-wrapper,/bin/sh,-c"),
+    ("cflags", "-specs=x.specs"),
+    ("cflags", "--specs=x.specs"),
+    ("cflags", "-fplugin=./x.so"),
+    ("cflags", "-fplugin-arg-x-y=z"),
+    ("cflags", "-B/tmp"),
+    ("cflags", "-B"),
+    ("cflags", "@args.txt"),
+    ("cflags", "-Wa,-o,/tmp/x"),
+    ("cflags", "-Wp,-MD,/tmp/x"),
+    ("cflags", "-Xlinker"),
+    ("cflags", "-Xassembler"),
+    ("cflags", "-o"),
+    ("cflags", "-o/tmp/x"),
+    ("cflags", "-include"),
+    ("cflags", "-imacros"),
+    ("cflags", "-I/etc"),
+    ("cflags", "-I../.."),
+    ("cflags", "-iquote/etc"),
+    ("cflags", "-isystem"),
+    ("cflags", "--sysroot=/"),
+    ("cflags", "-Vgcc_ntox86_64"),
+    ("cflags", "-DX=$(id)"),
+    ("cflags", "-DX=`id`"),
+    ("cflags", "-DX=a;b"),
+    ("cflags", "-fdump-tree-all=/tmp/x"),
+    ("cflags", "-fprofile-generate=/tmp/p"),
+    ("cflags", "-fprofile-use=../p"),
+    ("cflags", "-fuse-ld=/tmp/ld"),
+    ("cflags", "-MF/tmp/deps"),
+    ("cflags", "-save-temps=/tmp"),
+    ("cflags", "-x"),
+    ("cflags", "main.c"),
+    ("cflags", "-O2 -g"),
+    ("ldflags", "-Wl,-T,/tmp/x.ld"),
+    ("ldflags", "-Wl,-Map=/tmp/map"),
+    ("ldflags", "-Wl,--build-id=none,-T,x.ld"),
+    ("ldflags", "-Wl,--wrap=open"),
+    ("ldflags", "-T"),
+    ("ldflags", "-L/etc"),
+    ("ldflags", "/etc/x.o"),
+    ("ldflags", "-l../x"),
+    ("ldflags", "-Xlinker"),
+    ("sources", "-wrapper"),
+    ("sources", "@args.txt"),
+]
+
+
+@pytest.mark.parametrize("field,arg", REJECTED, ids=[f"{f}:{a!r}" for f, a in REJECTED])
+def test_build_rejects_unsafe_arguments(tmp_path: Path, field: str, arg: str):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    system = "make" if field == "make_args" else "qcc"
+    (proj / "Makefile").write_text("all:\n\t@:\n")
+    with pytest.raises(QnxMcpError) as e:
+        build(cfg, str(proj), system=system, **{field: [arg]})
+    assert e.value.code in ("invalid_argument", "path_not_allowed"), e.value.to_dict()
+    assert repr(arg) in e.value.message and field in e.value.message, e.value.message
+    assert _recorded(log) == [], "nothing may run when an argument is refused"
+
+
+def test_build_output_symlink_escape(tmp_path: Path):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    (ws / "proj" / "out").symlink_to(tmp_path / "elsewhere")
+    for output in (str(ws / "proj" / "out"), str(tmp_path / "x"), "../../x"):
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(ws / "proj"), system="qcc", output=output)
+        assert e.value.code == "path_not_allowed", output
+    assert _recorded(log) == []
+
+
+def test_workspace_defaults_to_the_working_directory(tmp_path: Path, monkeypatch):
+    from qnx_mcp.ops import environment_check
+    ws = tmp_path / "proj"
+    (ws / "sub").mkdir(parents=True)
+    (ws / "sub" / "a.c").write_text("x\n")
+    (tmp_path / "secret.txt").write_text("s\n")
+    (ws / "sub" / "link.txt").symlink_to(tmp_path / "secret.txt")
+    monkeypatch.chdir(ws / "sub")
+    monkeypatch.chdir(ws)
+    for env in ({"HOME": str(tmp_path)}, {"HOME": str(tmp_path), "QNX_MCP_WORKSPACE": ""}):
+        cfg = Config.from_env(env)
+        assert cfg.workspace == (Path(os.path.realpath(ws)),), cfg.workspace
+        assert check_host_path(cfg, str(ws / "sub" / "a.c"), "f") == Path(os.path.realpath(ws / "sub" / "a.c"))
+        for p in (tmp_path / "secret.txt", ws / "sub" / "link.txt", ws / ".." / "secret.txt"):
+            with pytest.raises(QnxMcpError) as e:
+                check_host_path(cfg, str(p), "local_path")
+            assert e.value.code == "path_not_allowed", p
+        assert _source_context(cfg, str(tmp_path / "secret.txt"), 1) is None
+    check = {c["check"]: c for c in environment_check(Config.from_env({"HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none")}))["checks"]}
+    assert check["workspace"]["ok"] and os.path.realpath(ws) in check["workspace"]["detail"] and "working directory" in check["workspace"]["detail"]
+    explicit = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_WORKSPACE": str(tmp_path / "secret.txt") + os.pathsep + str(ws)})
+    assert len(explicit.workspace) == 2
+    monkeypatch.chdir("/")
+    root = {c["check"]: c for c in environment_check(Config.from_env({"HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none")}))["checks"]}
+    assert not root["workspace"]["ok"] and "fix" in root["workspace"]

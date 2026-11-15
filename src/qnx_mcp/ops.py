@@ -22,7 +22,7 @@ from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
 from .target import Target
 from .util import (
-    ENV_NAME_RE, REMOTE_NAME_RE, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
+    ENV_NAME_RE, REMOTE_NAME_RE, WORKSPACE_HINT, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
     private_dir, quote_argv, tail, uncancellable, within, write_private,
 )
 
@@ -724,8 +724,8 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
         if not dest.is_absolute() or not dest.name or dest.name in (".", ".."):
             raise QnxMcpError("invalid_argument", "local_path must be an absolute file path")
         parent, name = Path(os.path.realpath(dest.parent)), dest.name
-        if cfg.workspace and not within(parent, cfg.workspace):
-            raise QnxMcpError("path_not_allowed", f"{dest} is outside the workspace", hint="Use a path inside QNX_MCP_WORKSPACE or omit local_path.")
+        if not within(parent, cfg.workspace):
+            raise QnxMcpError("path_not_allowed", f"{dest} is outside the workspace", hint=WORKSPACE_HINT + " Or omit local_path.")
         if not parent.is_dir():
             raise QnxMcpError("invalid_argument", f"directory {parent} does not exist on the build host")
     staged = _staging(cfg) / f"get-{uuid.uuid4().hex[:12]}"
@@ -1016,7 +1016,14 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     add("targets_dir", True, str(cfg.targets_dir))
     add("remote_binary_roots", True, (":".join(cfg.remote_binary_roots) or "none: every remote_binary is refused")
         + " (QNX_MCP_REMOTE_BINARY_ROOTS; shells and /proc/boot, /bin, /sbin, /usr, /system are always refused)")
-    add("workspace", True, ", ".join(str(w) for w in cfg.workspace) if cfg.workspace else "not set: host paths are not confined (set QNX_MCP_WORKSPACE to confine them)")
+    ws = ", ".join(str(w) for w in cfg.workspace)
+    unconfined = any(os.path.realpath(w) == "/" for w in cfg.workspace)
+    if cfg.workspace_from_cwd:
+        ws += " (QNX_MCP_WORKSPACE is not set: the server's working directory)"
+    if unconfined:
+        ws += "; '/' confines nothing"
+    add("workspace", not (unconfined and cfg.workspace_from_cwd), ws,
+        "Set QNX_MCP_WORKSPACE to your project directories, or start the server in your project directory.")
     for c in checks:
         if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):
             c["optional"] = True

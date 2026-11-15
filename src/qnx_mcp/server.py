@@ -39,7 +39,8 @@ Typical loop:
   8. Programs already installed on the target: deploy_and_run / run_start with remote_binary and no binary;
      process_stop ends a process qnx-mcp did not start (only executables below /tmp or /data, never system processes).
 Every tool returns JSON with ok=true, or ok=false plus error {code, message, hint}; follow the hint.
-Paths in build/deploy/get_crash/file_* arguments marked "host" are paths on the build host.
+Paths in build/deploy/get_crash/file_* arguments marked "host" are paths on the build host, inside the workspace
+(environment_check shows it). build refuses compiler, linker and make arguments outside its allow-list.
 Never assume a target is yours unless target_list shows it; the server refuses names outside its allowlist.
 """
 
@@ -585,6 +586,11 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
     title="Build for QNX",
     description="Compile on the build host with the QNX SDP 8.0 toolchain. system=auto picks cmake (CMakeLists.txt), make (Makefile) or qcc (plain sources). "
     "make and cmake run the project's own build files, which can execute any command: only build trees you trust. "
+    "Agent arguments are allow-listed and anything else is refused with invalid_argument naming it: cflags/ldflags take -O*, -g*, -W* "
+    "(not -Wa,/-Wp,; -Wl, only with --build-id, --gc-sections, --as-needed, --no-as-needed, --no-undefined, --export-dynamic, -E, -O1 or -z relro/norelro/now/lazy/noexecstack/defs), -D, -U, -l, -std=, "
+    "-f* (not -fplugin, -fdump, -fuse-ld or file paths), -m*, -pthread, -static, -shared and -I/-L inside the workspace; "
+    "make_args take target names, -j N, -k, -s, -B, -n and CFLAGS/CXXFLAGS/CPPFLAGS/LDFLAGS/LDLIBS (allowed flags only) or V/VERBOSE/DEBUG=number; "
+    "for cmake, --target NAME, -j N, --config, --clean-first, -v. Host paths must be inside the workspace. "
     "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set. "
     "Returns diagnostics[] with file, line, column, severity, message (gcc JSON diagnostics in qcc mode, parsed text for make/cmake), "
     "linker errors, and artifacts[] with path, arch, build_id and debug_info for deploy_and_run. ok=false with error.code build_failed when compilation fails.",
@@ -596,9 +602,9 @@ async def build(
     arch: Annotated[Literal["x86_64", "aarch64le"], Field(description="Target architecture; must match the target you deploy to")] = "x86_64",
     sources: Annotated[list[str] | None, Field(description="qcc mode: source files (relative to path or absolute)")] = None,
     output: Annotated[str | None, Field(description="qcc mode: output executable path (default: first source's stem inside path)")] = None,
-    cflags: Annotated[list[str] | None, Field(description="Compiler flags; qcc default is ['-g','-O0','-Wall']")] = None,
+    cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed); qcc default is ['-g','-O0','-Wall']")] = None,
     ldflags: Annotated[list[str] | None, Field(description="qcc mode: linker flags/libraries, e.g. ['-lsocket']")] = None,
-    make_args: Annotated[list[str] | None, Field(description="Extra make or cmake --build arguments")] = None,
+    make_args: Annotated[list[str] | None, Field(description="Extra make or cmake --build arguments (allow-listed, see the description)")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600)] = 300,
 ) -> Annotated[CallToolResult, BuildResult]:
     return await _acall(lambda: sdk.build(CFG, path, system, arch, sources, output, cflags, ldflags, make_args, timeout_s))

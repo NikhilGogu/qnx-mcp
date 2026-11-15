@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import threading
 import time
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import Config, QnxMcpError, check_host_path, private_dir, run, tail, within
+from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -92,6 +93,167 @@ def runner_binary(cfg: Config, arch: str) -> tuple[Path, str]:
     return out, digest
 
 
+# ---------------------------------------------------------------- build argument allow-list
+#
+# cflags, ldflags and make_args come from the agent. make and gcc both have options that run a
+# program or read a file of commands (make -f/--eval/SHELL=, gcc -wrapper/-specs=/-fplugin=/-B/@file,
+# -Wl,/-Wa,/-Wp, passthrough), so every argument must match one of the forms below; anything else
+# is refused before a tool starts. Values never contain whitespace, '$', quotes, backticks or ';'.
+
+_CC_FLAG_RE = re.compile("|".join((
+    r"-O[0-3sgz]?|-Ofast",
+    r"-g|-g[0-3]|-ggdb[0-3]?|-gdwarf(-[2-5])?",
+    r"-W(no-)?(error=)?[a-z][a-z0-9+-]*(=[a-z0-9+-]+)?",  # no comma: -Wl, -Wa, -Wp, never match
+    r"-D[A-Za-z_][A-Za-z0-9_]*(=[A-Za-z0-9_.,+:-]*)?",
+    r"-U[A-Za-z_][A-Za-z0-9_]*",
+    r"-l[A-Za-z0-9_][A-Za-z0-9_.+-]*",
+    r"-std=(c|gnu|c\+\+|gnu\+\+)[0-9a-z]{2}",
+    r"-f(no-)?[A-Za-z0-9][A-Za-z0-9+-]*(=[A-Za-z0-9_.,+-]+)?",
+    r"-m[a-z0-9][a-z0-9.+-]*(=[A-Za-z0-9_.,+-]+)?",
+    r"-pthread|-static|-shared|-pie|-no-pie|-rdynamic|-pedantic|-pedantic-errors|-w|-ansi|-v|-MD|-MMD|-MP",
+)))
+# -f options that load code, choose another linker or write files at a given place.
+_CC_F_REFUSED = ("-fplugin", "-fno-plugin", "-fdump", "-fuse-ld", "-fprofile-generate=", "-fprofile-use=", "-fprofile-dir=",
+                 "-fauto-profile", "-fcallgraph-info=", "-fstack-usage=")
+_CC_PATH_RE = re.compile(r"-([IL])([A-Za-z0-9._+/-]+)")
+_LD_PASS = {"--build-id", "--build-id=none", "--build-id=sha1", "--build-id=md5", "--build-id=uuid", "--gc-sections", "--as-needed",
+            "--no-as-needed", "--no-undefined", "--export-dynamic", "-E", "-O1"}
+_LD_Z = {"relro", "norelro", "now", "lazy", "noexecstack", "defs"}
+_INPUT_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+/-]*\.(o|a|so)|/[A-Za-z0-9._+/-]+\.(o|a|so)")
+_PATH_SAFE_RE = re.compile(r"[A-Za-z0-9._+/-]+")
+_MAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+/-]*")
+_MAKE_OPTS = {"-k", "--keep-going", "-s", "--silent", "--quiet", "-B", "--always-make", "-n", "--dry-run", "-w", "--no-print-directory"}
+_MAKE_FLAG_VARS = {"CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "LDLIBS"}  # each word must be an allowed compiler flag
+_MAKE_SIMPLE_VARS = {"V", "VERBOSE", "DEBUG"}  # a small number or yes/no
+_SIMPLE_VALUE_RE = re.compile(r"[0-9]{1,3}|yes|no|true|false|on|off")
+_JOBS_RE = re.compile(r"[1-9][0-9]{0,3}")
+_CMAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*")
+_CMAKE_CONFIGS = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
+
+
+def _refuse(field: str, arg: str, why: str) -> QnxMcpError:
+    return QnxMcpError(
+        "invalid_argument",
+        f"{field} argument {arg!r} is not allowed: {why}",
+        hint="build accepts only plain compiler, linker and make arguments (see the build tool description). "
+        "Put anything else in the project's own Makefile or CMakeLists.txt.",
+        field=field,
+        argument=arg,
+    )
+
+
+def _no_dotdot(path: str) -> bool:
+    return ".." not in path.split("/")
+
+
+def _check_in_workspace(cfg: Config, root: Path, field: str, arg: str, path: str) -> None:
+    if not _PATH_SAFE_RE.fullmatch(path) or not _no_dotdot(path):
+        raise _refuse(field, arg, "paths may use letters, digits and . _ + - / only, without '..'")
+    p = Path(path) if path.startswith("/") else root / path
+    if not within(p, cfg.workspace):
+        raise QnxMcpError("path_not_allowed", f"{field} argument {arg!r}: {os.path.realpath(p)} is outside the workspace",
+                          hint=WORKSPACE_HINT, field=field, argument=arg)
+
+
+def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool) -> None:
+    """One compiler or linker argument. files: plain .o/.a/.so inputs are allowed (qcc mode)."""
+    if not isinstance(a, str) or not a:
+        raise _refuse(field, str(a), "empty")
+    m = _CC_PATH_RE.fullmatch(a)
+    if m:
+        _check_in_workspace(cfg, root, field, a, m.group(2))
+        return
+    if a.startswith("-Wl,"):
+        items = a[4:].split(",")
+        i = 0
+        while i < len(items):
+            if items[i] in _LD_PASS:
+                i += 1
+            elif items[i] == "-z" and i + 1 < len(items) and items[i + 1] in _LD_Z:
+                i += 2
+            else:
+                raise _refuse(field, a, f"linker option {items[i]!r} is not in the allowed set {sorted(_LD_PASS)} or -z {sorted(_LD_Z)}")
+        return
+    if a.startswith(("-Wa,", "-Wp,", "-Xlinker", "-Xassembler", "-Xpreprocessor")):
+        raise _refuse(field, a, "assembler, preprocessor and linker passthrough is not allowed (only listed -Wl, options)")
+    if a.startswith("-f") and (a.startswith(_CC_F_REFUSED) or ".." in a or "/" in a):
+        raise _refuse(field, a, "this -f option loads code or writes files at a chosen place")
+    if _CC_FLAG_RE.fullmatch(a):
+        return
+    if files and not a.startswith(("-", "@")) and _INPUT_FILE_RE.fullmatch(a):
+        _check_in_workspace(cfg, root, field, a, a)
+        return
+    raise _refuse(field, a, "not an allowed compiler or linker flag")
+
+
+def _check_make_args(cfg: Config, root: Path, args: list[str]) -> None:
+    field = "make_args"
+    prev = None
+    for a in args:
+        if not isinstance(a, str) or not a:
+            raise _refuse(field, str(a), "empty")
+        if prev in ("-j", "--jobs") and _JOBS_RE.fullmatch(a):
+            prev = None
+            continue
+        prev = a
+        if a in _MAKE_OPTS or a in ("-j", "--jobs") or re.fullmatch(r"-j[1-9][0-9]{0,3}|--jobs=[1-9][0-9]{0,3}", a):
+            continue
+        name, eq, value = a.partition("=")
+        if eq and re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.]*", name):
+            if name in _MAKE_FLAG_VARS:
+                for word in value.split(" "):
+                    if word:
+                        try:
+                            _check_cc_flag(cfg, root, field, word, files=False)
+                        except QnxMcpError as e:
+                            raise _refuse(field, a, f"word {word!r} of {name}: {e.message.split(': ', 1)[-1]}") from None
+                continue
+            if name in _MAKE_SIMPLE_VARS:
+                if _SIMPLE_VALUE_RE.fullmatch(value):
+                    continue
+                raise _refuse(field, a, f"{name} takes a small number or yes/no")
+            raise _refuse(field, a, f"only {sorted(_MAKE_FLAG_VARS | _MAKE_SIMPLE_VARS)} may be set on the command line")
+        if not a.startswith("-") and _MAKE_TARGET_RE.fullmatch(a) and _no_dotdot(a):
+            continue
+        raise _refuse(field, a, "make accepts target names, -j N, -k, -s, -B, -n, -w and allowed VAR=value only")
+
+
+def _check_cmake_build_args(args: list[str]) -> None:
+    field = "make_args"
+    i = 0
+    while i < len(args):
+        a = args[i]
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if a in ("--clean-first", "-v", "--verbose") or re.fullmatch(r"-j[1-9][0-9]{0,3}|--parallel=[1-9][0-9]{0,3}", str(a)):
+            i += 1
+        elif a in ("--target", "-t") and isinstance(nxt, str) and _CMAKE_TARGET_RE.fullmatch(nxt):
+            i += 2
+        elif a in ("-j", "--parallel") and isinstance(nxt, str) and _JOBS_RE.fullmatch(nxt):
+            i += 2
+        elif a == "--config" and nxt in _CMAKE_CONFIGS:
+            i += 2
+        else:
+            raise _refuse(field, str(a), "cmake --build accepts --target NAME, -j N, --parallel N, --config NAME, --clean-first and -v only")
+
+
+def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | None, ldflags: list[str] | None,
+                     make_args: list[str] | None, sources: list[str] | None = None) -> None:
+    """Refuse any agent-supplied build argument outside the allow-list (QnxMcpError naming the argument)."""
+    files = system == "qcc"
+    for field, flags in (("cflags", cflags), ("ldflags", ldflags)):
+        for a in flags or []:
+            _check_cc_flag(cfg, root, field, a, files=files)
+    for s_ in sources or []:
+        if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
+            raise _refuse("sources", str(s_), "a source is a file path, never an option")
+    if system == "make":
+        _check_make_args(cfg, root, list(make_args or []))
+    elif system == "cmake":
+        _check_cmake_build_args(list(make_args or []))
+    elif make_args:
+        raise _refuse("make_args", make_args[0], "make_args are for system=make or cmake")
+
+
 # ---------------------------------------------------------------- build tool
 
 _CMAKE_TOOLCHAIN = """# Generated by qnx-mcp
@@ -152,7 +314,6 @@ def build(
     check_arch(arch)
     variant, _, proc = ARCHES[arch]
     root = check_host_path(cfg, path, "path", kind="any")
-    env = sdk_env(cfg)
     if root.is_file():
         sources = [str(root)] + list(sources or [])
         root = root.parent
@@ -166,6 +327,22 @@ def build(
             system = "qcc"
     if system not in ("qcc", "make", "cmake"):
         raise QnxMcpError("invalid_argument", f"unknown build system {system!r}", hint="Use auto, qcc, make or cmake.")
+    check_build_args(cfg, root, system, cflags, ldflags, make_args, sources)
+    if system == "qcc":
+        if not sources:
+            sources = sorted(str(p) for p in root.glob("*.c")) + sorted(str(p) for p in root.glob("*.cpp"))
+        if not sources:
+            raise QnxMcpError("invalid_argument", f"no C/C++ sources in {root}", hint="Pass sources=[...] or point path at a file.")
+        out_path = Path(output).expanduser() if output else root / Path(sources[0]).stem
+        if not out_path.is_absolute():
+            out_path = root / out_path
+        if not within(out_path, cfg.workspace):  # the output itself, so a symlink there cannot redirect the write
+            raise QnxMcpError("path_not_allowed", f"output {os.path.realpath(out_path)} is outside the workspace", hint=WORKSPACE_HINT)
+        for src_ in sources:
+            sp = Path(src_) if os.path.isabs(src_) else root / src_
+            if not within(sp, cfg.workspace):
+                raise QnxMcpError("path_not_allowed", f"source {os.path.realpath(sp)} is outside the workspace", hint=WORKSPACE_HINT)
+    env = sdk_env(cfg)
 
     started = time.time()
     steps: list[dict[str, Any]] = []
@@ -180,20 +357,7 @@ def build(
         return r.returncode == 0 and not r.timed_out
 
     if system == "qcc":
-        if not sources:
-            sources = sorted(str(p) for p in root.glob("*.c")) + sorted(str(p) for p in root.glob("*.cpp"))
-        if not sources:
-            raise QnxMcpError("invalid_argument", f"no C/C++ sources in {root}", hint="Pass sources=[...] or point path at a file.")
         is_cxx = any(s.endswith((".cpp", ".cc", ".cxx")) for s in sources)
-        out_path = Path(output).expanduser() if output else root / Path(sources[0]).stem
-        if not out_path.is_absolute():
-            out_path = root / out_path
-        if cfg.workspace and not within(out_path.parent, cfg.workspace):
-            raise QnxMcpError("path_not_allowed", f"output {out_path} is outside the workspace", hint="Write build outputs inside QNX_MCP_WORKSPACE.")
-        for src_ in sources:
-            sp = Path(src_) if os.path.isabs(src_) else root / src_
-            if cfg.workspace and not within(sp, cfg.workspace):
-                raise QnxMcpError("path_not_allowed", f"source {sp} is outside the workspace", hint="Use sources inside QNX_MCP_WORKSPACE.")
         argv = [sdk_tool(env, "q++" if is_cxx else "qcc"), f"-V{variant}{'_cxx' if is_cxx else ''}", "-fdiagnostics-format=json"]
         argv += list(cflags) if cflags is not None else ["-g", "-O0", "-Wall"]
         argv += ["-o", str(out_path), *sources, *(ldflags or [])]
@@ -206,6 +370,8 @@ def build(
         candidates = _scan_elves(root, started)
     else:
         bdir = root / f"build-qnx-{arch}"
+        if not within(bdir, cfg.workspace):  # a symlink named like the build directory must not move the build elsewhere
+            raise QnxMcpError("path_not_allowed", f"build directory {os.path.realpath(bdir)} is outside the workspace", hint=WORKSPACE_HINT)
         bdir.mkdir(exist_ok=True)
         tc = bdir / "qnx-toolchain.cmake"
         tc.write_text(
