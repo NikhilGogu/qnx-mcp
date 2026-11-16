@@ -543,7 +543,7 @@ async def target_start(
 
 @mcp.tool(
     title="Stop a QNX target",
-    description="Power off the target's QEMU (mkqnximage --stop, then SIGTERM/SIGKILL through a pidfd of the verified QEMU process). "
+    description="Power off the target's QEMU with SIGTERM, then SIGKILL, sent only through a pidfd of the verified QEMU process. "
     "Waits for runs in progress (they hold a shared lock). Background runs are lost; files on the target disk persist.",
     annotations=_ann(False, True, True),
 )

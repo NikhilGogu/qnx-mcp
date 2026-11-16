@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import stat
 import threading
@@ -840,3 +841,49 @@ def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
     assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
     for name, line, kw in calls:
         check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))
+
+
+def _raised_error_codes() -> set[str]:
+    """Every code string that src/ can put in an error: QnxMcpError's first argument (a constant, both branches
+    of a conditional, or what was assigned to a local name passed there) and the "code" values of dict literals."""
+    import ast
+
+    def codes_of(node: ast.AST | None, assigned: dict[str, set[str]]) -> set[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.IfExp):
+            return codes_of(node.body, assigned) | codes_of(node.orelse, assigned)
+        if isinstance(node, ast.Name):
+            return assigned.get(node.id, set())
+        return set()
+
+    codes: set[str] = set()
+    for f in (Path(__file__).resolve().parents[1] / "src" / "qnx_mcp").glob("*.py"):
+        tree = ast.parse(f.read_text())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            assigned: dict[str, set[str]] = {}
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Assign):
+                    for tgt in n.targets:
+                        if isinstance(tgt, ast.Name):
+                            assigned.setdefault(tgt.id, set()).update(codes_of(n.value, {}))
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "QnxMcpError" and n.args:
+                    codes |= codes_of(n.args[0], assigned)
+                elif isinstance(n, ast.Dict):
+                    codes |= {c for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant) and k.value == "code"
+                              for c in codes_of(v, {})}
+    return codes
+
+
+def test_every_raised_error_code_is_advertised():
+    from qnx_mcp.server import ErrorInfo
+    raised = _raised_error_codes()
+    assert len(raised) >= 30 and "host_key_missing" in raised, sorted(raised)
+    design = (Path(__file__).resolve().parents[1] / "docs" / "DESIGN.md").read_text()
+    line = next(x for x in design.splitlines() if x.startswith("Codes: "))
+    documented = set(re.findall(r"`([a-z_]+)`", line.split(". ", 1)[0]))  # the list ends at the first sentence
+    schema = set(re.findall(r"[a-z]+(?:_[a-z]+)+|\b(?:timeout|cancelled)\b", ErrorInfo.model_fields["code"].description.split(":", 1)[1]))
+    assert raised - documented == set(), f"raised but missing from docs/DESIGN.md: {sorted(raised - documented)}"
+    assert raised - schema == set(), f"raised but missing from ErrorInfo.code: {sorted(raised - schema)}"
+    assert documented == schema, (sorted(documented ^ schema))
