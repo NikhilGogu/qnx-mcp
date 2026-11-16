@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import REMOTE_PATH_RE, WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
+from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -132,9 +132,11 @@ _CMAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*")
 _PAIR_PATH = {"-I", "-L", "-isystem", "-iquote"}  # a directory inside the workspace
 _PAIR_FILE = {"-include"}                          # a file inside the workspace
 _MACRO_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-# -D values with quotes or spaces, for qcc mode only: qcc gets an argv list and no shell sees it.
+# -D values with double quotes (a C string such as -DVERSION="1.2"), for qcc mode only, where the
+# argument goes to qcc as one argv element. No spaces or shell metacharacters: whether qcc hands its
+# arguments to gcc without a shell is not checked here, so the value must be harmless if one sees it.
 # make and cmake hand CFLAGS to a shell in their recipes, so there the plain -D form applies.
-_QUOTED_DEFINE_RE = re.compile(r"-D[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.,+:/=\" '()<>%#-]*")
+_QUOTED_DEFINE_RE = re.compile(r'-D[A-Za-z_][A-Za-z0-9_]*="[A-Za-z0-9_.,+:/=-]*"')
 # -f options that only rewrite paths recorded in the output: old=new, both plain paths.
 _PREFIX_MAP_RE = re.compile(r"-f(debug|file|macro)-prefix-map=([A-Za-z0-9._+/-]+)=([A-Za-z0-9._+/-]*)")
 _MAKE_PATH_VARS = {"PREFIX", "DESTDIR"}  # a directory inside the workspace (make install writes there)
@@ -174,24 +176,17 @@ def _check_ld_items(cfg: Config, root: Path, field: str, a: str) -> None:
             i += 1
         elif it == "-z" and i + 1 < len(items) and items[i + 1] in _LD_Z:
             i += 2
-        elif it == "-rpath" and i + 1 < len(items):
-            # A run-time search path on the target: a normalised absolute target path, nothing else.
-            rp = items[i + 1]
-            parts = rp.split("/")[1:]
-            if not REMOTE_PATH_RE.fullmatch(rp) or any(c in ("", ".", "..") for c in parts):
-                raise _refuse(field, a, f"-rpath takes a normalised absolute target path, not {rp!r}")
-            i += 2
         elif it.startswith("-Map="):
             _check_in_workspace(cfg, root, field, a, it[5:])  # the linker writes the map file there
             i += 1
         else:
             raise _refuse(field, a, f"linker option {it!r} is not in the allowed set {sorted(_LD_PASS)}, -z {sorted(_LD_Z)}, "
-                          "-rpath,<target path> or -Map=<workspace path>")
+                          "or -Map=<workspace path>")
 
 
 def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool, quoted_defines: bool = False) -> None:
     """One compiler or linker argument. files: plain .o/.a/.so inputs are allowed (qcc mode).
-    quoted_defines: -D values may hold quotes and spaces (qcc mode, where no shell sees the argument)."""
+    quoted_defines: a -D value may be a double-quoted string (qcc mode only)."""
     if not isinstance(a, str) or not a:
         raise _refuse(field, str(a), "empty")
     m = _CC_PATH_RE.fullmatch(a)
@@ -215,7 +210,7 @@ def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool, 
     if a.startswith("-D") and _QUOTED_DEFINE_RE.fullmatch(a):
         if quoted_defines:
             return
-        raise _refuse(field, a, "-D values with quotes or spaces are accepted only in qcc mode; make and cmake pass flags through a shell")
+        raise _refuse(field, a, "quoted -D values are accepted only in qcc mode; make and cmake pass flags through a shell")
     if files and not a.startswith(("-", "@")) and _INPUT_FILE_RE.fullmatch(a):
         _check_in_workspace(cfg, root, field, a, a)
         return

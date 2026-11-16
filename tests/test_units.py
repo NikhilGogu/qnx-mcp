@@ -732,9 +732,9 @@ def test_build_passes_separate_and_wider_forms(tmp_path: Path):
     proj = ws / "proj"
     (proj / "config.h").write_text("#define X 1\n")
     cflags = ["-g", "-I", str(proj / "include"), "-I", "include", "-D", "NAME", "-D", "LEVEL=2", "-U", "NDEBUG",
-              "-isystem", str(proj / "include"), "-iquote", "include", "-include", "config.h", '-DMSG="hello world"',
-              "-D", 'GREETING="hi there"', f"-fdebug-prefix-map={proj}=/src", f"-ffile-prefix-map={proj}=."]
-    ldflags = ["-L", str(proj), "-Wl,-rpath,/data/lib", "-Wl,-rpath,/tmp/a/lib,--as-needed", f"-Wl,-Map={proj / 'out.map'}"]
+              "-isystem", str(proj / "include"), "-iquote", "include", "-include", "config.h", '-DVERSION="1.2"',
+              "-D", 'GREETING="hi"', f"-fdebug-prefix-map={proj}=/src", f"-ffile-prefix-map={proj}=."]
+    ldflags = ["-L", str(proj), "-Wl,--build-id,--as-needed", f"-Wl,-Map={proj / 'out.map'}"]
     r = build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
     assert r["ok"], r
     (qcc,) = _recorded(log)
@@ -767,11 +767,11 @@ REJECTED_GROUPS = [
     ("cflags", ["-fdebug-prefix-map=$x=/y"]),
     ("cflags", ["-fdebug-prefix-map=/x"]),
     ("ldflags", ["-L", "/usr/lib"]),
-    ("ldflags", ["-Wl,-rpath,$(id)"]),
-    ("ldflags", ["-Wl,-rpath,../lib"]),
-    ("ldflags", ["-Wl,-rpath,lib"]),
-    ("ldflags", ["-Wl,-rpath"]),
-    ("ldflags", ["-Wl,-rpath,/data//lib"]),
+    ("ldflags", ["-Wl,-rpath,/data/lib"]),  # ld also searches -rpath dirs on the build host at link time
+    ("cflags", ['-DMSG="hello world"']),
+    ("cflags", ['-DX="a>b"']),
+    ("cflags", ["-DX='a'"]),
+    ("cflags", ['-DX="a -wrapper /tmp/x"']),
     ("ldflags", ["-Wl,-Map=../out.map"]),
     ("make_args", ["PREFIX=/usr"]),
     ("make_args", ["PREFIX=../stage"]),
@@ -804,7 +804,7 @@ def test_quoted_define_values_are_qcc_only(tmp_path: Path, monkeypatch):
     proj = ws / "proj"
     (proj / "CMakeLists.txt").write_text("project(x C)\n")
     monkeypatch.setattr(sdk.shutil, "which", lambda name, path=None: str(tmp_path / "fakebin" / name))
-    for flags in (['-DMSG="a b"'], ["-D", "MSG='x'"]):
+    for flags in (['-DMSG="a"'], ["-D", 'MSG="x"']):
         with pytest.raises(QnxMcpError) as e:
             sdk.build(cfg, str(proj), system="cmake", cflags=flags)
         assert e.value.code == "invalid_argument" and "qcc" in e.value.message, e.value.message

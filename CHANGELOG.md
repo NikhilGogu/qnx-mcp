@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-* `build` accepts two-element flag forms (`-I dir`, `-D NAME`), `-isystem`, `-iquote` and `-include` with workspace paths, `-Wl,-rpath` with a target path, `-Wl,-Map` with a workspace path, prefix maps, `PREFIX` and `DESTDIR` inside the workspace, and in qcc mode `-D` values with quotes and spaces.
+* `build` accepts two-element flag forms (`-I dir`, `-D NAME`), `-isystem`, `-iquote` and `-include` with workspace paths, `-Wl,-Map` with a workspace path, prefix maps, `PREFIX` and `DESTDIR` inside the workspace, and in qcc mode `-D` values that are double-quoted strings without spaces.
 * `build` refuses compiler, linker and make arguments outside an allow-list, and host paths are always confined to the workspace (the server's working directory when `QNX_MCP_WORKSPACE` is not set).
 * A tag `v<version>` builds the wheel, tests the installed wheel and attaches it to a GitHub Release (`.github/workflows/release.yml`).
 * The offline tests run in GitHub Actions on Python 3.10 to 3.13. They no longer read host files, so they also pass on macOS.
