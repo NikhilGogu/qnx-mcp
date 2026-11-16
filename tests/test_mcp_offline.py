@@ -5,14 +5,13 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from jsonschema.validators import validator_for
 
-from helpers import mcp_client, run_async
+from helpers import mcp_client, run_async, write_elf
 
 EXPECTED = {"target_list", "target_create", "target_start", "target_stop", "target_destroy", "target_status", "build", "deploy_and_run",
             "run_start", "run_poll", "run_stop", "get_crash", "file_put", "file_get", "file_list", "processes", "process_stop", "logs",
@@ -63,12 +62,13 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
     _fake_target(tmp_path, "tb9")
     _fake_target(tmp_path, "t0")
 
-    # /bin and /etc hold the host files these cases use; the default workspace is tested in test_default_workspace_confines_host_paths.
-    ws = os.pathsep.join(["/bin", "/etc", str(tmp_path)])
-    # A host binary that is not a QNX one. /bin/ls can be a symlink to a file outside /bin, so use a copy
-    # inside the workspace.
-    host_ls = str(tmp_path / "ls")
-    shutil.copy(os.path.realpath("/bin/ls"), host_ls)
+    # Every host file these cases use is in tmp_path; the default workspace is tested in test_default_workspace_confines_host_paths.
+    ws = str(tmp_path)
+    # A host binary that is not a QNX one: a small x86_64 Linux ELF file written inside the workspace,
+    # so the case does not depend on the host's own /bin/ls (Mach-O on macOS).
+    host_ls = write_elf(tmp_path / "ls")
+    fixture = str(tmp_path / "fixture.txt")  # /etc/hostname does not exist on macOS
+    Path(fixture).write_text("x\n")
 
     async def go():
         async with mcp_client({**_env(tmp_path), "QNX_MCP_WORKSPACE": ws}) as c:
@@ -87,10 +87,10 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("get_crash", {"target": "tb9", "core_path": "/tmp/x.core"}, "invalid_argument"),
                 ("run_poll", {"target": "tb9", "run_id": "r-000000000000"}, "invalid_argument"),
                 ("run_stop", {"target": "tb9", "run_id": "nonsense"}, "invalid_argument"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/etc/passwd"}, "path_not_allowed"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp/qnx-mcp/bin/x"}, "path_not_allowed"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/etc/passwd"}, "path_not_allowed"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/tmp/qnx-mcp/bin/x"}, "path_not_allowed"),
                 ("file_get", {"target": "tb9", "remote_path": "/tmp/$(id)"}, "invalid_argument"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp//qnx-mcp/bin/x"}, "invalid_argument"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/tmp//qnx-mcp/bin/x"}, "invalid_argument"),
                 ("run_poll", {"target": "tb9", "run_id": "r-000000000000", "max_kb": 4096}, "invalid_argument"),
                 ("target_destroy", {"name": "tb9", "confirm": "tb8"}, "invalid_argument"),
                 ("target_destroy", {"name": "t0", "confirm": "t0"}, "target_not_allowed"),

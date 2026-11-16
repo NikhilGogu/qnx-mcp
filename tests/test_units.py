@@ -173,9 +173,15 @@ def test_lock_contention(tmp_path: Path):
         pass
 
 
-def test_elf_info_on_host_binary():
-    info = elf_info("/bin/ls")
-    assert info and info["arch"] == "x86_64" and info["qnx"] is False
+def test_elf_info_on_host_binary(tmp_path: Path):
+    from helpers import write_elf
+    info = elf_info(write_elf(tmp_path / "linux-prog"))
+    assert info and info["arch"] == "x86_64" and info["qnx"] is False and info["type"] == "executable"
+    info = elf_info(write_elf(tmp_path / "qnx-prog", machine=183, interpreter="/usr/lib/ldqnx-64.so.2"))
+    assert info and info["arch"] == "aarch64le" and info["qnx"] is True
+    host = elf_info("/bin/ls")  # an ELF file on Linux hosts, Mach-O on macOS
+    if host is not None:
+        assert host["qnx"] is False
     assert elf_info(__file__) is None
 
 
