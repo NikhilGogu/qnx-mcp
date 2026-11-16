@@ -632,7 +632,7 @@ async def build(
 async def deploy_and_run(
     target: TargetName,
     binary: Annotated[str | None, Field(description="Host path of the executable, usually build.artifacts[].path")] = None,
-    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry")] = None,
+    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry; no NUL bytes, at most 64 KiB in total")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600, description="Kill the program after this many seconds")] = 30,
     env: EnvVars = None,
     cwd: Annotated[str | None, Field(description="Working directory on the target")] = None,
@@ -655,7 +655,7 @@ async def deploy_and_run(
 async def run_start(
     target: TargetName,
     binary: Annotated[str | None, Field(description="Host path of the executable")] = None,
-    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry")] = None,
+    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry; no NUL bytes, at most 64 KiB in total")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=86400, description="Kill the program after this many seconds")] = 600,
     env: EnvVars = None,
     cwd: Annotated[str | None, Field(description="Working directory on the target")] = None,

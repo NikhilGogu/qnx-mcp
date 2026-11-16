@@ -1211,3 +1211,28 @@ def test_live_tests_summary_needs_a_pass(line: str, ok: bool):
     script = Path(__file__).resolve().parents[1] / "scripts" / "live-tests.sh"
     r = subprocess.run(["sh", str(script), "--summary-ok", line], env={"PATH": os.environ["PATH"]}, capture_output=True, timeout=10)
     assert (r.returncode == 0) is ok, (line, r.returncode, r.stderr)
+
+
+@pytest.mark.parametrize("tool", ["deploy_and_run", "run_start"])
+@pytest.mark.parametrize("args,env,field", [
+    (["ok", "a\0b"], None, "args[1]"),
+    (["x" * 40000, "y" * 40000], None, "args"),
+    ([], {"BIG": "v" * 70000}, "env"),
+], ids=["nul", "args-too-large", "env-too-large"])
+def test_run_args_are_checked_before_upload(tmp_path: Path, monkeypatch, tool, args, env, field):
+    """A NUL used to reach Popen as internal_error after the upload; now it is refused before anything happens."""
+    from qnx_mcp import ops
+    d = tmp_path / "targets" / "tb1" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+
+    def never(*a, **kw):
+        raise AssertionError("nothing may be snapshotted, uploaded or started")
+
+    monkeypatch.setattr(ops, "_program", never)
+    monkeypatch.setattr(Target, "require_ip", never)
+    with pytest.raises(QnxMcpError) as e:
+        getattr(ops, tool)(cfg, "tb1", remote_binary="/data/x", args=args, env=env)
+    assert e.value.code == "invalid_argument" and field in e.value.message, e.value.to_dict()

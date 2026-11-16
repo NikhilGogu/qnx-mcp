@@ -6,6 +6,7 @@
 * The cmake toolchain file is written to a new file and renamed into place, so a symlink at its name is replaced instead of followed.
 * `get_crash` refuses a core with `core_mismatch` when gdb names no executable or no pid for it. Before, a missing value could compare equal to an empty field of the run record.
 * The release workflow tests the wheel in a job with a read-only token that checkout does not keep; a separate job with write access only downloads the tested wheel and creates the release.
+* `deploy_and_run` and `run_start` refuse arguments with a NUL byte, and arguments or environment entries above 64 KiB in total, with `invalid_argument` before anything is uploaded.
 * `build` accepts two-element flag forms (`-I dir`, `-D NAME`), `-isystem`, `-iquote` and `-include` with workspace paths, `-Wl,-Map` with a workspace path, prefix maps, `PREFIX` and `DESTDIR` inside the workspace, and in qcc mode `-D` values that are double-quoted strings without spaces.
 * `build` refuses compiler, linker and make arguments outside an allow-list, and host paths are always confined to the workspace (the server's working directory when `QNX_MCP_WORKSPACE` is not set).
 * A tag `v<version>` builds the wheel, tests the installed wheel and attaches it to a GitHub Release (`.github/workflows/release.yml`).
