@@ -539,6 +539,7 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
         rec = _owned_background(t, run_id)  # read inside the target lock
         ip = t.require_ip()
         deadline = time.monotonic() + wait_s
+        interval = 0.5
         while True:
             p = _poll_once(t, ip, rec, stdout_offset, stderr_offset, max_kb * 1024)
             state = _apply_poll(t, rec, p)
@@ -546,7 +547,10 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
             if state != "running" or new or time.monotonic() >= deadline:
                 break
             check_cancelled()
-            time.sleep(0.5)
+            # Every poll is a new ssh session with a full key exchange, and the image's sshd penalises bursts of
+            # connections; backing off to 2 s keeps a 60 s wait to about 32 sessions.
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+            interval = min(interval * 2, 2.0)
     out, err = p.get("stdout") or {}, p.get("stderr") or {}
     result: dict[str, Any] = {
         "ok": True, "run_id": run_id, "target": target, "state": state, "alive": bool(p.get("alive")), "pid": rec.get("pid"),

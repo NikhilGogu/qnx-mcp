@@ -840,3 +840,41 @@ def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
     assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
     for name, line, kw in calls:
         check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))
+
+
+def test_run_poll_backoff_opens_fewer_sessions(tmp_path: Path, monkeypatch):
+    """Each poll is a new ssh session; a long wait backs off to one every 2 s and still ends at its deadline."""
+    from qnx_mcp import ops
+    d = tmp_path / "targets" / "tb1" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+    clock = [1000.0]
+    sleeps: list[float] = []
+    polls: list[float] = []
+    new_output_at = [None]
+
+    def poll_once(t, ip, rec, out_off, err_off, max_bytes):
+        polls.append(clock[0])
+        nxt = 5 if new_output_at[0] is not None and clock[0] >= new_output_at[0] else 0
+        return {"alive": True, "status": None, "stdout": {"next": nxt, "size": nxt}, "stderr": {"next": 0, "size": 0}}
+
+    def sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    monkeypatch.setattr(ops, "_poll_once", poll_once)
+    monkeypatch.setattr(ops.time, "sleep", sleep)
+    monkeypatch.setattr(ops.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ops, "_owned_background", lambda t, rid: {"run_id": rid, "state": "running", "pid": 7})
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    r = ops.run_poll(cfg, "tb1", "r-000000000001", wait_s=60)
+    assert r["state"] == "running" and r["stdout"] == ""
+    assert sleeps[:4] == [0.5, 1.0, 2.0, 2.0] and max(sleeps) <= 2.0
+    assert len(polls) <= 35 and clock[0] - 1000.0 <= 60.0 + 1e-9 and polls[-1] - 1000.0 >= 58.0, (len(polls), clock[0])
+    polls.clear()
+    sleeps.clear()
+    new_output_at[0] = clock[0] + 3.0
+    r = ops.run_poll(cfg, "tb1", "r-000000000001", wait_s=60)
+    assert r["stdout_next"] == 5 and len(polls) == 4  # 0, 0.5, 1.5, 3.5: stops at the first poll that sees output
