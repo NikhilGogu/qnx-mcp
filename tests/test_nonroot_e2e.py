@@ -68,10 +68,10 @@ def test_program_runs_as_run_as_and_cannot_escalate(tmp_path: Path):
                     print(json.dumps(a))
                 ident = got["identity"]
                 assert (ident["uid"], ident["euid"], ident["gid"], ident["egid"]) == (uid, uid, gid, gid), ident
-                for name in ("signal_procnto", "signal_runner", "open_procnto_as_rw", "setuid_0", "create_in_etc",
+                for name in ("signal_procnto", "signal_runner", "open_procnto_ctl_rw", "setuid_0",
                              "threadctl_io", "mmap_device_memory", "list_other_run", "read_other_run_output"):
                     assert got[name]["succeeded"] is False and got[name]["errno_name"] in REFUSED, got[name]
-                for name in ("create_in_proc_boot", "create_in_system_bin"):
+                for name in ("create_in_proc_boot", "create_in_system_bin", "create_in_etc"):
                     assert got[name]["succeeded"] is False and got[name]["errno_name"] in REFUSED_OR_READ_ONLY, got[name]
                 # The run's own output still reaches the agent through the runner.
                 err, p = await c.call("run_poll", target=TARGET, run_id=other["run_id"])

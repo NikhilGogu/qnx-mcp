@@ -97,12 +97,12 @@ int main(int argc, char *argv[])
     rc = kill(getppid(), 0); /* the runner, which keeps the login user's identity */
     report("signal_runner", rc == 0, errno);
 
-    int fd = open("/proc/1/as", O_RDWR);
+    int fd = open("/proc/1/ctl", O_RDWR); /* the control file qnx-mcp-run itself uses for process_stop */
     int e = errno;
     if (fd != -1) {
         close(fd);
     }
-    report("open_procnto_as_rw", fd != -1, e);
+    report("open_procnto_ctl_rw", fd != -1, e);
 
     try_create("create_in_proc_boot", "/proc/boot/qnx-mcp-escape-probe");
     try_create("create_in_system_bin", "/system/bin/qnx-mcp-escape-probe");
