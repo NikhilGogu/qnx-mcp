@@ -578,6 +578,29 @@ def test_build_cmake_arguments(tmp_path: Path, monkeypatch):
     assert len(_recorded(log)) == 2
 
 
+def test_build_flags_reach_every_mode(tmp_path: Path, monkeypatch):
+    """make mode would drop cflags and ldflags, so they are refused there; cmake sets C, C++ and linker flags on
+    every configure, empty when omitted, so flags from an earlier call do not stay in its cache."""
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "Makefile").write_text("all:\n\t@:\n")
+    for field, hint in (("cflags", "CFLAGS="), ("ldflags", "LDFLAGS=")):
+        with pytest.raises(QnxMcpError) as e:
+            sdk.build(cfg, str(proj), system="make", **{field: ["-O2" if field == "cflags" else "-lm"]})
+        assert e.value.code == "invalid_argument" and field in e.value.message and hint in (e.value.hint or ""), e.value.to_dict()
+    assert _recorded(log) == []
+    (proj / "CMakeLists.txt").write_text("project(x C CXX)\n")
+    monkeypatch.setattr(sdk.shutil, "which", lambda name, path=None: str(tmp_path / "fakebin" / name))
+    assert sdk.build(cfg, str(proj), system="cmake", cflags=["-g", "-O1"], ldflags=["-lm"])["ok"]
+    assert sdk.build(cfg, str(proj), system="cmake")["ok"]
+    first, _, second, _ = _recorded(log)
+    for want in ("-DCMAKE_C_FLAGS=-g -O1", "-DCMAKE_CXX_FLAGS=-g -O1", "-DCMAKE_EXE_LINKER_FLAGS=-lm"):
+        assert want in first, (want, first)
+    for want in ("-DCMAKE_C_FLAGS=", "-DCMAKE_CXX_FLAGS=", "-DCMAKE_EXE_LINKER_FLAGS="):
+        assert want in second, (want, second)
+
+
 # Each of these could make the host run a command or touch a file outside the project; build() must refuse it before running anything.
 REJECTED = [
     ("make_args", "--eval=$(info QNXMCP_MARKER)"),

@@ -596,6 +596,8 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
     "or V/VERBOSE/DEBUG=number; "
     "for cmake, --target NAME, -j N, --config, --clean-first, -v. Host paths must be inside the workspace. "
     "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set. "
+    "cmake mode sets CMAKE_C_FLAGS and CMAKE_CXX_FLAGS from cflags and CMAKE_EXE_LINKER_FLAGS from ldflags on every configure (empty when omitted); "
+    "make mode refuses cflags and ldflags (pass make_args=['CFLAGS=...'] or LDFLAGS/LDLIBS instead). "
     "Returns diagnostics[] with file, line, column, severity, message (gcc JSON diagnostics in qcc mode, parsed text for make/cmake), "
     "linker errors, and artifacts[] with path, arch, build_id and debug_info for deploy_and_run. ok=false with error.code build_failed when compilation fails.",
     annotations=_ann(False, True, False),
@@ -606,8 +608,8 @@ async def build(
     arch: Annotated[Literal["x86_64", "aarch64le"], Field(description="Target architecture; must match the target you deploy to")] = "x86_64",
     sources: Annotated[list[str] | None, Field(description="qcc mode: source files (relative to path or absolute)")] = None,
     output: Annotated[str | None, Field(description="qcc mode: output executable path (default: first source's stem inside path)")] = None,
-    cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed); qcc default is ['-g','-O0','-Wall']")] = None,
-    ldflags: Annotated[list[str] | None, Field(description="qcc mode: linker flags/libraries, e.g. ['-lsocket']")] = None,
+    cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed) for qcc and cmake (C and C++); refused for make. qcc default is ['-g','-O0','-Wall']")] = None,
+    ldflags: Annotated[list[str] | None, Field(description="Linker flags/libraries for qcc and cmake (CMAKE_EXE_LINKER_FLAGS), e.g. ['-lsocket']; refused for make")] = None,
     make_args: Annotated[list[str] | None, Field(description="Extra make or cmake --build arguments (allow-listed, see the description)")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600)] = 300,
 ) -> Annotated[CallToolResult, BuildResult]:
