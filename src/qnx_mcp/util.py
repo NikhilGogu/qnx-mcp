@@ -54,7 +54,8 @@ class Config:
     allow: tuple[str, ...]
     ssh_key: Path
     leases: Path
-    workspace: tuple[Path, ...] = ()
+    workspace: tuple[Path, ...] = ()  # empty refuses every host path; from_env never leaves it empty
+    workspace_from_cwd: bool = False
     trust_first_use: bool = False
     remote_binary_roots: tuple[str, ...] = ("/tmp", "/data")
 
@@ -66,6 +67,13 @@ class Config:
         # No default: an unset or empty allowlist allows nothing ("*" must be explicit).
         allow = tuple(p.strip() for p in env.get("QNX_MCP_ALLOW_TARGETS", "").split(",") if p.strip())
         workspace = tuple(Path(p).expanduser() for p in env.get("QNX_MCP_WORKSPACE", "").split(os.pathsep) if p.strip())
+        # Unset or empty: the directory the server was started in, so host paths are always confined.
+        from_cwd = not workspace
+        if from_cwd:
+            try:
+                workspace = (Path(os.path.realpath(os.getcwd())),)
+            except OSError:  # working directory removed: no workspace, every host path is refused
+                workspace = ()
         # Set but empty, or only invalid entries: no root, so every remote_binary is refused (fails closed).
         roots = env.get("QNX_MCP_REMOTE_BINARY_ROOTS")
         rb_roots = ("/tmp", "/data") if roots is None else tuple(
@@ -79,6 +87,7 @@ class Config:
             ssh_key=Path(env.get("QNX_MCP_SSH_KEY", str(home / ".ssh" / "id_ed25519"))),
             leases=Path(env.get("QNX_MCP_DHCP_LEASES", "/var/lib/libvirt/dnsmasq/virbr0.status")),
             workspace=workspace,
+            workspace_from_cwd=from_cwd,
             trust_first_use=env.get("QNX_MCP_TRUST_FIRST_USE", "") == "1",
             remote_binary_roots=rb_roots,
         )
@@ -139,6 +148,10 @@ def check_run_id(run_id: str) -> str:
     return run_id
 
 
+WORKSPACE_HINT = ("Use a path inside the workspace (QNX_MCP_WORKSPACE, or the directory the server was started in when that is not set; "
+                  "environment_check shows it).")
+
+
 def within(path: Path, roots: Sequence[Path]) -> bool:
     real = os.path.realpath(path)
     for root in roots:
@@ -149,18 +162,18 @@ def within(path: Path, roots: Sequence[Path]) -> bool:
 
 
 def check_host_path(cfg: Config, path: str, what: str, *, kind: str = "file") -> Path:
-    """Resolve a host path from the agent. With QNX_MCP_WORKSPACE set it must resolve inside it."""
+    """Resolve a host path from the agent. It must resolve (symlinks included) inside the workspace."""
     if not isinstance(path, str) or not path or "\0" in path:
         raise QnxMcpError("invalid_argument", f"empty or invalid {what}")
     p = Path(path).expanduser()
     if not p.is_absolute():
         raise QnxMcpError("invalid_argument", f"{what} must be an absolute path on the build host: {path!r}")
     real = Path(os.path.realpath(p))
-    if cfg.workspace and not within(real, cfg.workspace):
+    if not within(real, cfg.workspace):
         raise QnxMcpError(
             "path_not_allowed",
             f"{what} {real} is outside the workspace {[str(w) for w in cfg.workspace]}",
-            hint="Use a path inside QNX_MCP_WORKSPACE (symlinks are resolved before the check).",
+            hint=WORKSPACE_HINT + " Symlinks are resolved before the check.",
         )
     if kind == "file" and not real.is_file():
         raise QnxMcpError("invalid_argument", f"{what} is not a file on the build host: {real}")

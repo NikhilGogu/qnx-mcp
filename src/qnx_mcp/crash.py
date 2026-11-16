@@ -27,11 +27,11 @@ _SEGV_CODES = {1: "SEGV_MAPERR (address not mapped)", 2: "SEGV_ACCERR (no permis
 
 def _source_context(cfg: Config, path: str | None, line: int | None, radius: int = 3) -> list[dict[str, Any]] | None:
     """Source lines around a frame. Paths come from DWARF in the binary, so only C/C++ sources are
-    read, and only inside QNX_MCP_WORKSPACE when it is set."""
+    read, and only inside the workspace."""
     if not path or not line or not path.endswith(SOURCE_EXT):
         return None
     real = os.path.realpath(path)
-    if not os.path.isfile(real) or os.path.getsize(real) > MAX_SOURCE or (cfg.workspace and not within(Path(real), cfg.workspace)):
+    if not os.path.isfile(real) or os.path.getsize(real) > MAX_SOURCE or not within(Path(real), cfg.workspace):
         return None
     try:
         lines = Path(real).read_text(errors="replace").splitlines()

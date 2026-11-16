@@ -45,3 +45,20 @@ async def mcp_client(env: dict[str, str] | None = None, log: list[str] | None = 
 
 def run_async(coro):
     return asyncio.run(coro)
+
+
+def write_elf(path: Any, *, machine: int = 62, interpreter: str = "/lib64/ld-linux-x86-64.so.2") -> str:
+    """A minimal 64-bit little-endian ELF executable header with one PT_INTERP segment and no sections.
+    Default: an x86_64 Linux program, so the tests do not depend on the host's own /bin/ls being ELF."""
+    import struct
+
+    interp = interpreter.encode() + b"\0"
+    phoff, phentsize = 64, 56
+    interp_off = phoff + phentsize
+    ident = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9)
+    header = ident + struct.pack("<HHIQQQIHHHHHH", 2, machine, 1, 0, phoff, 0, 0, 64, phentsize, 1, 64, 0, 0)
+    phdr = struct.pack("<IIQQQQQQ", 3, 4, interp_off, 0, 0, len(interp), len(interp), 1)
+    with open(path, "wb") as f:
+        f.write(header + phdr + interp)
+    os.chmod(path, 0o755)
+    return str(path)

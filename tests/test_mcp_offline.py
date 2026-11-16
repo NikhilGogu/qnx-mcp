@@ -11,7 +11,7 @@ from pathlib import Path
 
 from jsonschema.validators import validator_for
 
-from helpers import mcp_client, run_async
+from helpers import mcp_client, run_async, write_elf
 
 EXPECTED = {"target_list", "target_create", "target_start", "target_stop", "target_destroy", "target_status", "build", "deploy_and_run",
             "run_start", "run_poll", "run_stop", "get_crash", "file_put", "file_get", "file_list", "processes", "process_stop", "logs",
@@ -62,16 +62,24 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
     _fake_target(tmp_path, "tb9")
     _fake_target(tmp_path, "t0")
 
+    # Every host file these cases use is in tmp_path; the default workspace is tested in test_default_workspace_confines_host_paths.
+    ws = str(tmp_path)
+    # A host binary that is not a QNX one: a small x86_64 Linux ELF file written inside the workspace,
+    # so the case does not depend on the host's own /bin/ls (Mach-O on macOS).
+    host_ls = write_elf(tmp_path / "ls")
+    fixture = str(tmp_path / "fixture.txt")  # /etc/hostname does not exist on macOS
+    Path(fixture).write_text("x\n")
+
     async def go():
-        async with mcp_client(_env(tmp_path)) as c:
+        async with mcp_client({**_env(tmp_path), "QNX_MCP_WORKSPACE": ws}) as c:
             schemas = {t.name: t.output_schema for t in (await c.session.list_tools()).tools}
             cases = [
                 ("target_status", {"name": "tb1"}, "target_not_found"),
                 ("target_status", {"name": "t0"}, "target_not_allowed"),
                 ("processes", {"target": "tb9"}, "target_down"),
                 ("logs", {"target": "tb9"}, "target_down"),
-                ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls"}, "not_a_qnx_binary"),
-                ("run_start", {"target": "tb9", "binary": "/bin/ls"}, "not_a_qnx_binary"),
+                ("deploy_and_run", {"target": "tb9", "binary": host_ls}, "not_a_qnx_binary"),
+                ("run_start", {"target": "tb9", "binary": host_ls}, "not_a_qnx_binary"),
                 ("deploy_and_run", {"target": "tb9", "binary": "relative/path"}, "invalid_argument"),
                 ("target_create", {"name": "tb9", "options": ["--ip=10.0.0.1"]}, "invalid_argument"),
                 ("target_create", {"name": "tb5", "cpus": 9}, "invalid_argument"),  # rejected by the input schema itself
@@ -79,14 +87,18 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("get_crash", {"target": "tb9", "core_path": "/tmp/x.core"}, "invalid_argument"),
                 ("run_poll", {"target": "tb9", "run_id": "r-000000000000"}, "invalid_argument"),
                 ("run_stop", {"target": "tb9", "run_id": "nonsense"}, "invalid_argument"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/etc/passwd"}, "path_not_allowed"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp/qnx-mcp/bin/x"}, "path_not_allowed"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/etc/passwd"}, "path_not_allowed"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/tmp/qnx-mcp/bin/x"}, "path_not_allowed"),
                 ("file_get", {"target": "tb9", "remote_path": "/tmp/$(id)"}, "invalid_argument"),
-                ("file_put", {"target": "tb9", "local_path": "/etc/hostname", "remote_path": "/tmp//qnx-mcp/bin/x"}, "invalid_argument"),
+                ("file_put", {"target": "tb9", "local_path": fixture, "remote_path": "/tmp//qnx-mcp/bin/x"}, "invalid_argument"),
                 ("run_poll", {"target": "tb9", "run_id": "r-000000000000", "max_kb": 4096}, "invalid_argument"),
                 ("target_destroy", {"name": "tb9", "confirm": "tb8"}, "invalid_argument"),
                 ("target_destroy", {"name": "t0", "confirm": "t0"}, "target_not_allowed"),
-                ("build", {"path": "/nonexistent/dir"}, "invalid_argument"),
+                ("build", {"path": str(tmp_path / "nonexistent")}, "invalid_argument"),
+                ("build", {"path": "/nonexistent/dir"}, "path_not_allowed"),
+                ("build", {"path": str(tmp_path), "system": "make", "make_args": ["-f", "other.mk"]}, "invalid_argument"),
+                ("build", {"path": str(tmp_path), "system": "qcc", "cflags": ["-wrapper,x"]}, "invalid_argument"),
+                ("build", {"path": str(tmp_path), "system": "qcc", "ldflags": ["-L/usr/lib"]}, "path_not_allowed"),
                 ("file_list", {"target": "tb9", "path": "/tmp/../etc"}, "invalid_argument"),
                 ("file_list", {"target": "tb9", "path": "/tmp/"}, "invalid_argument"),
                 ("file_list", {"target": "tb9", "path": "/tmp"}, "target_down"),
@@ -97,7 +109,7 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/tmp/qnx-mcp/bin/qnx-mcp-run-0"}, "path_not_allowed"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/tmp/qnx-mcp"}, "path_not_allowed"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/data/../tmp/qnx-mcp/bin/x"}, "invalid_argument"),
-                ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls", "remote_binary": "/data/svc"}, "invalid_argument"),
+                ("deploy_and_run", {"target": "tb9", "binary": host_ls, "remote_binary": "/data/svc"}, "invalid_argument"),
                 ("run_start", {"target": "tb9"}, "invalid_argument"),
                 ("run_start", {"target": "tb9", "remote_binary": "/data/svc"}, "target_down"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/proc/boot/ksh"}, "path_not_allowed"),
@@ -116,6 +128,27 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
             _validate(schemas["target_list"], data)
             err, data = await c.call("environment_check")
             _validate(schemas["environment_check"], data)
+    run_async(go())
+
+
+def test_default_workspace_confines_host_paths(tmp_path: Path):
+    """QNX_MCP_WORKSPACE unset or empty: host paths must be inside the server's working directory."""
+    _fake_target(tmp_path, "tb9")
+    cwd = os.path.realpath(os.getcwd())
+    assert cwd != "/"
+
+    async def go():
+        async with mcp_client({**_env(tmp_path), "QNX_MCP_WORKSPACE": ""}) as c:
+            for tool, args in (("file_put", {"target": "tb9", "local_path": "/etc/hosts", "remote_path": "/tmp/x"}),
+                               ("file_get", {"target": "tb9", "remote_path": "/tmp/x", "local_path": str(tmp_path / "x")}),
+                               ("deploy_and_run", {"target": "tb9", "binary": "/bin/ls"}),
+                               ("get_crash", {"target": "tb9", "core_path": "/tmp/x.core", "binary": "/bin/ls"}),
+                               ("build", {"path": str(tmp_path)})):
+                err, data = await c.call(tool, **args)
+                assert err and data["error"]["code"] == "path_not_allowed", (tool, data)
+            err, data = await c.call("environment_check")
+            ws = {ch["check"]: ch for ch in data["checks"]}["workspace"]
+            assert ws["ok"] and cwd in ws["detail"] and "not set" in ws["detail"], ws
     run_async(go())
 
 
