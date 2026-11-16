@@ -307,6 +307,11 @@ def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | N
         if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
             raise _refuse("sources", str(s_), "a source is a file path, never an option")
     if system == "make":
+        # make gets no flags from the server, so they would be dropped while the build reports ok.
+        for field, flags, var in (("cflags", cflags, "CFLAGS=..."), ("ldflags", ldflags, "LDFLAGS=... or LDLIBS=...")):
+            if flags:
+                raise QnxMcpError("invalid_argument", f"{field} is not used in make mode, so it is refused",
+                                  hint=f"Pass make_args=['{var}'] instead; the Makefile decides how it uses them.", field=field)
         _check_make_args(cfg, root, list(make_args or []))
     elif system == "cmake":
         _check_cmake_build_args(list(make_args or []))
@@ -442,7 +447,10 @@ def build(
         cmake = shutil.which("cmake", path=env.get("PATH"))
         if not cmake:
             raise QnxMcpError("tool_missing", "cmake not found on the build host", hint="Install cmake 3.16+ or use system=make/qcc.")
-        ok = step([cmake, "-S", str(root), "-B", str(bdir), f"-DCMAKE_TOOLCHAIN_FILE={tc}", "-DCMAKE_BUILD_TYPE=Debug", *(cflags and [f"-DCMAKE_C_FLAGS={' '.join(cflags)}"] or [])])
+        # Set on every configure, empty when omitted: they are cache variables, so a value from an earlier call would stay.
+        cc_flags, ld_flags = " ".join(cflags or []), " ".join(ldflags or [])
+        ok = step([cmake, "-S", str(root), "-B", str(bdir), f"-DCMAKE_TOOLCHAIN_FILE={tc}", "-DCMAKE_BUILD_TYPE=Debug",
+                   f"-DCMAKE_C_FLAGS={cc_flags}", f"-DCMAKE_CXX_FLAGS={cc_flags}", f"-DCMAKE_EXE_LINKER_FLAGS={ld_flags}"])
         if ok:
             ok = step([cmake, "--build", str(bdir), f"-j{os.cpu_count() or 4}", *(make_args or [])])
         candidates = _scan_elves(bdir, started)
