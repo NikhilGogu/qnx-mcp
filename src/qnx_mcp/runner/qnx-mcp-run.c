@@ -29,7 +29,21 @@
  * Run options: -t timeout_ms, -m max bytes kept per stream, -w core_wait_ms, -C cwd,
  *   -e NAME=VALUE (repeatable), -R dir (move the core file there and lock dir/active while running),
  *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here),
+ *   -u uid:gid (run the program as that user and group, see below),
  *   policy options (refuse a program that is not an executable regular file or that the policy does not allow).
+ *
+ * Non-root runs (-u uid:gid, needs -R dir): the runner itself keeps its identity (root on mkqnximage targets),
+ * so it can still talk to dumper, move the core and read /proc. Before the program starts, the run directory
+ * becomes mode 0711 (the program cannot list it), files the runner creates there are 0600, and an empty
+ * dir/work (mode 0700, owned by uid:gid) becomes the program's default working directory. In the child,
+ * after the process group and stdio are set up, the supplementary groups are set to gid alone, then setgid
+ * and setuid; the drop is checked (real and effective ids, and setuid(0) must now fail). Any failure is
+ * reported as exec_error and the program does not start (fail closed). An agent's -C cwd is entered after
+ * the drop, with the new identity. Pruning removes a work directory's contents as its owner, so files the
+ * program leaves behind (symlinks included) are never removed with root's rights.
+ * NOT VERIFIED ON A TARGET: the drop sequence uses POSIX calls that QNX OS 8.0 documents (setgroups,
+ * setgid, setuid), but it has not been run on a QNX target yet; whether dumper still writes and notifies
+ * a core for a program that dropped to a non-root uid is also unverified (tests/test_nonroot_e2e.py).
  *
  * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
  * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
@@ -50,6 +64,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <grp.h>
 #include <limits.h>
 #include <poll.h>
 #include <pthread.h>
@@ -673,8 +688,68 @@ struct opts {
     char *envs[MAX_ENV];
     int nenv;
     int watch_stdin;
+    int drop;          /* -u given: run the program as uid:gid */
+    uid_t uid;
+    gid_t gid;
+    char workdir[PATH_MAX];
     char **prog;
 };
+
+/* Become uid:gid for good. Returns 0 or an errno. A runner that is not root can only "become" itself. */
+static int drop_privileges(uid_t uid, gid_t gid)
+{
+    if (geteuid() != 0) {
+        return getuid() == uid && geteuid() == uid && getgid() == gid && getegid() == gid ? 0 : EPERM;
+    }
+    gid_t groups[1] = {gid};
+    if (setgroups(1, groups) == -1) {
+        return errno;
+    }
+    if (setgid(gid) == -1) {
+        return errno;
+    }
+    if (setuid(uid) == -1) {
+        return errno;
+    }
+    if (getuid() != uid || geteuid() != uid || getgid() != gid || getegid() != gid) {
+        return EPERM;
+    }
+    if (uid != 0 && (setuid(0) != -1 || seteuid(0) != -1)) {
+        return EPERM; /* root could be regained: do not run the program */
+    }
+    return 0;
+}
+
+/* -u: make the run directory unlistable for the program and give it its own working directory.
+ * Runs before anything is created in the run directory, so the umask covers every file there. */
+static void prepare_drop(struct opts *o)
+{
+    if (o->core_dir == NULL) {
+        fail("-u needs -R dir", 0);
+    }
+    umask(077);
+    if (chmod(o->core_dir, 0711) == -1) {
+        fail("chmod run directory", errno);
+    }
+    if (snprintf(o->workdir, sizeof o->workdir, "%s/work", o->core_dir) >= (int)sizeof o->workdir) {
+        fail("run directory path too long", ENAMETOOLONG);
+    }
+    if (mkdir(o->workdir, 0700) == -1 && errno != EEXIST) {
+        fail("mkdir work", errno);
+    }
+    int fd = open(o->workdir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    if (fd == -1 || fstat(fd, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        fail("open work", fd == -1 ? errno : ENOTDIR);
+    }
+    if (fchown(fd, o->uid, o->gid) == -1 || fchmod(fd, 0700) == -1) {
+        fail("chown work", errno);
+    }
+    close(fd);
+    if (o->cwd == NULL) {
+        o->cwd = o->workdir;
+    }
+}
 
 struct sink {
     int fd;     /* pipe read end, -1 once closed */
@@ -823,6 +898,12 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
             close(outp[1]);
             close(errp[1]);
         }
+        int dropped = 0;
+        if (e == 0 && o->drop) {
+            e = drop_privileges(o->uid, o->gid);
+            dropped = e != 0; /* reported as a negative errno: the drop failed, not the exec */
+            umask(022);
+        }
         for (int i = 0; e == 0 && i < o->nenv; i++) {
             if (putenv(o->envs[i]) != 0) {
                 e = errno;
@@ -834,6 +915,9 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
         if (e == 0) {
             execvp(o->prog[0], o->prog);
             e = errno;
+        }
+        if (dropped) {
+            e = -e;
         }
         (void)!write(execp[1], &e, sizeof e);
         _exit(127);
@@ -1094,7 +1178,13 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     int core_expected = r->signaled && dumper_signal(r->signo);
     j_head(f);
     fprintf(f, ",\"pid\":%d,\"exec_error\":", (int)r->pid);
-    j_cstr(f, r->exec_errno ? strerror(r->exec_errno) : NULL);
+    if (r->exec_errno < 0) {
+        char why[160];
+        snprintf(why, sizeof why, "could not drop privileges (-u): %s", strerror(-r->exec_errno));
+        j_cstr(f, why);
+    } else {
+        j_cstr(f, r->exec_errno ? strerror(r->exec_errno) : NULL);
+    }
     fprintf(f, ",\"exited\":%s,\"exit_code\":", r->exited ? "true" : "false");
     if (r->exited) {
         fprintf(f, "%d", r->exit_code);
@@ -1463,6 +1553,51 @@ static int rm_entry(const char *p, const struct stat *st, int flag, struct FTW *
     return remove(p) == 0 || errno == ENOENT ? 0 : -1;
 }
 
+static int rm_below(const char *p, const struct stat *st, int flag, struct FTW *ftw)
+{
+    return ftw->level == 0 ? 0 : rm_entry(p, st, flag, ftw);
+}
+
+/* A non-root run's dir/work belongs to the program's user, who may have left symlinks or may still be
+ * changing it (a process that escaped with setsid). Its contents are removed by a child that has become
+ * that user, so nothing is removed with root's rights; then the empty directory is removed here (the run
+ * directory itself is root's, so the program cannot swap dir/work for something else). Returns -1 when
+ * the work directory could not be emptied, and the run directory is then kept. */
+static int remove_work_as_owner(const char *rundir)
+{
+    char w[PATH_MAX];
+    struct stat st;
+    if (snprintf(w, sizeof w, "%s/work", rundir) >= (int)sizeof w) {
+        return -1;
+    }
+    if (lstat(w, &st) == -1) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!S_ISDIR(st.st_mode) || st.st_uid == geteuid()) {
+        return 0; /* nothing another user controls: the caller's removal handles it */
+    }
+    pid_t pid = fork();
+    if (pid == -1) {
+        return -1;
+    }
+    if (pid == 0) {
+        if (drop_privileges(st.st_uid, st.st_gid) != 0) {
+            _exit(1);
+        }
+        _exit(nftw(w, rm_below, 16, FTW_DEPTH | FTW_PHYS) == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return -1;
+    }
+    return rmdir(w) == 0 || errno == ENOENT ? 0 : -1;
+}
+
 struct dent {
     char name[NAME_MAX + 1];
     time_t mtime;
@@ -1534,6 +1669,9 @@ static int mode_prune(const char *dir, long keep, long age_s, char **protect, in
             continue;
         }
         snprintf(p, sizeof p, "%s/%s", dir, v[i].name);
+        if (remove_work_as_owner(p) != 0) {
+            continue;
+        }
         if (nftw(p, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0) {
             removed++;
         }
@@ -2063,7 +2201,7 @@ int main(int argc, char *argv[])
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:N:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:Su:B:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:N:")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -2077,6 +2215,23 @@ int main(int argc, char *argv[])
             break;
         case 'R': o.core_dir = optarg; break;
         case 'S': o.watch_stdin = 1; break;
+        case 'u': {
+            char *end = NULL;
+            errno = 0;
+            unsigned long u = strtoul(optarg, &end, 10);
+            if (errno != 0 || end == optarg || *end != ':' || u == 0 || u > 0x7ffffffeUL) {
+                fail("bad -u uid:gid", 0);
+            }
+            const char *gs = end + 1;
+            unsigned long g = strtoul(gs, &end, 10);
+            if (errno != 0 || end == gs || *end != '\0' || g == 0 || g > 0x7ffffffeUL) {
+                fail("bad -u uid:gid", 0);
+            }
+            o.drop = 1;
+            o.uid = (uid_t)u;
+            o.gid = (gid_t)g;
+            break;
+        }
         case 'B': bg_dir = optarg; break;
         case 'P': poll_dir = optarg; break;
         case 'O': out_off = (unsigned long long)num_arg(optarg, 0, LONG_MAX); break;
@@ -2187,6 +2342,9 @@ int main(int argc, char *argv[])
     }
     signal(SIGPIPE, SIG_IGN);
 
+    if (o.drop) {
+        prepare_drop(&o);
+    }
     if (bg_dir != NULL) {
         o.watch_stdin = 0;
         return mode_background(&o, bg_dir);
