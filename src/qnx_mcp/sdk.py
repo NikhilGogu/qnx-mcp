@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
+from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within, write_atomic
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -120,6 +120,11 @@ _LD_PASS = {"--build-id", "--build-id=none", "--build-id=sha1", "--build-id=md5"
             "--no-as-needed", "--no-undefined", "--export-dynamic", "-E", "-O1"}
 _LD_Z = {"relro", "norelro", "now", "lazy", "noexecstack", "defs"}
 _INPUT_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+/-]*\.(o|a|so)|/[A-Za-z0-9._+/-]+\.(o|a|so)")
+# GNU ld reads any input it does not recognise as a linker script, so inputs are checked by content.
+# Thin archives are refused: their members are paths that ld opens at link time.
+_INPUT_MAGIC = {".o": b"\x7fELF", ".so": b"\x7fELF", ".a": b"!<arch>\n"}
+# gcc hands a file with any other extension to the linker, for the same effect.
+_SOURCE_EXT = (".c", ".cc", ".cpp", ".cxx", ".s", ".S")
 _PATH_SAFE_RE = re.compile(r"[A-Za-z0-9._+/-]+")
 _MAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+/-]*")
 _MAKE_OPTS = {"-k", "--keep-going", "-s", "--silent", "--quiet", "-B", "--always-make", "-n", "--dry-run", "-w", "--no-print-directory"}
@@ -213,6 +218,15 @@ def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool, 
         raise _refuse(field, a, "quoted -D values are accepted only in qcc mode; make and cmake pass flags through a shell")
     if files and not a.startswith(("-", "@")) and _INPUT_FILE_RE.fullmatch(a):
         _check_in_workspace(cfg, root, field, a, a)
+        magic = _INPUT_MAGIC[os.path.splitext(a)[1]]
+        try:
+            with open(Path(a) if a.startswith("/") else root / a, "rb") as f:
+                head = f.read(len(magic))
+        except OSError:
+            head = b""
+        if head != magic:
+            raise _refuse(field, a, "an object or shared library must be an ELF file and an archive an ar file "
+                          "(anything else would be read as a linker script)")
         return
     raise _refuse(field, a, "not an allowed compiler or linker flag")
 
@@ -306,7 +320,14 @@ def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | N
     for s_ in sources or []:
         if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
             raise _refuse("sources", str(s_), "a source is a file path, never an option")
+        if system == "qcc" and not s_.endswith(_SOURCE_EXT):
+            raise _refuse("sources", s_, f"qcc mode compiles C, C++ and assembly sources only ({', '.join(_SOURCE_EXT)})")
     if system == "make":
+        # make gets no flags from the server, so they would be dropped while the build reports ok.
+        for field, flags, var in (("cflags", cflags, "CFLAGS=..."), ("ldflags", ldflags, "LDFLAGS=... or LDLIBS=...")):
+            if flags:
+                raise QnxMcpError("invalid_argument", f"{field} is not used in make mode, so it is refused",
+                                  hint=f"Pass make_args=['{var}'] instead; the Makefile decides how it uses them.", field=field)
         _check_make_args(cfg, root, list(make_args or []))
     elif system == "cmake":
         _check_cmake_build_args(list(make_args or []))
@@ -434,15 +455,17 @@ def build(
             raise QnxMcpError("path_not_allowed", f"build directory {os.path.realpath(bdir)} is outside the workspace", hint=WORKSPACE_HINT)
         bdir.mkdir(exist_ok=True)
         tc = bdir / "qnx-toolchain.cmake"
-        tc.write_text(
-            _CMAKE_TOOLCHAIN.format(
-                proc=proc, qcc=sdk_tool(env, "qcc"), qxx=sdk_tool(env, "q++"), variant=variant, sysroot=env["QNX_TARGET"]
-            )
-        )
+        # The workspace may hold a link at this name; write_atomic replaces it instead of writing through it.
+        write_atomic(tc, _CMAKE_TOOLCHAIN.format(
+            proc=proc, qcc=sdk_tool(env, "qcc"), qxx=sdk_tool(env, "q++"), variant=variant, sysroot=env["QNX_TARGET"]
+        ).encode(), 0o644)
         cmake = shutil.which("cmake", path=env.get("PATH"))
         if not cmake:
             raise QnxMcpError("tool_missing", "cmake not found on the build host", hint="Install cmake 3.16+ or use system=make/qcc.")
-        ok = step([cmake, "-S", str(root), "-B", str(bdir), f"-DCMAKE_TOOLCHAIN_FILE={tc}", "-DCMAKE_BUILD_TYPE=Debug", *(cflags and [f"-DCMAKE_C_FLAGS={' '.join(cflags)}"] or [])])
+        # Set on every configure, empty when omitted: they are cache variables, so a value from an earlier call would stay.
+        cc_flags, ld_flags = " ".join(cflags or []), " ".join(ldflags or [])
+        ok = step([cmake, "-S", str(root), "-B", str(bdir), f"-DCMAKE_TOOLCHAIN_FILE={tc}", "-DCMAKE_BUILD_TYPE=Debug",
+                   f"-DCMAKE_C_FLAGS={cc_flags}", f"-DCMAKE_CXX_FLAGS={cc_flags}", f"-DCMAKE_EXE_LINKER_FLAGS={ld_flags}"])
         if ok:
             ok = step([cmake, "--build", str(bdir), f"-j{os.cpu_count() or 4}", *(make_args or [])])
         candidates = _scan_elves(bdir, started)

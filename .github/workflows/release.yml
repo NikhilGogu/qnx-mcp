@@ -3,19 +3,25 @@ name: release
 # On a version tag: build the wheel, install it in a fresh venv, run the offline tests
 # against the installed package, check that `qnx-mcp --check` runs, and attach the wheel
 # to a GitHub Release. Publishing to PyPI is a separate, manual step.
+#
+# The build job installs dependencies from PyPI and runs the tests, so it gets a read-only
+# token that checkout does not keep. Only the release job can write, and it runs no project
+# or dependency code: it downloads the tested wheel and calls gh.
 
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,7 +45,24 @@ jobs:
           status=$?
           echo "$out"
           test $status -eq 1 && echo "$out" | grep -q '^FAIL  qnx_sdp'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
       - name: Create the release with the wheel
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.whl --title "qnx-mcp $GITHUB_REF_NAME" --notes "See CHANGELOG.md."
+        # No checkout in this job, so gh is told the repository.
+        run: gh release create "$GITHUB_REF_NAME" dist/*.whl --repo "$GITHUB_REPOSITORY" --title "qnx-mcp $GITHUB_REF_NAME" --notes "See CHANGELOG.md."

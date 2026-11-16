@@ -543,7 +543,7 @@ async def target_start(
 
 @mcp.tool(
     title="Stop a QNX target",
-    description="Power off the target's QEMU (mkqnximage --stop, then SIGTERM/SIGKILL through a pidfd of the verified QEMU process). "
+    description="Power off the target's QEMU with SIGTERM, then SIGKILL, sent only through a pidfd of the verified QEMU process. "
     "Waits for runs in progress (they hold a shared lock). Background runs are lost; files on the target disk persist.",
     annotations=_ann(False, True, True),
 )
@@ -595,7 +595,10 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
     "make_args take target names, -j N, -k, -s, -B, -n, CFLAGS/CXXFLAGS/CPPFLAGS/LDFLAGS/LDLIBS (allowed flags only), PREFIX/DESTDIR inside the workspace "
     "or V/VERBOSE/DEBUG=number; "
     "for cmake, --target NAME, -j N, --config, --clean-first, -v. Host paths must be inside the workspace. "
-    "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set. "
+    "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set; sources need a "
+    ".c, .cc, .cpp, .cxx, .s or .S extension, and .o/.so inputs must be ELF files and .a inputs ar archives inside the workspace. "
+    "cmake mode sets CMAKE_C_FLAGS and CMAKE_CXX_FLAGS from cflags and CMAKE_EXE_LINKER_FLAGS from ldflags on every configure (empty when omitted); "
+    "make mode refuses cflags and ldflags (pass make_args=['CFLAGS=...'] or LDFLAGS/LDLIBS instead). "
     "Returns diagnostics[] with file, line, column, severity, message (gcc JSON diagnostics in qcc mode, parsed text for make/cmake), "
     "linker errors, and artifacts[] with path, arch, build_id and debug_info for deploy_and_run. ok=false with error.code build_failed when compilation fails.",
     annotations=_ann(False, True, False),
@@ -606,8 +609,8 @@ async def build(
     arch: Annotated[Literal["x86_64", "aarch64le"], Field(description="Target architecture; must match the target you deploy to")] = "x86_64",
     sources: Annotated[list[str] | None, Field(description="qcc mode: source files (relative to path or absolute)")] = None,
     output: Annotated[str | None, Field(description="qcc mode: output executable path (default: first source's stem inside path)")] = None,
-    cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed); qcc default is ['-g','-O0','-Wall']")] = None,
-    ldflags: Annotated[list[str] | None, Field(description="qcc mode: linker flags/libraries, e.g. ['-lsocket']")] = None,
+    cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed) for qcc and cmake (C and C++); refused for make. qcc default is ['-g','-O0','-Wall']")] = None,
+    ldflags: Annotated[list[str] | None, Field(description="Linker flags/libraries for qcc and cmake (CMAKE_EXE_LINKER_FLAGS), e.g. ['-lsocket']; refused for make")] = None,
     make_args: Annotated[list[str] | None, Field(description="Extra make or cmake --build arguments (allow-listed, see the description)")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600)] = 300,
 ) -> Annotated[CallToolResult, BuildResult]:
@@ -630,7 +633,7 @@ async def build(
 async def deploy_and_run(
     target: TargetName,
     binary: Annotated[str | None, Field(description="Host path of the executable, usually build.artifacts[].path")] = None,
-    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry")] = None,
+    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry; no NUL bytes, at most 64 KiB in total")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600, description="Kill the program after this many seconds")] = 30,
     env: EnvVars = None,
     cwd: Annotated[str | None, Field(description="Working directory on the target")] = None,
@@ -653,7 +656,7 @@ async def deploy_and_run(
 async def run_start(
     target: TargetName,
     binary: Annotated[str | None, Field(description="Host path of the executable")] = None,
-    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry")] = None,
+    args: Annotated[list[str] | None, Field(description="Program arguments, one element per argv entry; no NUL bytes, at most 64 KiB in total")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=86400, description="Kill the program after this many seconds")] = 600,
     env: EnvVars = None,
     cwd: Annotated[str | None, Field(description="Working directory on the target")] = None,
