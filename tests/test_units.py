@@ -723,3 +723,34 @@ def test_environment_check_points_hosts_without_kvm_to_ssh_mode(tmp_path: Path, 
     monkeypatch.setattr(ops.os, "access", lambda p, mode: False)
     kvm = {c["check"]: c for c in ops.environment_check(cfg)["checks"]}["kvm"]
     assert not kvm["ok"] and "adduser" in kvm["fix"], kvm
+
+
+def _literal_build_calls() -> list[tuple[str, str, dict]]:
+    """Every build call in the SDK and end-to-end tests whose flag arguments are literals."""
+    import ast
+    found = []
+    here = Path(__file__).parent
+    for f in sorted(here.glob("test_*e2e.py")) + [here / "test_build_sdk.py"]:
+        for node in ast.walk(ast.parse(f.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            is_tool = node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "build"
+            is_fn = isinstance(node.func, ast.Name) and node.func.id in ("build", "_build")
+            if not (is_tool or is_fn):
+                continue
+            kw = {}
+            for k in node.keywords:
+                if k.arg in ("cflags", "ldflags", "make_args", "system"):
+                    kw[k.arg] = ast.literal_eval(k.value)
+            found.append((f.name, node.lineno, kw))
+    return found
+
+
+def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
+    """The SDK and end-to-end tests never ran after the allow-list was added; each of their build arguments must pass it."""
+    from qnx_mcp.sdk import check_build_args
+    cfg, ws, _ = _fake_sdp(tmp_path)
+    calls = _literal_build_calls()
+    assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
+    for name, line, kw in calls:
+        check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))
