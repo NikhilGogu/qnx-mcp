@@ -43,6 +43,17 @@ MKQNXIMAGE_OPTIONS = {
     "--time-servers": r"[A-Za-z0-9.:-]{1,200}",
 }
 _RAM_RE = re.compile(r"\d{1,6}[MG]")
+# ssh reads UserKnownHostsFile as a whitespace-separated list and expands %-tokens and ${VAR} in each name
+# (ssh_config(5)), so a state path with any of these would silently point the host-key pin elsewhere.
+_SSH_UNSAFE_PATH_RE = re.compile(r"[\s\"'\\%$]")
+STATE_DIR_FIX = "Set QNX_MCP_STATE_DIR to a path without whitespace, quotes, backslashes, '%' or '$'."
+
+
+def ssh_path_problem(path: Path) -> str | None:
+    """Why ssh would not read this path as one file name in an -o option (None: it would)."""
+    m = _SSH_UNSAFE_PATH_RE.search(str(path))
+    return f"{path} contains {m.group()!r}, which ssh treats as a separator or expands in UserKnownHostsFile" if m else None
+
 
 # Restarts the image's dumper with the same arguments as mkqnximage's startup script plus
 # -n (sequential core names: app.1.core, app.2.core, ...), so two processes with the same
@@ -272,6 +283,9 @@ class Target:
         return "first_use"
 
     def _ssh_opts(self) -> list[str]:
+        why = ssh_path_problem(self.known_hosts)
+        if why:
+            raise QnxMcpError("internal_error", f"the host-key pin file cannot be passed to ssh: {why}", hint=STATE_DIR_FIX)
         private_dir(self.state)
         keys = self.image_host_keys()
         try:
