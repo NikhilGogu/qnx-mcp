@@ -595,7 +595,8 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
     "make_args take target names, -j N, -k, -s, -B, -n, CFLAGS/CXXFLAGS/CPPFLAGS/LDFLAGS/LDLIBS (allowed flags only), PREFIX/DESTDIR inside the workspace "
     "or V/VERBOSE/DEBUG=number; "
     "for cmake, --target NAME, -j N, --config, --clean-first, -v. Host paths must be inside the workspace. "
-    "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set. "
+    "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set; sources need a "
+    ".c, .cc, .cpp, .cxx, .s or .S extension, and .o/.so inputs must be ELF files and .a inputs ar archives inside the workspace. "
     "Returns diagnostics[] with file, line, column, severity, message (gcc JSON diagnostics in qcc mode, parsed text for make/cmake), "
     "linker errors, and artifacts[] with path, arch, build_id and debug_info for deploy_and_run. ok=false with error.code build_failed when compilation fails.",
     annotations=_ann(False, True, False),

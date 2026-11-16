@@ -120,6 +120,11 @@ _LD_PASS = {"--build-id", "--build-id=none", "--build-id=sha1", "--build-id=md5"
             "--no-as-needed", "--no-undefined", "--export-dynamic", "-E", "-O1"}
 _LD_Z = {"relro", "norelro", "now", "lazy", "noexecstack", "defs"}
 _INPUT_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+/-]*\.(o|a|so)|/[A-Za-z0-9._+/-]+\.(o|a|so)")
+# GNU ld reads any input it does not recognise as a linker script, so inputs are checked by content.
+# Thin archives are refused: their members are paths that ld opens at link time.
+_INPUT_MAGIC = {".o": b"\x7fELF", ".so": b"\x7fELF", ".a": b"!<arch>\n"}
+# gcc hands a file with any other extension to the linker, for the same effect.
+_SOURCE_EXT = (".c", ".cc", ".cpp", ".cxx", ".s", ".S")
 _PATH_SAFE_RE = re.compile(r"[A-Za-z0-9._+/-]+")
 _MAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+/-]*")
 _MAKE_OPTS = {"-k", "--keep-going", "-s", "--silent", "--quiet", "-B", "--always-make", "-n", "--dry-run", "-w", "--no-print-directory"}
@@ -213,6 +218,15 @@ def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool, 
         raise _refuse(field, a, "quoted -D values are accepted only in qcc mode; make and cmake pass flags through a shell")
     if files and not a.startswith(("-", "@")) and _INPUT_FILE_RE.fullmatch(a):
         _check_in_workspace(cfg, root, field, a, a)
+        magic = _INPUT_MAGIC[os.path.splitext(a)[1]]
+        try:
+            with open(Path(a) if a.startswith("/") else root / a, "rb") as f:
+                head = f.read(len(magic))
+        except OSError:
+            head = b""
+        if head != magic:
+            raise _refuse(field, a, "an object or shared library must be an ELF file and an archive an ar file "
+                          "(anything else would be read as a linker script)")
         return
     raise _refuse(field, a, "not an allowed compiler or linker flag")
 
@@ -306,6 +320,8 @@ def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | N
     for s_ in sources or []:
         if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
             raise _refuse("sources", str(s_), "a source is a file path, never an option")
+        if system == "qcc" and not s_.endswith(_SOURCE_EXT):
+            raise _refuse("sources", s_, f"qcc mode compiles C, C++ and assembly sources only ({', '.join(_SOURCE_EXT)})")
     if system == "make":
         _check_make_args(cfg, root, list(make_args or []))
     elif system == "cmake":
