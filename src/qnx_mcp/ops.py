@@ -241,7 +241,7 @@ def _run_as_field(cfg: Config) -> dict[str, int] | None:
     return {"uid": cfg.run_as[0], "gid": cfg.run_as[1]} if cfg.run_as else None
 
 
-DROP_FAILED = "could not drop privileges"
+DROP_FAILED = "could not drop privileges"  # how qnx-mcp-run.c starts exec_error when -u failed
 
 
 def _drop_failed_step(res: dict[str, Any]) -> str | None:
@@ -433,8 +433,9 @@ def deploy_and_run(
         "build_id": prog["build_id"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"], "args": args,
         "started_at": rec["started_at"], "run_as": rec["run_as"], **res,
     }
-    if _drop_failed_step(res):
-        result["next_step"] = _drop_failed_step(res)
+    drop_failed = _drop_failed_step(res)
+    if drop_failed:
+        result["next_step"] = drop_failed
     elif result.get("core_path"):
         result["next_step"] = _crash_step(target, rid, rec)
     elif res.get("core_expected"):
