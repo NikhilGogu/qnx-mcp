@@ -6,6 +6,7 @@
 * `environment_check` and `target_status` report `privileges`: the login user, who programs run as, and per tool its identity and what it needs on the target.
 * New error code `config_error` for server configuration the agent cannot fix.
 * `build` refuses compiler, linker and make arguments outside an allow-list, and host paths are always confined to the workspace (the server's working directory when `QNX_MCP_WORKSPACE` is not set).
+* A tag `v<version>` builds the wheel, tests the installed wheel and attaches it to a GitHub Release (`.github/workflows/release.yml`).
 * The offline tests run in GitHub Actions on Python 3.10 to 3.13. They no longer read host files, so they also pass on macOS.
 
 ## 0.3.0 (4 November 2026)

@@ -702,3 +702,11 @@ def test_workspace_defaults_to_the_working_directory(tmp_path: Path, monkeypatch
     monkeypatch.chdir("/")
     root = {c["check"]: c for c in environment_check(Config.from_env({"HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none")}))["checks"]}
     assert not root["workspace"]["ok"] and "fix" in root["workspace"]
+
+
+def test_package_version_matches_pyproject():
+    """The release workflow builds tag v<version>; pyproject.toml and __version__ must agree."""
+    import re
+    from qnx_mcp import __version__
+    toml = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert re.search(r'(?m)^version = "([^"]+)"$', toml).group(1) == __version__
