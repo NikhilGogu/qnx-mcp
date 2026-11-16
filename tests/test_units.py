@@ -11,6 +11,7 @@ import stat
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -863,3 +864,243 @@ def test_provenance_needs_the_core_to_name_executable_and_pid(rec, mi):
     with pytest.raises(QnxMcpError) as e:
         _provenance(Path("core"), Path("bin"), {}, "b" * 64, rec, mi, _CORE_INFO)
     assert e.value.code == "core_mismatch", e.value.to_dict()
+
+
+# ---------------------------------------------------------------- provenance, uploads and run state, offline
+
+_REMOTE_REC = {"run_id": "r-000000000002", "remote_binary": True, "remote_path": "/data/opt/crash", "remote_real_path": "/data/var/opt/crash",
+               "pid": 42}
+
+PROVENANCE = [
+    # id, record, mi, binary build ID, core build ID, expected: "mismatch" or (verified, evidence prefix)
+    ("run-match", _RUN_REC, _mi(), None, None, (True, "executable path and pid match")),
+    ("run-build-id", _RUN_REC, _mi(note=True), "aa", "aa", (True, "build ID, executable path and pid match")),
+    ("run-wrong-exe", _RUN_REC, _mi(exe="/tmp/qnx-mcp/apps/def/crash"), None, None, "mismatch"),
+    ("run-wrong-pid", _RUN_REC, _mi(pid=7), None, None, "mismatch"),
+    ("run-build-id-differs", _RUN_REC, _mi(note=True), "aa", "bb", "mismatch"),
+    ("run-two-pids", _RUN_REC, {**_mi(), "results": {"1": {"threads": [{"target-id": "pid 42 tid 1"}, {"target-id": "pid 43 tid 1"}]}}},
+     None, None, "mismatch"),
+    ("manual-build-id", None, _mi(note=True), "aa", "aa", (True, "build ID, match")),
+    ("manual-binary-without-id", None, _mi(note=True), None, "aa", "mismatch"),
+    ("manual-core-without-note", None, _mi(), "aa", None, "mismatch"),
+    ("manual-build-id-differs", None, _mi(note=True), "aa", "bb", "mismatch"),
+    ("remote-build-id", _REMOTE_REC, _mi(exe="/data/opt/crash", note=True), "aa", "aa", (True, "build ID, executable path and pid match")),
+    ("remote-real-path", _REMOTE_REC, _mi(exe="/data/var/opt/crash", note=True), "aa", "aa", (True, "build ID")),
+    ("remote-no-build-id", _REMOTE_REC, _mi(exe="/data/opt/crash"), None, None, (False, "pid and path match; build ID not available")),
+    ("remote-core-without-note", _REMOTE_REC, _mi(exe="/data/opt/crash"), "aa", None, (False, "pid and path match; build ID not available")),
+    ("remote-build-id-differs", _REMOTE_REC, _mi(exe="/data/opt/crash", note=True), "aa", "bb", "mismatch"),
+    ("remote-wrong-exe", _REMOTE_REC, _mi(exe="/data/opt/other", note=True), "aa", "aa", "mismatch"),
+]
+
+
+@pytest.mark.parametrize("rec,mi,bin_bid,core_bid,expected", [c[1:] for c in PROVENANCE], ids=[c[0] for c in PROVENANCE])
+def test_provenance_table(monkeypatch, rec, mi, bin_bid, core_bid, expected):
+    from qnx_mcp import crash
+    monkeypatch.setattr(crash, "core_read", lambda path, off, n: b"note" if core_bid else None)
+    monkeypatch.setattr(crash, "gnu_build_id", lambda note: core_bid)
+    args = (Path("core"), Path("bin"), {"build_id": bin_bid} if bin_bid else {}, "b" * 64, rec, mi, _CORE_INFO)
+    if expected == "mismatch":
+        with pytest.raises(QnxMcpError) as e:
+            crash._provenance(*args)
+        assert e.value.code == "core_mismatch" and "provenance" in e.value.details, e.value.to_dict()
+        return
+    ev = crash._provenance(*args)
+    assert ev["verified"] is expected[0] and ev["evidence"].startswith(expected[1]), ev
+    assert ev["source"] == ("remote_run" if rec and rec["remote_binary"] else "run_record" if rec else "manual")
+    assert ev["core_sha256"] == _CORE_INFO["sha256"] and ev["binary_sha256"] == "b" * 64
+
+
+def _reply(out: str = "", code: int = 0) -> Any:
+    import types
+    return types.SimpleNamespace(out=out, err="", returncode=code, truncated=False, timed_out=False)
+
+
+def _runner_json(**kw: Any) -> str:
+    return json.dumps({"runner": "qnx-mcp-run", **kw})
+
+
+class FakeRemote:
+    """Replaces a Target's put, ssh and ssh_script. Answers come from a queue in call order; a QnxMcpError in
+    the queue is raised. ssh with check=True fails like the real one when the answer has a nonzero status."""
+
+    def __init__(self, t: Target, answers: list[Any]):
+        self.calls: list[tuple[str, Any]] = []
+        self.answers = list(answers)
+        t.put = self.put
+        t.ssh = self.ssh
+        t.ssh_script = self.ssh_script
+
+    def _next(self, kind: str, what: Any, check: bool = False) -> Any:
+        self.calls.append((kind, what))
+        a = self.answers.pop(0)
+        if isinstance(a, QnxMcpError):
+            raise a
+        if check and a.returncode != 0:
+            raise QnxMcpError("remote_failed", f"{kind} exited with status {a.returncode}")
+        return a
+
+    def put(self, local, remote, **kw):
+        self._next("put", (str(local), remote))
+
+    def ssh(self, argv, *, check=True, **kw):
+        return self._next("ssh", list(argv), check)
+
+    def ssh_script(self, script, *, check=True, **kw):
+        return self._next("script", script, check)
+
+
+@pytest.fixture
+def fake_target(tmp_path: Path, monkeypatch):
+    from qnx_mcp import ops
+    d = tmp_path / "targets" / "tb1" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\nOPT_MACADDR='52:54:00:00:00:01'\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+    runner = tmp_path / "qnx-mcp-run"
+    runner.write_bytes(b"runner bytes")
+    monkeypatch.setattr(ops, "runner_binary", lambda cfg_, arch: (runner, "d1g3st"))
+    app = tmp_path / "app"
+    app.write_bytes(b"app bytes")
+    return Target(cfg, "tb1"), runner, app
+
+
+def _sha(p: Path) -> str:
+    import hashlib
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def test_upload_verifies_then_renames(fake_target):
+    from qnx_mcp.ops import _upload
+    t, _, app = fake_target
+    sha, size = _sha(app), app.stat().st_size
+    fake = FakeRemote(t, [_reply(), _reply(_runner_json(sha256=sha, size=size, mode="0755")), _reply()])
+    _upload(t, "10.0.0.1", app, "/tmp/qnx-mcp/apps/x/app", sha, size, "0755", "/tmp/qnx-mcp/bin/r")
+    (k1, (local, tmp)), (k2, script), (k3, mv) = fake.calls
+    assert k1 == "put" and local == str(app) and tmp.startswith("/tmp/qnx-mcp/apps/x/app.part-")
+    assert k2 == "script" and script == f"chmod 0755 {tmp} && /tmp/qnx-mcp/bin/r -H {tmp}"
+    assert k3 == "ssh" and mv == ["mv", "-f", tmp, "/tmp/qnx-mcp/apps/x/app"]
+
+
+@pytest.mark.parametrize("got", [{"sha256": "0" * 64}, {"size": 1}, {"mode": "0644"}], ids=["sha", "size", "mode"])
+def test_upload_mismatch_removes_the_copy_and_never_renames(fake_target, got):
+    from qnx_mcp.ops import _upload
+    t, runner, _ = fake_target
+    sha, size = _sha(runner), runner.stat().st_size
+    fake = FakeRemote(t, [_reply(), _reply(_runner_json(**{"sha256": sha, "size": size, "mode": "0755", **got})), _reply()])
+    with pytest.raises(QnxMcpError) as e:
+        _upload(t, "10.0.0.1", runner, "/tmp/qnx-mcp/bin/r", sha, size, "0755", None)
+    assert e.value.code == "deploy_failed", e.value.to_dict()
+    tmp = fake.calls[0][1][1]
+    assert fake.calls[1][1] == f"chmod 0755 {tmp} && {tmp} -H {tmp}"  # the runner hashes its own uploaded copy
+    assert fake.calls[2] == ("ssh", ["rm", "-f", tmp]) and len(fake.calls) == 3
+
+
+def _app_entry(app: Path, mode: str = "0755") -> tuple[Path, str, str, int, str]:
+    return (app, "/tmp/qnx-mcp/apps/0123456789abcdef/app", _sha(app), app.stat().st_size, mode)
+
+
+def test_prepare_uploads_nothing_when_everything_matches(fake_target):
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    lines = [_runner_json(sha256=_sha(runner), size=runner.stat().st_size, mode="0755"), _runner_json(sha256=entry[2], size=entry[3], mode="0755")]
+    fake = FakeRemote(t, [_reply("\n".join(lines) + "\n")])
+    assert prepare(t, "10.0.0.1", [entry], ["/tmp/qnx-mcp/runs/r-000000000001"]) == "/tmp/qnx-mcp/bin/qnx-mcp-run-d1g3st"
+    (kind, script), = fake.calls
+    assert kind == "script" and script.startswith("mkdir -p /tmp/qnx-mcp/apps /tmp/qnx-mcp/apps/0123456789abcdef /tmp/qnx-mcp/bin")
+    assert "/tmp/qnx-mcp/runs/r-000000000001" in script and " -G " not in script
+
+
+def test_prepare_uploads_a_missing_runner_and_a_wrong_mode_app(fake_target):
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    rsha, rsize = _sha(runner), runner.stat().st_size
+    check = _reply("none\n" + _runner_json(sha256=entry[2], size=entry[3], mode="0700") + "\n")
+    fake = FakeRemote(t, [check,
+                          _reply(), _reply(_runner_json(sha256=rsha, size=rsize, mode="0755")), _reply(),
+                          _reply(), _reply(_runner_json(sha256=entry[2], size=entry[3], mode="0755")), _reply()])
+    runner_remote = prepare(t, "10.0.0.1", [entry], [])
+    puts = [c[1] for c in fake.calls if c[0] == "put"]
+    assert [local for local, _ in puts] == [str(runner), str(app)]
+    assert puts[0][1].startswith(runner_remote + ".part-") and puts[1][1].startswith(entry[1] + ".part-")
+    assert fake.calls[5][1].endswith(f"{runner_remote} -H {puts[1][1]}")  # the app is hashed by the runner
+    assert not fake.answers
+
+
+def test_prepare_refuses_output_it_does_not_recognise(fake_target):
+    from qnx_mcp.ops import prepare
+    t, _, app = fake_target
+    FakeRemote(t, [_reply("none\n")])
+    with pytest.raises(QnxMcpError) as e:
+        prepare(t, "10.0.0.1", [_app_entry(app)], [])
+    assert e.value.code == "remote_failed"
+
+
+def test_prepare_prune_keeps_runs_in_flight(fake_target):
+    from qnx_mcp.ops import prepare, save_record
+    t, runner, _ = fake_target
+    save_record(t, {"run_id": "r-00000000000a", "state": "running", "started_at": time.time(), "remote_path": "/tmp/qnx-mcp/apps/feedfacefeedface/x"})
+    save_record(t, {"run_id": "r-00000000000b", "state": "finished", "started_at": time.time()})
+    fake = FakeRemote(t, [_reply(_runner_json(sha256=_sha(runner), size=runner.stat().st_size, mode="0755") + "\n")])
+    prepare(t, "10.0.0.1", [], ["/tmp/qnx-mcp/runs/r-00000000000c"], prune=True)
+    script = fake.calls[0][1]
+    assert "-G /tmp/qnx-mcp/runs -k 20 -a 300 -p r-00000000000a -p r-00000000000c " in script
+    assert "-G /tmp/qnx-mcp/apps -k 20 -a 600 -p feedfacefeedface " in script and "r-00000000000b" not in script
+
+
+OUTCOMES = [
+    ({}, "exited"),
+    ({"exit_code": 3}, "exited"),
+    ({"signaled": True, "core_expected": True}, "crashed"),
+    ({"signaled": True}, "killed"),
+    ({"disconnected": True, "signaled": True}, "stopped"),
+    ({"runner_stopped_by": "SIGTERM", "signaled": True, "core_expected": True}, "stopped"),
+    ({"timed_out": True, "signaled": True, "core_expected": True}, "timeout"),
+    ({"exec_error": "ENOENT", "timed_out": True}, "exec_failed"),
+]
+
+
+@pytest.mark.parametrize("res,outcome", OUTCOMES)
+def test_outcome_precedence(res, outcome):
+    from qnx_mcp.ops import _outcome
+    assert _outcome(res) == outcome
+
+
+def test_apply_poll_moves_records_through_their_states(fake_target):
+    from qnx_mcp.ops import _apply_poll, load_record, save_record
+    t, _, _ = fake_target
+    rec = {"run_id": "r-000000000010", "kind": "background", "state": "running", "started_at": time.time()}
+    save_record(t, dict(rec))
+    assert _apply_poll(t, rec, {"alive": True, "status": None}) == "running"
+    assert load_record(t, rec["run_id"])["state"] == "running"
+    status = {"exit_code": 0, "pid": 9, "signaled": False}
+    assert _apply_poll(t, rec, {"alive": False, "status": status}) == "finished"
+    saved = load_record(t, rec["run_id"])
+    assert saved["state"] == "finished" and saved["outcome"] == "exited" and saved["pid"] == 9
+    first = saved["finished_at"]
+    assert _apply_poll(t, rec, {"alive": False, "status": status}) == "finished"
+    assert load_record(t, rec["run_id"])["finished_at"] == first  # a finished record is not rewritten
+    lost = {"run_id": "r-000000000011", "kind": "background", "state": "running", "started_at": time.time()}
+    save_record(t, dict(lost))
+    assert _apply_poll(t, lost, {"alive": False, "status": None}) == "lost"
+    assert load_record(t, lost["run_id"])["state"] == "lost"
+
+
+def test_reconcile_stops_only_old_unacknowledged_starts(fake_target, monkeypatch):
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    now = time.time()
+    base = {"kind": "background", "state": "starting", "runner": "/tmp/qnx-mcp/bin/r"}
+    for rid, age in (("r-000000000020", 120), ("r-000000000021", 5), ("r-000000000022", 120)):
+        ops.save_record(t, {**base, "run_id": rid, "started_at": now - age, "remote_run_dir": f"/tmp/qnx-mcp/runs/{rid}"})
+    ops.save_record(t, {**base, "run_id": "r-000000000023", "state": "running", "started_at": now - 120, "remote_run_dir": "/x"})
+    stopped = []
+    monkeypatch.setattr(ops, "_stop_quietly", lambda t_, ip, runner, d: stopped.append(d) or "stopped")
+    ops._reconcile_starts(t, "10.0.0.1", exclude="r-000000000022")
+    assert stopped == ["/tmp/qnx-mcp/runs/r-000000000020"]
+    states = {rid: ops.load_record(t, rid) for rid in ("r-000000000020", "r-000000000021", "r-000000000022", "r-000000000023")}
+    assert states["r-000000000020"]["state"] == "failed" and states["r-000000000020"]["cleanup"] == "stopped"
+    assert states["r-000000000020"]["error"] == "start not acknowledged"
+    assert [states[r]["state"] for r in ("r-000000000021", "r-000000000022", "r-000000000023")] == ["starting", "starting", "running"]
