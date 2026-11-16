@@ -601,6 +601,26 @@ def test_build_flags_reach_every_mode(tmp_path: Path, monkeypatch):
         assert want in second, (want, second)
 
 
+def test_cmake_toolchain_file_never_follows_a_link(tmp_path: Path, monkeypatch):
+    """A link planted at the toolchain file's name must be replaced, never written through."""
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "CMakeLists.txt").write_text("project(x C)\n")
+    monkeypatch.setattr(sdk.shutil, "which", lambda name, path=None: str(tmp_path / "fakebin" / name))
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"keep me\n")
+    bdir = proj / "build-qnx-x86_64"
+    bdir.mkdir()
+    bdir.chmod(0o755)
+    (bdir / "qnx-toolchain.cmake").symlink_to(outside)
+    assert sdk.build(cfg, str(proj))["ok"]
+    tc = bdir / "qnx-toolchain.cmake"
+    assert outside.read_bytes() == b"keep me\n"
+    assert not tc.is_symlink() and tc.is_file() and "CMAKE_SYSTEM_NAME QNX" in tc.read_text()
+    assert stat.S_IMODE(bdir.stat().st_mode) == 0o755  # the user's build directory is not made private
+
+
 # Each of these could make the host run a command or touch a file outside the project; build() must refuse it before running anything.
 REJECTED = [
     ("make_args", "--eval=$(info QNXMCP_MARKER)"),

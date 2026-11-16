@@ -213,10 +213,16 @@ def private_dir(path: Path) -> Path:
 
 
 def write_private(path: Path, data: bytes) -> None:
-    """Atomic write with mode 0600 through a unique temporary file in the same directory."""
+    """Atomic write with mode 0600 through a unique temporary file in a private directory."""
     private_dir(path.parent)
+    write_atomic(path, data)
+
+
+def write_atomic(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Write a new file and rename it over path: a symlink at path is replaced, never written through.
+    The directory is left as it is (for files in the user's tree)."""
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

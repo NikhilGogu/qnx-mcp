@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
+from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within, write_atomic
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -439,11 +439,10 @@ def build(
             raise QnxMcpError("path_not_allowed", f"build directory {os.path.realpath(bdir)} is outside the workspace", hint=WORKSPACE_HINT)
         bdir.mkdir(exist_ok=True)
         tc = bdir / "qnx-toolchain.cmake"
-        tc.write_text(
-            _CMAKE_TOOLCHAIN.format(
-                proc=proc, qcc=sdk_tool(env, "qcc"), qxx=sdk_tool(env, "q++"), variant=variant, sysroot=env["QNX_TARGET"]
-            )
-        )
+        # The workspace may hold a link at this name; write_atomic replaces it instead of writing through it.
+        write_atomic(tc, _CMAKE_TOOLCHAIN.format(
+            proc=proc, qcc=sdk_tool(env, "qcc"), qxx=sdk_tool(env, "q++"), variant=variant, sysroot=env["QNX_TARGET"]
+        ).encode(), 0o644)
         cmake = shutil.which("cmake", path=env.get("PATH"))
         if not cmake:
             raise QnxMcpError("tool_missing", "cmake not found on the build host", hint="Install cmake 3.16+ or use system=make/qcc.")
