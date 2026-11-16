@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import elf_info, parse_diagnostics
-from .util import WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
+from .util import REMOTE_PATH_RE, WORKSPACE_HINT, Config, QnxMcpError, check_host_path, private_dir, run, tail, within
 
 ARCHES = {
     # arch name used by mkqnximage/$QNX_TARGET -> (qcc variant, gdb prefix, cmake processor)
@@ -128,6 +128,16 @@ _MAKE_SIMPLE_VARS = {"V", "VERBOSE", "DEBUG"}  # a small number or yes/no
 _SIMPLE_VALUE_RE = re.compile(r"[0-9]{1,3}|yes|no|true|false|on|off")
 _JOBS_RE = re.compile(r"[1-9][0-9]{0,3}")
 _CMAKE_TARGET_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*")
+# Separate-argument forms: the option, then one argument that is checked like the joined form.
+_PAIR_PATH = {"-I", "-L", "-isystem", "-iquote"}  # a directory inside the workspace
+_PAIR_FILE = {"-include"}                          # a file inside the workspace
+_MACRO_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# -D values with quotes or spaces, for qcc mode only: qcc gets an argv list and no shell sees it.
+# make and cmake hand CFLAGS to a shell in their recipes, so there the plain -D form applies.
+_QUOTED_DEFINE_RE = re.compile(r"-D[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.,+:/=\" '()<>%#-]*")
+# -f options that only rewrite paths recorded in the output: old=new, both plain paths.
+_PREFIX_MAP_RE = re.compile(r"-f(debug|file|macro)-prefix-map=([A-Za-z0-9._+/-]+)=([A-Za-z0-9._+/-]*)")
+_MAKE_PATH_VARS = {"PREFIX", "DESTDIR"}  # a directory inside the workspace (make install writes there)
 _CMAKE_CONFIGS = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
 
 
@@ -155,8 +165,33 @@ def _check_in_workspace(cfg: Config, root: Path, field: str, arg: str, path: str
                           hint=WORKSPACE_HINT, field=field, argument=arg)
 
 
-def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool) -> None:
-    """One compiler or linker argument. files: plain .o/.a/.so inputs are allowed (qcc mode)."""
+def _check_ld_items(cfg: Config, root: Path, field: str, a: str) -> None:
+    items = a[4:].split(",")
+    i = 0
+    while i < len(items):
+        it = items[i]
+        if it in _LD_PASS:
+            i += 1
+        elif it == "-z" and i + 1 < len(items) and items[i + 1] in _LD_Z:
+            i += 2
+        elif it == "-rpath" and i + 1 < len(items):
+            # A run-time search path on the target: a normalised absolute target path, nothing else.
+            rp = items[i + 1]
+            parts = rp.split("/")[1:]
+            if not REMOTE_PATH_RE.fullmatch(rp) or any(c in ("", ".", "..") for c in parts):
+                raise _refuse(field, a, f"-rpath takes a normalised absolute target path, not {rp!r}")
+            i += 2
+        elif it.startswith("-Map="):
+            _check_in_workspace(cfg, root, field, a, it[5:])  # the linker writes the map file there
+            i += 1
+        else:
+            raise _refuse(field, a, f"linker option {it!r} is not in the allowed set {sorted(_LD_PASS)}, -z {sorted(_LD_Z)}, "
+                          "-rpath,<target path> or -Map=<workspace path>")
+
+
+def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool, quoted_defines: bool = False) -> None:
+    """One compiler or linker argument. files: plain .o/.a/.so inputs are allowed (qcc mode).
+    quoted_defines: -D values may hold quotes and spaces (qcc mode, where no shell sees the argument)."""
     if not isinstance(a, str) or not a:
         raise _refuse(field, str(a), "empty")
     m = _CC_PATH_RE.fullmatch(a)
@@ -164,26 +199,56 @@ def _check_cc_flag(cfg: Config, root: Path, field: str, a: str, *, files: bool) 
         _check_in_workspace(cfg, root, field, a, m.group(2))
         return
     if a.startswith("-Wl,"):
-        items = a[4:].split(",")
-        i = 0
-        while i < len(items):
-            if items[i] in _LD_PASS:
-                i += 1
-            elif items[i] == "-z" and i + 1 < len(items) and items[i + 1] in _LD_Z:
-                i += 2
-            else:
-                raise _refuse(field, a, f"linker option {items[i]!r} is not in the allowed set {sorted(_LD_PASS)} or -z {sorted(_LD_Z)}")
+        _check_ld_items(cfg, root, field, a)
         return
     if a.startswith(("-Wa,", "-Wp,", "-Xlinker", "-Xassembler", "-Xpreprocessor")):
         raise _refuse(field, a, "assembler, preprocessor and linker passthrough is not allowed (only listed -Wl, options)")
+    pm = _PREFIX_MAP_RE.fullmatch(a)
+    if pm:
+        if not (_no_dotdot(pm.group(2)) and _no_dotdot(pm.group(3))):
+            raise _refuse(field, a, "prefix maps take plain paths without '..'")
+        return
     if a.startswith("-f") and (a.startswith(_CC_F_REFUSED) or ".." in a or "/" in a):
         raise _refuse(field, a, "this -f option loads code or writes files at a chosen place")
     if _CC_FLAG_RE.fullmatch(a):
         return
+    if a.startswith("-D") and _QUOTED_DEFINE_RE.fullmatch(a):
+        if quoted_defines:
+            return
+        raise _refuse(field, a, "-D values with quotes or spaces are accepted only in qcc mode; make and cmake pass flags through a shell")
     if files and not a.startswith(("-", "@")) and _INPUT_FILE_RE.fullmatch(a):
         _check_in_workspace(cfg, root, field, a, a)
         return
     raise _refuse(field, a, "not an allowed compiler or linker flag")
+
+
+def _check_cc_flags(cfg: Config, root: Path, field: str, flags: list[str], *, files: bool, quoted_defines: bool = False) -> None:
+    """A list of compiler or linker arguments, where an option may take the next element as its argument."""
+    i = 0
+    while i < len(flags):
+        a = flags[i]
+        if a in _PAIR_PATH | _PAIR_FILE | {"-D", "-U"}:
+            if i + 1 >= len(flags) or not isinstance(flags[i + 1], str):
+                raise _refuse(field, str(a), "it needs an argument after it")
+            v = flags[i + 1]
+            shown = f"{a} {v}"
+            if v.startswith(("-", "@")) or not v:
+                raise _refuse(field, shown, f"{a} takes a value, not an option")
+            if a in _PAIR_PATH:
+                _check_in_workspace(cfg, root, field, shown, v)
+            elif a in _PAIR_FILE:
+                _check_in_workspace(cfg, root, field, shown, v)
+                if not (Path(v) if v.startswith("/") else root / v).is_file():
+                    raise _refuse(field, shown, f"{a} takes a file inside the workspace")
+            elif a == "-U":
+                if not _MACRO_RE.fullmatch(v):
+                    raise _refuse(field, shown, "-U takes a macro name")
+            else:
+                _check_cc_flag(cfg, root, field, "-D" + v, files=False, quoted_defines=quoted_defines)
+            i += 2
+            continue
+        _check_cc_flag(cfg, root, field, a, files=files, quoted_defines=quoted_defines)
+        i += 1
 
 
 def _check_make_args(cfg: Config, root: Path, args: list[str]) -> None:
@@ -201,18 +266,19 @@ def _check_make_args(cfg: Config, root: Path, args: list[str]) -> None:
         name, eq, value = a.partition("=")
         if eq and re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.]*", name):
             if name in _MAKE_FLAG_VARS:
-                for word in value.split(" "):
-                    if word:
-                        try:
-                            _check_cc_flag(cfg, root, field, word, files=False)
-                        except QnxMcpError as e:
-                            raise _refuse(field, a, f"word {word!r} of {name}: {e.message.split(': ', 1)[-1]}") from None
+                try:
+                    _check_cc_flags(cfg, root, field, [w for w in value.split(" ") if w], files=False)
+                except QnxMcpError as e:
+                    raise _refuse(field, a, f"{name}: {e.message.split(': ', 1)[-1]}") from None
+                continue
+            if name in _MAKE_PATH_VARS:
+                _check_in_workspace(cfg, root, field, a, value)
                 continue
             if name in _MAKE_SIMPLE_VARS:
                 if _SIMPLE_VALUE_RE.fullmatch(value):
                     continue
                 raise _refuse(field, a, f"{name} takes a small number or yes/no")
-            raise _refuse(field, a, f"only {sorted(_MAKE_FLAG_VARS | _MAKE_SIMPLE_VARS)} may be set on the command line")
+            raise _refuse(field, a, f"only {sorted(_MAKE_FLAG_VARS | _MAKE_SIMPLE_VARS | _MAKE_PATH_VARS)} may be set on the command line")
         if not a.startswith("-") and _MAKE_TARGET_RE.fullmatch(a) and _no_dotdot(a):
             continue
         raise _refuse(field, a, "make accepts target names, -j N, -k, -s, -B, -n, -w and allowed VAR=value only")
@@ -241,8 +307,7 @@ def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | N
     """Refuse any agent-supplied build argument outside the allow-list (QnxMcpError naming the argument)."""
     files = system == "qcc"
     for field, flags in (("cflags", cflags), ("ldflags", ldflags)):
-        for a in flags or []:
-            _check_cc_flag(cfg, root, field, a, files=files)
+        _check_cc_flags(cfg, root, field, list(flags or []), files=files, quoted_defines=system == "qcc")
     for s_ in sources or []:
         if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
             raise _refuse("sources", str(s_), "a source is a file path, never an option")
