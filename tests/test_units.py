@@ -1194,3 +1194,20 @@ def test_every_raised_error_code_is_advertised():
     assert raised - documented == set(), f"raised but missing from docs/DESIGN.md: {sorted(raised - documented)}"
     assert raised - schema == set(), f"raised but missing from ErrorInfo.code: {sorted(raised - schema)}"
     assert documented == schema, (sorted(documented ^ schema))
+
+
+@pytest.mark.parametrize("line,ok", [
+    ("3 passed in 1.0s", True),
+    ("2 passed, 18 skipped in 1.1s", True),
+    ("18 skipped in 1.2s", False),
+    ("1 failed, 2 passed in 1.0s", False),
+    ("1 passed, 1 error in 1.0s", False),
+    ("no tests ran in 0.01s", False),
+    ("", False),
+])
+def test_live_tests_summary_needs_a_pass(line: str, ok: bool):
+    """A suite that only skipped (no SDP, no target) must not count as a passed live run."""
+    import subprocess
+    script = Path(__file__).resolve().parents[1] / "scripts" / "live-tests.sh"
+    r = subprocess.run(["sh", str(script), "--summary-ok", line], env={"PATH": os.environ["PATH"]}, capture_output=True, timeout=10)
+    assert (r.returncode == 0) is ok, (line, r.returncode, r.stderr)

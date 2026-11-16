@@ -10,8 +10,23 @@
 # QNX_MCP_E2E_CREATE  a target name the lifecycle test creates, boots and destroys (must not exist)
 #
 # The log goes to docs/evidence/test-run-<version>.log. Each suite runs even if an earlier one failed,
-# and the script exits non-zero if any did.
+# and the script exits non-zero if any did. A suite without a single passed test counts as failed:
+# the live tests skip themselves when the SDP or the target is missing, and that is not a live run.
 set -u
+
+# pytest's summary line: success needs at least one passed test and no failure or error.
+summary_ok() {
+    case "$1" in
+        *failed*|*error*) return 1 ;;
+        [0-9]*" passed"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+if [ "${1-}" = --summary-ok ]; then
+    summary_ok "${2-}"
+    exit $?
+fi
+
 : "${QNX_MCP_E2E_TARGET:?set QNX_MCP_E2E_TARGET to a running target}"
 : "${QNX_MCP_E2E_CREATE:?set QNX_MCP_E2E_CREATE to a target name that does not exist yet}"
 : "${QNX_MCP_ALLOW_TARGETS:?set QNX_MCP_ALLOW_TARGETS, for example 'tb,tb[0-9]*'}"
@@ -27,7 +42,7 @@ suite() {
     echo "== $*" | tee -a "$log"
     (cd "$root/tests" && "$@" 2>&1) | tee -a "$log"
     # tee hides the exit status of the subshell, so the summary line decides
-    tail -n 1 "$log" | grep -q -E 'failed|error' && failed=1
+    summary_ok "$(tail -n 1 "$log")" || failed=1
 }
 
 : > "$log"
