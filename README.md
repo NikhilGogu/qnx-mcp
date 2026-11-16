@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml)
 
-An AI coding agent with a raw SSH shell on a QNX target can run unbounded commands, hang on a program that never exits, and read crash output that nobody can tie to a binary. qnx-mcp is a Model Context Protocol (MCP) server that gives the agent 19 typed tools instead. Every run has a deadline and capped output, and a crash comes back as a source-level backtrace that is checked against the build ID of the binary that was deployed. It works with Claude Code and Codex, on QNX OS 8.0 targets under QEMU.
+An AI coding agent with a raw SSH shell on a QNX target can run unbounded commands, hang on a program that never exits, and read crash output that nobody can tie to a binary. qnx-mcp is a Model Context Protocol (MCP) server that gives the agent 19 typed tools instead. Every run has a deadline and capped output, and a crash comes back as a source-level backtrace that is checked against the build ID of the binary that was deployed. It works with Claude Code and Codex, on QNX OS 8.0 targets under QEMU. In our study, agents fixed the same seeded bugs with qnx-mcp and with a root shell; see [What the study shows](#what-the-study-shows).
 
 ![The agent talks MCP to qnx-mcp on the build host, which builds with the QNX SDP and reaches the QNX OS 8.0 QEMU target over ssh](codelab/img/overview.png)
 
@@ -270,7 +270,9 @@ Services started with a relative path, the way the evaluation's field services a
 
 A program that execs `/system/bin/sleep` when it gets SIGTERM, stopped with `grace_s=1, kill_after_grace=true`, returns an error with `details.signal_sent: true`: "SIGTERM was sent to process 169095190 and it did not exit; SIGKILL was not sent because its start time differs (the pid was reused, or the program called exec)".
 
-## Debugging without a target shell
+## What the study shows
+
+Agents fixed the same bugs with and without a shell on the target. In both arms every fix passed its oracle. The cost was more turns for the agent with qnx-mcp and no shell. The study did not measure what qnx-mcp adds beyond that: typed and bounded calls, crash evidence tied to one build, and no shell on the target. The study used qnx-mcp 0.2.1; 0.3.0 fixed the two gaps it found (listed below).
 
 The evaluation in [eval/](eval) gave agents eight seeded QNX bugs whose fault needs evidence from the target (a buffer overflow, a deadlock across processes, a resource manager whose error shows in slog2, a stack overflow, a hang, a NULL dereference in a worker thread, a CMake cross-build, a file descriptor leak). The protocol is preregistered in [eval/PROTOCOL.md](eval/PROTOCOL.md); tasks, harness, summaries and every trial transcript are in [eval/results/raw.tar.xz](eval/results).
 
