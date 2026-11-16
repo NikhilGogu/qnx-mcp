@@ -840,3 +840,28 @@ def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
     assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
     for name, line, kw in calls:
         check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))
+
+
+@pytest.mark.parametrize("tool", ["deploy_and_run", "run_start"])
+@pytest.mark.parametrize("args,env,field", [
+    (["ok", "a\0b"], None, "args[1]"),
+    (["x" * 40000, "y" * 40000], None, "args"),
+    ([], {"BIG": "v" * 70000}, "env"),
+], ids=["nul", "args-too-large", "env-too-large"])
+def test_run_args_are_checked_before_upload(tmp_path: Path, monkeypatch, tool, args, env, field):
+    """A NUL used to reach Popen as internal_error after the upload; now it is refused before anything happens."""
+    from qnx_mcp import ops
+    d = tmp_path / "targets" / "tb1" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+
+    def never(*a, **kw):
+        raise AssertionError("nothing may be snapshotted, uploaded or started")
+
+    monkeypatch.setattr(ops, "_program", never)
+    monkeypatch.setattr(Target, "require_ip", never)
+    with pytest.raises(QnxMcpError) as e:
+        getattr(ops, tool)(cfg, "tb1", remote_binary="/data/x", args=args, env=env)
+    assert e.value.code == "invalid_argument" and field in e.value.message, e.value.to_dict()

@@ -36,6 +36,7 @@ WRITE_ROOTS = ("/tmp", "/data")
 IN_FLIGHT = ("starting", "running")
 POLL_MAX_KB = 1024
 LIST_MAX = 1000
+ARGV_MAX = 64 << 10  # bytes of program arguments, and separately of env entries: bounds the ssh command line
 STOP_ROOTS = ("/tmp", "/data")
 SYSTEM_DIRS = ("/proc/boot", "/bin", "/sbin", "/usr", "/system")
 STOP_SIGNALS = ("TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "KILL")
@@ -228,6 +229,21 @@ def _run_options(timeout_s: float, core_wait_s: float, max_output_kb: int, env: 
     return opts
 
 
+def _check_args(args: list[Any] | None, env: dict[str, str] | None) -> list[str]:
+    """Program arguments as strings. A NUL cannot be passed to a program and used to fail in Popen after the upload,
+    so it is refused here, before anything is copied or started; so is an argument list or environment above ARGV_MAX."""
+    out = [str(a) for a in (args or [])]
+    for i, a in enumerate(out):
+        if "\0" in a:
+            raise QnxMcpError("invalid_argument", f"args[{i}] contains a NUL byte", hint="Program arguments cannot contain NUL.")
+    for field, items in (("args", out), ("env", [f"{k}={v}" for k, v in (env or {}).items()])):
+        size = sum(len(x.encode("utf-8", "surrogatepass")) + 1 for x in items)
+        if size > ARGV_MAX:
+            raise QnxMcpError("invalid_argument", f"{field} is {size} bytes; the limit is {ARGV_MAX}",
+                              hint="Pass large inputs as a file (file_put) and give the program its path.")
+    return out
+
+
 def _outcome(res: dict[str, Any]) -> str:
     if res.get("exec_error"):
         return "exec_failed"
@@ -371,7 +387,7 @@ def deploy_and_run(
     remote_binary: str | None = None,
 ) -> dict[str, Any]:
     t = Target(cfg, target)
-    args = [str(a) for a in (args or [])]
+    args = _check_args(args, env)
     opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
@@ -434,7 +450,7 @@ def run_start(
     remote_binary: str | None = None,
 ) -> dict[str, Any]:
     t = Target(cfg, target)
-    args = [str(a) for a in (args or [])]
+    args = _check_args(args, env)
     opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
