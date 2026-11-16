@@ -2,7 +2,7 @@
 
 qnx-mcp is a Model Context Protocol (MCP) server that gives coding agents typed, bounded tools for QNX OS 8.0 work: create, start, stop and destroy QEMU targets, build with the QNX SDP toolchain, deploy and run programs (one-shot or in the background), move files, turn dumper core files into source-level backtraces, and read the system state (pidin, slog2). It runs on the build host (where QNX SDP 8.0 and QEMU live) and speaks MCP over stdio, so any MCP client can use it, locally or through `ssh -T`.
 
-Status (4 Nov 2026): v0.3.0. 19 tools, tested against QNX 8.0 x86_64 QEMU targets through an MCP client session (README "Tests"), and connected to Claude Code and Codex (v0.1). The review findings on the stage one code, v0.1 and the v0.2 additions for agents without a shell on the target (`file_list`, `process_stop`, `remote_binary`) are in section 10; v0.2.1 addressed the v0.2 findings. v0.3.0 fixes two gaps found in the study of section 9: `process_stop` reads the executable from `/proc/<pid>/exefile`, so services started with a relative path can be stopped, and `remote_binary` refuses shells and system programs.
+Status (4 Nov 2026): v0.3.0. 19 tools, tested against QNX 8.0 x86_64 QEMU targets through an MCP client session (README "Tests"), and connected to Claude Code and Codex (v0.1). Defects found in the stage one code, v0.1 and the v0.2 additions for agents without a shell on the target (`file_list`, `process_stop`, `remote_binary`) are in section 9 with their fixes; v0.2.1 fixed the v0.2 ones. v0.3.0 fixes two gaps found in the study of section 8: `process_stop` reads the executable from `/proc/<pid>/exefile`, so services started with a relative path can be stopped, and `remote_binary` refuses shells and system programs.
 
 ## 1. Skills and the server
 
@@ -114,7 +114,7 @@ The agent is treated as capable, fallible and possibly prompt-injected (it reads
 10. **Directory listing (v0.2).** `file_list` is read-only and may list any directory, as `file_get` may read any file; the path is validated like every remote path (normalised, safe characters; `/` is allowed), entries are described with `lstat` and links are never followed, incomplete reads and an unverified `real_path` are reported, and the output is bounded (`max_entries` up to 1000, output budget, 30 s alarm). Refusals tested on tb: `..` and `.` components, a trailing `/`, a relative path, a file, a missing directory.
 11. **Programs already on the target (v0.2, policy v0.3.0).** `remote_binary` is validated as a remote path and must be an executable regular file below a root of `QNX_MCP_REMOTE_BINARY_ROOTS` (default `/tmp` and `/data`; set but empty refuses everything), outside `/tmp/qnx-mcp`, `/proc/boot`, `/bin`, `/sbin`, `/usr` and `/system`, and not named like a shell. The host checks the path as given; the runner checks it as given and by real path before the run and right before the program starts (section 2). These rules keep `remote_binary` from starting a shell, a system program, the runner (whose modes `-D` install files, `-G` prunes and `-K` stops runs) or another run's files, as root and with the agent's arguments. Tested refusals: `/proc/boot/ksh` (a shell), `/system/bin/slay`, links in `/tmp` to both (refused by real path), the runner itself and a link to it, a file with mode 0644, a missing file, a `..` path, a directory; offline also `/data/home/sh` and a path outside the roots.
 12. **Stopping processes (v0.2, executable from /proc in v0.3.0).** `process_stop` is the only tool that acts on a process qnx-mcp did not start. pid 1 is refused before contacting the target; then the discovery (creation token, `exefile`, pidin's path) is checked on the host (`exefile` absolute, normalised and naming the same file as pidin's path; a name other than procnto; a process that is not critical; an executable below `/tmp` or `/data` and outside `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` and `/tmp/qnx-mcp/bin`), and the runner repeats the checks through the process's own `/proc` descriptor and re-reads the token, the critical flag and the executable right before each signal (section 2). Tested on tb: services started as `./hang` and as `qnx-mcp-test/.../hang` are stopped; refusals of pid 1, slogger2 (`/proc/boot`), `/system/bin/sleep`, `./sleep` started in `/system/bin`, a symlink in `/tmp` to `/system/bin/sleep` (refused by the resolved path), the runner of a background run, a pid that does not exist, and a wrong creation token; SIGTERM of a program started outside qnx-mcp; a program that ignores SIGTERM (`still_running`, then `kill_after_grace` sends SIGKILL); a program that execs `/system/bin/sleep` on SIGTERM (SIGKILL withheld, error with `signal_sent: true`).
-13. **Scope of the v0.2 rules.** The path rules of items 10 to 12 guard against mistakes. They do not stop an agent that sets out to break them: `deploy_and_run` runs any program the agent builds, as root, and such a program can stop any process or change any file. The races that remain are in section 11.
+13. **Scope of the v0.2 rules.** The path rules of items 10 to 12 guard against mistakes. They do not stop an agent that sets out to break them: `deploy_and_run` runs any program the agent builds, as root unless `QNX_MCP_RUN_AS` is set, and a root program can stop any process or change any file. The races that remain are in section 10.
 
 ## 6. Client setup
 
@@ -139,123 +139,97 @@ Audience: developers new to QNX who already use a coding agent. About 45 minutes
 9. **Recover from a fault** (3 min): stop the target mid-task; read `target_down` and its hint; start it again.
 10. **Safety and clean-up** (2 min): a refused target outside the allowlist, an injection attempt passed verbatim, `target_destroy`.
 
-## 8. Judge demo storyline (about 2:45)
-
-1. 0:00 to 0:15: the problem: an agent on an embedded target has a plain SSH session, and the QNX expertise (dumper, pidin, slog2, gdb sysroots) sits with the human.
-2. 0:15 to 0:40: QNX identity and build: `target_create` (about 20 s with KVM, sped up), `target_status`, `build`.
-3. 0:40 to 1:25: `deploy_and_run`: `outcome: crashed`, core path from dumper; `get_crash`: NULL dereference at `crash.c:21`, locals, source line, provenance verified; a rebuilt binary refused with `core_mismatch`.
-4. 1:25 to 2:00: the agent patches the code, rebuilds, reruns and checks the calibrated readings; `processes` shows thread states of a background service.
-5. 2:00 to 2:25: results of the comparison (section 9).
-6. 2:25 to 2:45: codelab and repository.
-
-## 9. Measurement
+## 8. Measurement
 
 The evaluation is in [eval/](../eval), copied from the qnx-mcp-eval repository at commit 83925d9: the protocol preregistered in [eval/PROTOCOL.md](../eval/PROTOCOL.md) with dated amendments, the tasks with their hidden oracles, reference fixes and ground truth, the harness, every summary, and every trial in `eval/results/raw.tar.xz`. Claude Code 2.1.312 on Amazon Bedrock drives the agent; each trial gets a fresh QNX OS 8.0 x86_64 QEMU target and a fresh workspace; an automatic oracle with unseen inputs decides success, and a blind judge (no arm, no transcript) decides whether the stated root cause is right.
 
 * **Phases 1 and 2** (eight tasks each; arm A = QNX's agent skills plus a root shell over SSH, arm B = the same plus qnx-mcp): every trial that ran passed in both arms (phase 1: pilot 8/8 and an arm A screen 6/6; phase 2: arm A screens 16/16 twice, pilot Sonnet 28 of 32 trials and Haiku 6 of 32 before the budget guard stopped it). With SSH available, Sonnet used qnx-mcp mainly for crashes, and Haiku, with the MCP tools deferred behind tool search, did not load them.
-* **Phase 3, no shell on the target** (README "Debugging without a target shell"): arm A against arm C = the same skills plus qnx-mcp 0.2.1, with the agent's ssh, scp and sftp refusing the target. 160 trials: oracle 40/40 in every arm and model; root cause Sonnet 39/40 (A) and 40/40 (C), Haiku 40/40 (A) and 39/40 (C); arm C needed about twice the turns and 61 percent (Sonnet) and 47 percent (Haiku) more cost per trial at the median. Two gaps found there are fixed in v0.3.0: `process_stop` refused services started with a relative path (23 of 80 arm C trials), and `remote_binary` could have started a shell or a system program (no agent did).
+* **Phase 3, no shell on the target** (README "What the study shows"): arm A against arm C = the same skills plus qnx-mcp 0.2.1, with the agent's ssh, scp and sftp refusing the target. 160 trials: oracle 40/40 in every arm and model; root cause Sonnet 39/40 (A) and 40/40 (C), Haiku 40/40 (A) and 39/40 (C); arm C needed about twice the turns and 61 percent (Sonnet) and 47 percent (Haiku) more cost per trial at the median. Two gaps found there are fixed in v0.3.0: `process_stop` refused services started with a relative path (23 of 80 arm C trials), and `remote_binary` could have started a shell or a system program (no agent did).
 * **Limits.** Both arms are at the ceiling: every trial that ran passed the oracle. Arm C's isolation was a PATH wrapper plus transcript review; the agents ran as the same Unix user as the harness. One root-cause miss is a judge parse failure counted as a miss; the v2-04 oracle accepts a stack-size workaround. The tasks are our own small programs on QEMU, with one client and two models, and costs are list-price estimates.
 
-## 10. Review findings
+## 9. Defects found and fixed
 
-Review 03 covers the stage one code (items 1 to 9), review 05 the v0.1 code (items 1 to 9 again, and findings A to I) and review 12 the v0.2 additions. Each point has its status and, where a failure path can be provoked, the test that shows it (test names refer to `tests/`).
+Defects found while building and testing qnx-mcp, each with its fix and, where a failure path can be provoked, the test that shows it (test names refer to `tests/`).
 
-**Review 03 (stage one code)**
-
-| Item | Point | Status |
-|---|---|---|
-| 1 | Expired leases | Fixed: `test_units::test_leases_ignore_expired_and_prefer_newest` |
-| 1 | `--getip` fallback during boot | Fixed in `wait_ssh` (every 10 s); not provoked, the lease file always answered first |
-| 1 | Image-provisioned keys, HostKeyAlias, strict checking | Fixed: `test_lifecycle_e2e::test_create_stop_start_destroy` (pins equal the image keys; strict SSH after a restart) |
-| 2 | Empty allowlist permits everything | Fixed: `test_allowlist_fails_closed`, `test_unset_allowlist_refuses_everything` |
-| 2 | Regexes accept a trailing newline | Fixed: `test_fullmatch_rejects_trailing_newline` |
-| 2 | Symlinks bypass target boundaries | Fixed: `test_symlinked_target_is_refused`, `test_destroy_refuses_symlinked_target` |
-| 2 | DWARF paths expose host files | Fixed: `test_workspace_confines_host_paths` |
-| 2 | Private state directories | Fixed: `test_private_dir_mode_and_symlink_refusal` |
-| 2 | Builds execute host code; sandbox builds | Open: documented (README Limitations); `QNX_MCP_WORKSPACE` confines paths only |
-| 2 | Drop target privileges | Open: programs run as root |
-| 3 | Exec pipe blocks before the deadline | Fixed (polled with the deadline); not provoked |
-| 3 | Unchecked fork setup, setpgid, kill, waitpid | Fixed (results checked, `warnings[]`); failures not provoked |
-| 3 | Descendants abandoned | Fixed: `test_slice_e2e::test_runner_contract` (forked child gone, `group_clean`) |
-| 3 | setsid escapes | Open: not containable with process groups; documented |
-| 3 | TimerTimeout unchecked, dumper calls unbounded | Fixed (see review 05 G); not provokable without a wedged dumper |
-| 3 | Capture incomplete not reported | Fixed (`capture_complete`, `*_truncated`): `test_runner_contract` (truncation) |
-| 3 | GETPATH eviction versus absent dump | Fixed (`notified_no_path` versus `timeout`); not provoked |
-| 4 | Unbounded host output | Fixed: `test_run_bounds_output` |
-| 4 | Unlimited core transfer and decompression | Transfer fixed (review 05 H); decompression cap in code; not provoked (dumper does not gzip by default) |
-| 4 | Disk quotas | Open |
-| 4 | Cancellation cleanup | Fixed: `test_cancel_kills_running_process`, `test_runner_contract` (cancelled run) |
-| 5 | Signals to an old numeric pid | Fixed (pidfd, review 05 A) |
-| 5 | Probes without locking | Fixed (shared lock); the race itself not provoked |
-| 5 | Records saved outside the lock | Fixed; not provoked |
-| 6 | Mutable input, unchecked rename, presence trusted | Fixed: `test_crash_slice` (snapshot survives a rebuild); upload mismatch not provoked |
-| 7 | Reused core names | Fixed: per-run move plus `dumper -n` on created images, `test_create_stop_start_destroy` (two concurrent crashes) |
-| 7 | Mutable host binaries, shared downloads | Fixed: `test_crash_slice` |
-| 7 | Library identities against the image | Open: frames in libraries use the SDK's copies |
-| 8 | Malformed MI as success, tokens | Fixed: `test_mi_parser_flags_malformed_untokened_and_duplicates` |
-| 8 | Faulting frame versus callers, all threads | Fixed: `test_threads_crash` |
-| 8 | Runner JSON split on Unicode separators | Fixed: `test_runner_contract` (U+2028 argument) |
-| 9 | Error objects outside the declared schemas | Fixed: `test_error_results_match_declared_schemas` |
-| 9 | Argument failures, annotations | Fixed: same test (`cpus=9`), `test_tools_have_descriptions_schemas_and_annotations` |
-| 9 | Recovery hints across clients | Partly fixed: Claude Code and Codex connect and call tools (docs/evidence); error paths not exercised through them |
-
-**Review 05 (v0.1 code), items 1 to 9**
-
-| Item | Point | Status |
-|---|---|---|
-| 1 | Missing keys silently enable first-use trust | Fixed: refused unless `QNX_MCP_TRUST_FIRST_USE=1`, `test_first_use_trust_is_off_by_default` |
-| 2 | file_put path bypasses | Fixed (finding B); sandboxing and privileges still open (review 03 item 2) |
-| 3 | Runner blocking and process identity | Fixed (findings G and A) |
-| 4 | Size checked before an unbounded transfer | Fixed (finding H) |
-| 5 | `target_stop` bypasses the pidfd | Fixed (finding A) |
-| 5 | Records read before locking | Fixed: run_poll and run_stop read the record inside the target lock; not provoked |
-| 7 | No executable provenance | Fixed (finding F) |
-| 8 | Malformed or duplicate optional MI records accepted | Fixed in `get_crash` (both records must be present, well-formed and unique); the parser is tested, the use in `get_crash` is not provoked |
-| 9 | Wire conformity unverified | Fixed: the schema tests in `test_mcp_offline.py` |
-
-**Review 05, findings A to I**
-
-| Finding | Status |
+| Defect | Fix and test |
 |---|---|
-| A. Wrong-process signalling | Fixed: the runner keeps the zombie until the group is empty and the core is in (`test_runner_contract`, `group_clean`); `run_stop` goes through the owning runner's control FIFO (`test_background_runs_and_inspection`, `acknowledged`); `target_stop` uses only the pidfd (`test_create_stop_start_destroy`). If `waitid` were unavailable the runner falls back to reaping first and then does not signal the group (`group_clean: false`) |
-| B. File boundary bypasses | Fixed: `test_remote_paths_must_be_normalised`, `test_write_root_refuses_managed_dir`, `test_slice_e2e::test_file_boundaries` (directory destination, symlinked parent, `/data/var/tmp/qnx-mcp` alias). Partly: scp still writes the temporary file by path after the checked walk, so a parent replaced by a symlink in that moment would redirect the temporary file; the install step re-walks and refuses it |
-| C. Unsafe downloads | Fixed: `test_install_never_replaces_or_follows`, `test_file_boundaries` (directory mode unchanged) |
-| D. Unacknowledged background jobs | Fixed: `test_pruning_and_failed_starts` (lost acknowledgement, daemon stopped, record `failed`); the runner's own report timeout kills its daemon (not provoked) |
-| E. Pruning live work | Fixed: `test_pruning_and_failed_starts` (prune with keep 0 and age 0 skipped a live background run and a one-shot run in progress) |
-| F. False provenance | Fixed: `test_crash_slice` (rebuilt binary, binary without build ID, modified snapshot are refused; executable, pid and build ID all match for the real run) |
-| G. Deadlines fail open | Fixed in the runner (timer-signal deadline, dumper calls in a bounded helper thread, calls skipped when `TimerTimeout` fails); not provokable in tests |
-| H. Host cleanup and limits | Fixed: `test_run_keeps_output_when_a_descendant_holds_the_pipe`, `test_run_streams_with_exact_cap`, `test_file_boundaries` (growing file). Quotas open |
-| I. Poll JSON overflow | Fixed: `test_poll_budget_for_escaped_output` (2 x 1 MiB of control characters in one poll); `max_kb` limited to 1024 |
+| Expired leases | Fixed: `test_units::test_leases_ignore_expired_and_prefer_newest` |
+| `--getip` fallback during boot | Fixed in `wait_ssh` (every 10 s); not provoked, the lease file always answered first |
+| Image-provisioned keys, HostKeyAlias, strict checking | Fixed: `test_lifecycle_e2e::test_create_stop_start_destroy` (pins equal the image keys; strict SSH after a restart) |
+| Empty allowlist permits everything | Fixed: `test_allowlist_fails_closed`, `test_unset_allowlist_refuses_everything` |
+| Regexes accept a trailing newline | Fixed: `test_fullmatch_rejects_trailing_newline` |
+| Symlinks bypass target boundaries | Fixed: `test_symlinked_target_is_refused`, `test_destroy_refuses_symlinked_target` |
+| DWARF paths expose host files | Fixed: `test_workspace_confines_host_paths` |
+| Private state directories | Fixed: `test_private_dir_mode_and_symlink_refusal` |
+| Builds execute host code; sandbox builds | Open: documented (README Limitations); `QNX_MCP_WORKSPACE` confines paths only |
+| Drop target privileges | Partly fixed: `QNX_MCP_RUN_AS` runs programs as a non-root uid (not yet tested on a target) |
+| Exec pipe blocks before the deadline | Fixed (polled with the deadline); not provoked |
+| Unchecked fork setup, setpgid, kill, waitpid | Fixed (results checked, `warnings[]`); failures not provoked |
+| Descendants abandoned | Fixed: `test_slice_e2e::test_runner_contract` (forked child gone, `group_clean`) |
+| setsid escapes | Open: not containable with process groups; documented |
+| TimerTimeout unchecked, dumper calls unbounded | Fixed (bounded dumper calls, below); not provokable without a wedged dumper |
+| Capture incomplete not reported | Fixed (`capture_complete`, `*_truncated`): `test_runner_contract` (truncation) |
+| GETPATH eviction versus absent dump | Fixed (`notified_no_path` versus `timeout`); not provoked |
+| Unbounded host output | Fixed: `test_run_bounds_output` |
+| Unlimited core transfer and decompression | Transfer fixed (bounded streaming, below); decompression cap in code; not provoked (dumper does not gzip by default) |
+| Disk quotas | Open |
+| Cancellation cleanup | Fixed: `test_cancel_kills_running_process`, `test_runner_contract` (cancelled run) |
+| Signals to an old numeric pid | Fixed (pidfd; see wrong-process signalling below) |
+| Probes without locking | Fixed (shared lock); the race itself not provoked |
+| Records saved outside the lock | Fixed; not provoked |
+| Mutable input, unchecked rename, presence trusted | Fixed: `test_crash_slice` (snapshot survives a rebuild); upload mismatch not provoked |
+| Reused core names | Fixed: per-run move plus `dumper -n` on created images, `test_create_stop_start_destroy` (two concurrent crashes) |
+| Mutable host binaries, shared downloads | Fixed: `test_crash_slice` |
+| Library identities against the image | Open: frames in libraries use the SDK's copies |
+| Malformed MI as success, tokens | Fixed: `test_mi_parser_flags_malformed_untokened_and_duplicates` |
+| Faulting frame versus callers, all threads | Fixed: `test_threads_crash` |
+| Runner JSON split on Unicode separators | Fixed: `test_runner_contract` (U+2028 argument) |
+| Error objects outside the declared schemas | Fixed: `test_error_results_match_declared_schemas` |
+| Argument failures, annotations | Fixed: same test (`cpus=9`), `test_tools_have_descriptions_schemas_and_annotations` |
+| Recovery hints across clients | Partly fixed: Claude Code and Codex connect and call tools (docs/evidence); error paths not exercised through them |
+| Missing keys silently enable first-use trust | Fixed: refused unless `QNX_MCP_TRUST_FIRST_USE=1`, `test_first_use_trust_is_off_by_default` |
+| file_put path bypasses | Fixed (see file boundary bypasses below); build sandboxing still open |
+| Runner blocking and process identity | Fixed (see deadlines and wrong-process signalling below) |
+| Size checked before an unbounded transfer | Fixed (see host cleanup and limits below) |
+| `target_stop` bypasses the pidfd | Fixed (see wrong-process signalling below) |
+| Records read before locking | Fixed: run_poll and run_stop read the record inside the target lock; not provoked |
+| No executable provenance | Fixed (see false provenance below) |
+| Malformed or duplicate optional MI records accepted | Fixed in `get_crash` (both records must be present, well-formed and unique); the parser is tested, the use in `get_crash` is not provoked |
+| Wire conformity unverified | Fixed: the schema tests in `test_mcp_offline.py` |
+| Wrong-process signalling | Fixed: the runner keeps the zombie until the group is empty and the core is in (`test_runner_contract`, `group_clean`); `run_stop` goes through the owning runner's control FIFO (`test_background_runs_and_inspection`, `acknowledged`); `target_stop` uses only the pidfd (`test_create_stop_start_destroy`). If `waitid` were unavailable the runner falls back to reaping first and then does not signal the group (`group_clean: false`) |
+| File boundary bypasses | Fixed: `test_remote_paths_must_be_normalised`, `test_write_root_refuses_managed_dir`, `test_slice_e2e::test_file_boundaries` (directory destination, symlinked parent, `/data/var/tmp/qnx-mcp` alias). Partly: scp still writes the temporary file by path after the checked walk, so a parent replaced by a symlink in that moment would redirect the temporary file; the install step re-walks and refuses it |
+| Unsafe downloads | Fixed: `test_install_never_replaces_or_follows`, `test_file_boundaries` (directory mode unchanged) |
+| Unacknowledged background jobs | Fixed: `test_pruning_and_failed_starts` (lost acknowledgement, daemon stopped, record `failed`); the runner's own report timeout kills its daemon (not provoked) |
+| Pruning live work | Fixed: `test_pruning_and_failed_starts` (prune with keep 0 and age 0 skipped a live background run and a one-shot run in progress) |
+| False provenance | Fixed: `test_crash_slice` (rebuilt binary, binary without build ID, modified snapshot are refused; executable, pid and build ID all match for the real run) |
+| Deadlines fail open | Fixed in the runner (timer-signal deadline, dumper calls in a bounded helper thread, calls skipped when `TimerTimeout` fails); not provokable in tests |
+| Host cleanup and limits | Fixed: `test_run_keeps_output_when_a_descendant_holds_the_pipe`, `test_run_streams_with_exact_cap`, `test_file_boundaries` (growing file). Quotas open |
+| Poll JSON overflow | Fixed: `test_poll_budget_for_escaped_output` (2 x 1 MiB of control characters in one poll); `max_kb` limited to 1024 |
+| process_stop: exec and critical-state races before either signal | Partly fixed: start time, `crit_proc` and the executable are read again through the held descriptor right before each signal; an exec changes the start time, so it is caught (`test_process_stop`: SIGKILL withheld after an exec on SIGTERM). Open: the window between that check and the signal; no QNX mechanism to serialize them was found |
+| Pathname is not executable identity (replaced symlinks, hard links) | Open, documented as a limitation; the rules are against mistakes |
+| PID reuse before opening | Fixed: creation token (start time) from discovery, verified after opening (`test_process_stop`: a wrong token is refused); a real reuse was not provoked |
+| Query errors taken as exit | Fixed: an error result that says which signals were sent (`test_units::test_stop_result_never_reports_an_unknown_state_as_success`); a failing query itself was not provoked |
+| Descendants survive | Documented (one process is signalled) |
+| file_list: `real_path` resolved apart from the opened directory | Fixed: `real_path_verified` by device and inode (`test_file_list`: true; the false case only in `test_list_result_reports_incomplete_and_unverified_listings`) |
+| file_list: `readdir` errors look complete | Fixed: `errno` checked, `complete: false` (same unit test; a failing `readdir` was not provoked) |
+| file_list: metadata and link target from different versions | Open, documented |
+| remote_binary: replacement between check and start | Open, documented; starting a protected copy would change the path the program runs from, which the restart use case needs |
+| remote_binary: hash fallback in crash provenance | Fixed: removed; only a build ID verifies, otherwise `verified: false` with `evidence` (`test_remote_binary_runs`) |
+| One lease suppresses fallback | Fixed: rediscovery and one retry after a connection-setup failure (`test_units::test_stale_lease_is_rediscovered_after_a_connection_failure`) |
+| Several leases still probe | Fixed: no port probes at all; candidates get authenticated attempts |
+| Cloned host keys defeat identification | Open, documented; mkqnximage generates keys per image |
+| The passing tests do not establish the guarantees | Agreed: the exec race and the token check are now provoked on tb; pid reuse, query errors and `readdir` errors are not |
 
-**Review 12 (v0.2: `file_list`, `remote_binary`, `process_stop`, the single-lease address lookup)**
-
-| Point | Status |
-|---|---|
-| 1. process_stop: exec and critical-state races before either signal | Partly fixed: start time, `crit_proc` and the executable are read again through the held descriptor right before each signal; an exec changes the start time, so it is caught (`test_process_stop`: SIGKILL withheld after an exec on SIGTERM). Open: the window between that check and the signal; no QNX mechanism to serialize them was found |
-| 1. Pathname is not executable identity (replaced symlinks, hard links) | Open, documented as a limitation; the rules are against mistakes (item 13) |
-| 1. PID reuse before opening | Fixed: creation token (start time) from discovery, verified after opening (`test_process_stop`: a wrong token is refused); a real reuse was not provoked |
-| 1. Query errors taken as exit | Fixed: an error result that says which signals were sent (`test_units::test_stop_result_never_reports_an_unknown_state_as_success`); a failing query itself was not provoked |
-| 1. Descendants survive | Documented (one process is signalled) |
-| 2. file_list: `real_path` resolved apart from the opened directory | Fixed: `real_path_verified` by device and inode (`test_file_list`: true; the false case only in `test_list_result_reports_incomplete_and_unverified_listings`) |
-| 2. file_list: `readdir` errors look complete | Fixed: `errno` checked, `complete: false` (same unit test; a failing `readdir` was not provoked) |
-| 2. file_list: metadata and link target from different versions | Open, documented |
-| 2. remote_binary: replacement between check and start | Open, documented; starting a protected copy would change the path the program runs from, which the restart use case needs |
-| 2. remote_binary: hash fallback in crash provenance | Fixed: removed; only a build ID verifies, otherwise `verified: false` with `evidence` (`test_remote_binary_runs`) |
-| 3. One lease suppresses fallback | Fixed: rediscovery and one retry after a connection-setup failure (`test_units::test_stale_lease_is_rediscovered_after_a_connection_failure`) |
-| 3. Several leases still probe | Fixed: no port probes at all; candidates get authenticated attempts |
-| 3. Cloned host keys defeat identification | Open, documented; mkqnximage generates keys per image |
-| 4. The passing tests do not establish the guarantees | Agreed: the exec race and the token check are now provoked on tb; pid reuse, query errors and `readdir` errors are not |
-
-## 11. Open problems
+## 10. Open problems
 
 * On images not created by qnx-mcp (`core_naming: "fixed"`), a second crash of a program with the same name between dumper finishing a core and the runner moving it would overwrite it; `get_crash` then fails with `core_mismatch` (pid check).
 * Backtrace source lines are read from the current files on the build host; no copy is taken at build time.
 * Output is decoded as UTF-8 with replacement characters, so binary output is not reproduced exactly in text fields (byte counts and cursors are exact).
-* Library frames are resolved against the SDK copies (see section 10).
+* Library frames are resolved against the SDK copies (see section 9).
 * A descendant that calls `setsid()` escapes the process group and is not killed.
 * The lease-file fast path assumes libvirt's default network; other setups fall back to `mkqnximage --getip`.
 * Background runs do not survive a target reboot (`run_poll` then reports `lost`; not tested).
 * The missing-disk-image failure of mkqnximage on the shared box (section 2) is worked around; its cause is not known.
 * `process_stop`: the window between the last check and each signal is open; the path rules judge the start path and today's resolution (a replaced symlink or a hard link to a system program can mislead them); children of the process are not signalled; the creation token is taken at `process_stop`'s own discovery.
-* For `remote_binary` runs, the SHA-256 is taken before the run and the runner re-checks only the path rules just before the start, so the bytes that ran are not established; crash provenance therefore relies on the build ID alone. Shells are recognised by name, so a renamed copy of a shell below `/tmp` passes; and `deploy_and_run` runs whatever the agent builds, as root.
+* For `remote_binary` runs, the SHA-256 is taken before the run and the runner re-checks only the path rules just before the start, so the bytes that ran are not established; crash provenance therefore relies on the build ID alone. Shells are recognised by name, so a renamed copy of a shell below `/tmp` passes; and `deploy_and_run` runs whatever the agent builds, as root unless `QNX_MCP_RUN_AS` is set.
 * `file_list` follows a symlink given as the directory itself (`real_path`, verified by device and inode); an entry's metadata and link target can describe different versions of it.

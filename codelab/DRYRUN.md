@@ -1,16 +1,18 @@
 # Dry runs of the codelab
 
-Date: 3 November 2026. Each pass follows `qnx-mcp-agent-target.md` from the top in a new workspace on the build box (Ubuntu 22.04.5, QNX SDP 8.0 in `~/qnx800`, QEMU 6.2.0 with KVM, Python 3.10.12): a new `CODELAB` directory, a new venv with qnx-mcp installed from a clone, a new `QNX_MCP_TARGETS_DIR` and `QNX_MCP_STATE_DIR`, a new Claude Code config directory, and the target `cl1` allowed by its own allowlist. Paths in home directories are shortened to `~`.
+How the codelab was checked, on 3 November 2026. Each pass followed `qnx-mcp-agent-target.md` from the top in a fresh workspace on an Ubuntu 22.04.5 build host with QNX SDP 8.0, QEMU 6.2.0 with KVM and Python 3.10.12. Each pass had its own `CODELAB` directory, venv, targets and state directories, Claude Code config directory, and an allowlist of only `cl1`.
 
-Where the codelab says to ask the agent, the prompt was given, as written, to a headless Claude Code 2.1.312 session on Amazon Bedrock (model `global.anthropic.claude-sonnet-5-5`, default effort), one `claude -p` turn per prompt, each turn continuing the previous conversation (`--continue`), like one interactive session. Permissions: `--permission-mode acceptEdits --allowedTools mcp__qnx`, standing in for a reader who answers "Yes, and don't ask again" for the qnx tools. The driver scripts and full transcripts stayed on the box (`~/cl-dryrun/pass<N>/logs/`).
+Where the codelab says to ask the agent, the prompt went, as written, to a headless Claude Code 2.1.312 session (model Sonnet 5.5, default effort), one turn per prompt, each turn continuing the previous one, like one interactive session. Permissions allowed the qnx tools, standing in for a reader who answers "Yes, and don't ask again" for them.
 
-Deviations from the text, the same in every pass:
+Differences from the text, the same in every pass:
 
-* `CODELAB` was `~/cl-dryrun/pass<N>/qnx-codelab` (the text has `~/qnx-codelab`), so passes do not share state.
-* `git clone https://github.com/NikhilGogu/qnx-mcp.git` was redirected (`url.<bundle>.insteadOf` in a private `GIT_CONFIG_GLOBAL`) to a git bundle of the local repository, because the codelab files are not pushed yet. The public repository answered (`git ls-remote` showed `main` at 06e4aef) but lacks `codelab/` and `skills/`.
-* `sudo apt install ...` ran as `apt-get -s install ...` (simulated: the box is shared and nothing may be upgraded); all packages were already installed. `sudo adduser` ran with `sudo -n` (the user was already in both groups). Logging out and in was not needed.
-* The interactive `claude` start was replaced by the headless turns. The Codex section was not run in a session; its configuration block was checked with `codex mcp list` (Codex CLI 0.160.0, temporary `CODEX_HOME`), which listed `qnx` as `enabled` with `tool_timeout_sec: 600`.
-* `claude` was a wrapper that sets the Bedrock environment and the pass's `CLAUDE_CONFIG_DIR`; `MCP_TOOL_TIMEOUT` was not set (Claude Code's default).
+* Each pass used its own `CODELAB` directory in place of `~/qnx-codelab`, so passes did not share state.
+* The clone step installed the same commit from a local copy of the repository.
+* `apt install` was simulated (all packages were already installed) and the user was already in the `kvm` and `libvirt` groups, so logging out and in was not needed.
+* The interactive `claude` start was replaced by the headless turns. The Codex section was not run in a session; its configuration block was checked with `codex mcp list` (Codex CLI 0.160.0), which listed `qnx` as `enabled` with `tool_timeout_sec: 600`.
+* `MCP_TOOL_TIMEOUT` was not set (Claude Code's default).
+
+These passes predate the build-argument allow-list. The codelab's `build` calls pass no compiler or make flags, so the allow-list has nothing to refuse there. A new pass on the current code is still to do.
 
 Costs are the `total_cost_usd` of the last turn of each pass (cumulative over the session).
 
@@ -18,7 +20,7 @@ Costs are the `total_cost_usd` of the last turn of each pass (cumulative over th
 
 | Step | Result |
 |---|---|
-| 3 Install | The first clone failed: `warning: remote HEAD refers to nonexistent ref`. Harness error (the bundle had no `HEAD`); bundle recreated, step repeated: 9 s. |
+| 3 Install | The first clone failed: `warning: remote HEAD refers to nonexistent ref`. Harness error in the local copy used for the clone (it had no `HEAD`); copy recreated, step repeated: 9 s. |
 | 4 to 6 | As written. |
 | 6 Fix the compile error | While fixing the typo the agent read `sensor.c` and said that `find_calibration()` returns NULL for an unknown channel and nothing checks it. The crash in that version came from a channel name with a trailing space in `samples.csv`, so the source gave the bug away. |
 
