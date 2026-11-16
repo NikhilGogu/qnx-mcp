@@ -106,8 +106,9 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
         "source": "remote_run" if remote else "run_record" if rec else "manual", "binary_sha256": bin_sha, "binary_build_id": bin_bid,
         "core_executable": exe, "core_pid": core_pid, "core_build_id": core_bid,
         "build_id_match": (core_bid == bin_bid) if core_bid and bin_bid else None,
-        "executable_match": (exe in (rec["remote_path"], rec.get("remote_real_path"))) if rec else None,
-        "pid_match": (core_pid == rec.get("pid")) if rec else None,
+        # Evidence the core lacks never counts as a match (a host run's record has remote_real_path None).
+        "executable_match": (exe is not None and exe in (rec["remote_path"], rec.get("remote_real_path"))) if rec else None,
+        "pid_match": (core_pid is not None and core_pid == rec.get("pid")) if rec else None,
         "core_sha256": info["sha256"], "core_size": info["size"],
     }
     problems = []
