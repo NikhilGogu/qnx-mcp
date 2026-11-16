@@ -80,7 +80,7 @@ class ErrorInfo(_M):
     code: str = Field(description="Stable code: invalid_argument, path_not_allowed, target_not_found, target_not_allowed, target_exists, target_down, "
                       "target_busy, ssh_failed, host_key_mismatch, host_key_missing, timeout, cancelled, sdk_missing, tool_missing, ssh_key_missing, mkqnximage_failed, "
                       "build_failed, arch_mismatch, not_a_qnx_binary, deploy_failed, copy_failed, runner_failed, remote_failed, core_not_found, "
-                      "core_too_large, core_mismatch, gdb_failed, file_exists, file_not_found, file_too_large, process_not_found, process_not_allowed, internal_error")
+                      "core_too_large, core_mismatch, gdb_failed, file_exists, file_not_found, file_too_large, process_not_found, process_not_allowed, config_error, internal_error")
     message: str
     hint: str | None = Field(None, description="What to do next")
     details: dict[str, Any] | None = None
@@ -110,6 +110,8 @@ class TargetInfo(_M):
     dumper_args: str | None = None
     core_naming: Literal["sequential", "fixed"] | None = Field(None, description="sequential when dumper runs with -n (app.1.core, app.2.core, ...)")
     was_running: bool | None = None
+    privileges: dict[str, Any] | None = Field(None, description="login_user (the SSH user on the target), program_identity (login_user, run_as or refused) "
+                                              "and run_as {uid, gid} when agent programs run as QNX_MCP_RUN_AS")
 
 
 class TargetList(_M):
@@ -210,6 +212,7 @@ class RunResult(RunFields):
     remote_path: str = Field(description="Path of the program on the target")
     remote_binary: bool = Field(False, description="True when the program was already on the target (get_crash then needs binary=<host build>)")
     args: list[str]
+    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root)")
     stdout: str
     stderr: str
     next_step: str | None = None
@@ -227,6 +230,7 @@ class RunStartResult(_M):
     remote_path: str
     remote_binary: bool = False
     args: list[str]
+    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root)")
     deadline_s: float
     next_step: str
 
@@ -446,6 +450,9 @@ class LogResult(_M):
 class EnvCheck(_M):
     ok: bool
     checks: list[dict[str, Any]]
+    privileges: dict[str, Any] = Field(description="Identities in use (login_user, program_identity, run_as) and tools[]: per tool its side "
+                                       "(host or target), identity (server_user, login_user or agent_program), needs[] and, for target tools, "
+                                       "verified_on_target")
 
 
 # ---------------------------------------------------------------- plumbing

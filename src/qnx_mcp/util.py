@@ -58,6 +58,10 @@ class Config:
     workspace_from_cwd: bool = False
     trust_first_use: bool = False
     remote_binary_roots: tuple[str, ...] = ("/tmp", "/data")
+    # Agent programs run as this uid:gid on the target (QNX_MCP_RUN_AS); None keeps the login user (root).
+    run_as: tuple[int, int] | None = None
+    # QNX_MCP_RUN_AS was set but unusable: every run is refused instead of running as root (fails closed).
+    run_as_error: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -79,6 +83,7 @@ class Config:
         rb_roots = ("/tmp", "/data") if roots is None else tuple(
             r.strip() for r in roots.split(os.pathsep)
             if REMOTE_PATH_RE.fullmatch(r.strip()) and not any(c in ("", ".", "..") for c in r.strip().split("/")[1:]))
+        run_as, run_as_error = parse_run_as(env.get("QNX_MCP_RUN_AS", ""))
         return cls(
             sdp_env=Path(env.get("QNX_MCP_SDP_ENV", str(home / "qnx800" / "qnxsdp-env.sh"))),
             targets_dir=Path(env.get("QNX_MCP_TARGETS_DIR", str(base / "targets"))),
@@ -90,11 +95,31 @@ class Config:
             workspace_from_cwd=from_cwd,
             trust_first_use=env.get("QNX_MCP_TRUST_FIRST_USE", "") == "1",
             remote_binary_roots=rb_roots,
+            run_as=run_as,
+            run_as_error=run_as_error,
         )
 
     def allowed(self, name: str) -> bool:
         # fnmatchcase matches the whole name (the translated pattern is anchored with \Z).
         return any(fnmatch.fnmatchcase(name, pat) for pat in self.allow)
+
+
+RUN_AS_RE = re.compile(r"([0-9]{1,10}):([0-9]{1,10})")
+RUN_AS_MAX = 0x7FFFFFFE
+
+
+def parse_run_as(value: str) -> tuple[tuple[int, int] | None, str | None]:
+    """QNX_MCP_RUN_AS: empty means unset; otherwise numeric 'uid:gid', both in 1..2147483646 (never root)."""
+    value = value.strip()
+    if not value:
+        return None, None
+    m = RUN_AS_RE.fullmatch(value)
+    if not m:
+        return None, f"QNX_MCP_RUN_AS={value!r} is not numeric uid:gid"
+    uid, gid = int(m.group(1)), int(m.group(2))
+    if not (1 <= uid <= RUN_AS_MAX and 1 <= gid <= RUN_AS_MAX):
+        return None, f"QNX_MCP_RUN_AS={value!r}: uid and gid must be in 1..{RUN_AS_MAX} (0 is root)"
+    return (uid, gid), None
 
 
 # ---------------------------------------------------------------- validation

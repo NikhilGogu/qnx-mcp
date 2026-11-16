@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .abilities import LOGIN_USER, privileges
 from .sdk import ARCHES, check_arch, sdk_env, sdk_tool
 from .util import (
     Config, ProcResult, QnxMcpError, check_cancelled, check_remote_path, check_target_name, file_lock, private_dir,
@@ -345,20 +346,20 @@ class Target:
     def ssh(self, argv: Sequence[str], *, timeout: float, what: str = "remote command", ip: str | None = None,
             check: bool = True, hold_stdin: bool = False, max_output: int = 8 << 20) -> ProcResult:
         """Run argv on the target; every element is quoted for the remote shell."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
                           max_output=max_output)
         self._classify(r, what, timeout, check)
         return r
 
     def ssh_script(self, script: str, *, timeout: float, what: str, ip: str | None = None, check: bool = True) -> ProcResult:
         """Run a fixed shell script. Callers build `script` only from constants and quote_argv()."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", script], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", script], ip, timeout=timeout)
         self._classify(r, what, timeout, check)
         return r
 
     def put(self, local: Path, remote: str, *, timeout: float, ip: str | None = None) -> None:
         check_remote_path(remote)
-        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"root@{a}:{remote}"], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"{LOGIN_USER}@{a}:{remote}"], ip, timeout=timeout)
         self._classify(r, f"copy to {remote}", timeout, check=False)
         if r.returncode != 0:
             raise QnxMcpError("deploy_failed", f"scp to {self.name}:{remote} failed", stderr=tail(r.err, 800))
@@ -371,7 +372,7 @@ class Target:
             def restart() -> None:
                 f.seek(0)
                 f.truncate()
-            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
+            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
                               ip, before_retry=restart, timeout=timeout, max_output=size, stdout_file=f)
         self._classify(r, f"copy from {remote}", timeout, check=False)
         if r.returncode != 0 or r.streamed_over(size):
@@ -397,7 +398,7 @@ class Target:
             if use_getip:
                 next_getip = time.monotonic() + 10
             for ip in self.candidates(getip=use_getip, getip_timeout=8):  # authenticated attempts only, no port probes
-                r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", "true"], timeout=10)
+                r = run(["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{ip}", "--", "true"], timeout=10)
                 if r.returncode == 0:
                     return ip
                 if "Host key verification failed" in r.err or "REMOTE HOST IDENTIFICATION" in r.err:
@@ -550,6 +551,7 @@ class Target:
             "directory": str(self.dir),
             "host_key_policy": self.host_key_policy(),
             "ip": None,
+            "privileges": {k: v for k, v in privileges(self.cfg).items() if k != "tools"},
         }
         if pid is None or not probe:
             return st

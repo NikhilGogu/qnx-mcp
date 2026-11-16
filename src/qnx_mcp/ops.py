@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .abilities import describe_program_identity, privileges
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
 from .target import Target
@@ -228,6 +229,28 @@ def _run_options(timeout_s: float, core_wait_s: float, max_output_kb: int, env: 
     return opts
 
 
+def _run_as_argv(cfg: Config) -> list[str]:
+    """Runner option for non-root runs. A bad QNX_MCP_RUN_AS refuses the run rather than running it as root."""
+    if cfg.run_as_error:
+        raise QnxMcpError("config_error", f"{cfg.run_as_error}, so this server refuses to start programs",
+                          hint="Ask the person running qnx-mcp to fix QNX_MCP_RUN_AS (numeric uid:gid, not 0) or unset it; environment_check shows it.")
+    return ["-u", f"{cfg.run_as[0]}:{cfg.run_as[1]}"] if cfg.run_as else []
+
+
+def _run_as_field(cfg: Config) -> dict[str, int] | None:
+    return {"uid": cfg.run_as[0], "gid": cfg.run_as[1]} if cfg.run_as else None
+
+
+DROP_FAILED = "could not drop privileges"
+
+
+def _drop_failed_step(res: dict[str, Any]) -> str | None:
+    if str(res.get("exec_error") or "").startswith(DROP_FAILED):
+        return ("the program did not start: the runner could not switch to the QNX_MCP_RUN_AS user on the target; "
+                "check that the server runs the target tools as root (target_status.privileges) and that the uid and gid are valid there")
+    return None
+
+
 def _outcome(res: dict[str, Any]) -> str:
     if res.get("exec_error"):
         return "exec_failed"
@@ -372,7 +395,7 @@ def deploy_and_run(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = [str(a) for a in (args or [])]
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096) + _run_as_argv(cfg)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -382,6 +405,7 @@ def deploy_and_run(
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "oneshot", "state": "running", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
+            "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)
         argv = [runner, "-S", *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args]
@@ -407,9 +431,11 @@ def deploy_and_run(
     result: dict[str, Any] = {
         "ok": True, "run_id": rid, "target": target, "outcome": _outcome(res), "binary": prog["binary"], "binary_sha256": prog["binary_sha256"],
         "build_id": prog["build_id"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"], "args": args,
-        "started_at": rec["started_at"], **res,
+        "started_at": rec["started_at"], "run_as": rec["run_as"], **res,
     }
-    if result.get("core_path"):
+    if _drop_failed_step(res):
+        result["next_step"] = _drop_failed_step(res)
+    elif result.get("core_path"):
         result["next_step"] = _crash_step(target, rid, rec)
     elif res.get("core_expected"):
         result["next_step"] = f"no core reported (dumper={res.get('dumper')}); check target_status.dumper_running"
@@ -435,7 +461,7 @@ def run_start(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = [str(a) for a in (args or [])]
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536) + _run_as_argv(cfg)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -445,7 +471,7 @@ def run_start(
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "background", "state": "starting", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
-            "deadline": time.time() + timeout_s,
+            "deadline": time.time() + timeout_s, "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)  # ownership is on disk before anything is launched
         _reconcile_starts(t, ip, exclude=rid)
@@ -471,7 +497,7 @@ def run_start(
     return {
         "ok": True, "run_id": rid, "target": target, "state": "running", "pid": res.get("pid"), "runner_pid": res.get("runner_pid"),
         "binary": prog["binary"], "binary_sha256": prog["binary_sha256"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"],
-        "args": args, "deadline_s": timeout_s,
+        "args": args, "deadline_s": timeout_s, "run_as": rec["run_as"],
         "next_step": f"call run_poll with run_id={rid!r} for output (pass back stdout_next/stderr_next as offsets); run_stop ends it",
     }
 
@@ -1031,7 +1057,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
         ws += "; '/' confines nothing"
     add("workspace", not (unconfined and cfg.workspace_from_cwd), ws,
         "Set QNX_MCP_WORKSPACE to your project directories, or start the server in your project directory.")
+    add("program_identity", not cfg.run_as_error, describe_program_identity(cfg),
+        "Set QNX_MCP_RUN_AS to a numeric non-root uid:gid that exists on your targets, or unset it.")
     for c in checks:
         if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):
             c["optional"] = True
-    return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks}
+    return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks, "privileges": privileges(cfg)}
