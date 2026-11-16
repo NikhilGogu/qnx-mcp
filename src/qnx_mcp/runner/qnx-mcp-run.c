@@ -1315,9 +1315,10 @@ static int mode_background(struct opts *o, const char *dir)
     struct sink out = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
     struct sink err = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
     snprintf(path, sizeof path, "%s/stdout", dir);
-    out.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    /* program output may hold secrets: only the owner (root) reads it */
+    out.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     snprintf(path, sizeof path, "%s/stderr", dir);
-    err.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    err.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (out.file == -1 || err.file == -1) {
         msg[0] = msg[0] ? msg[0] : errno;
     }

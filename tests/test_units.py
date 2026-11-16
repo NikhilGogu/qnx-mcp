@@ -840,3 +840,29 @@ def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
     assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
     for name, line, kw in calls:
         check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))
+
+
+def test_remote_dirs_are_private_or_refused(tmp_path: Path):
+    """The fragment prepare sends to the target, run here with the local sh: directories end up 0700 and owned by the
+    user running it; a link, a file or (on the target) another user's directory stops it with exit 4."""
+    import subprocess
+    from qnx_mcp.ops import _secure_dirs_script
+    root = tmp_path / "qnx-mcp"
+
+    def sh(dirs: list[Path]) -> subprocess.CompletedProcess:
+        return subprocess.run(["sh", "-c", _secure_dirs_script([str(d) for d in dirs])], capture_output=True, text=True, timeout=10)
+
+    tree = [root, root / "apps", root / "apps" / "0123456789abcdef", root / "bin", root / "runs", root / "runs" / "r-000000000001"]
+    assert sh(tree).returncode == 0
+    assert all(d.is_dir() and stat.S_IMODE(d.stat().st_mode) == 0o700 for d in tree)
+    (root / "runs").chmod(0o777)
+    assert sh(tree).returncode == 0 and stat.S_IMODE((root / "runs").stat().st_mode) == 0o700
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o755)
+    linked = tmp_path / "linked"
+    linked.symlink_to(elsewhere)
+    r = sh([linked, linked / "bin"])
+    assert r.returncode == 4 and str(linked) in r.stderr and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755 and not (elsewhere / "bin").exists()
+    (tmp_path / "plain").write_text("x")
+    assert sh([tmp_path / "plain"]).returncode == 4
+    assert "test -O " in _secure_dirs_script(["/tmp/qnx-mcp"])  # another owner is refused (needs root to test here)
