@@ -20,6 +20,8 @@ QNX publishes Markdown agent skills ([qnx/qnx-agent-skills](https://github.com/q
 
 Skills tell the agent what to do; qnx-mcp runs it and returns structured results. The skill file [skills/qnx-mcp/SKILL.md](../skills/qnx-mcp/SKILL.md) says which qnx-mcp tool to use when.
 
+Another MCP server for QNX 8.0, [ChHaEoN/qnx-mcp-server](https://github.com/ChHaEoN/qnx-mcp-server), is described in its README as read-only: it diagnoses a QEMU target over verified SSH/SFTP with four tools (`system_info`, `list_processes`, `read_system_log`, `read_file`) and accepts no execution, target write or delete. qnx-mcp also creates targets, builds, deploys and runs programs and analyses crashes.
+
 ## 2. Architecture
 
 ```

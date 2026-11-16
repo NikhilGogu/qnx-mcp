@@ -1,63 +1,47 @@
 # qnx-mcp
 
-qnx-mcp is a Model Context Protocol (MCP) server that gives coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
+[![tests](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml)
 
-Status: v0.3.0. v0.2 added the tools an agent needs when it has no shell on the target (`file_list`, `process_stop`, and `remote_binary` for `deploy_and_run` and `run_start`), and v0.2.1 addressed the review findings on them; every review finding and its status is in docs/DESIGN.md section 10. v0.3.0 fixes two gaps found in the study under "Debugging without a target shell" below: `process_stop` handles services started with a relative path, and `remote_binary` refuses shells and system programs. Test logs, target observations, tool versions and client session transcripts are in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
+An AI coding agent with a raw SSH shell on a QNX target can run unbounded commands, hang on a program that never exits, and read crash output that nobody can tie to a binary. qnx-mcp is a Model Context Protocol (MCP) server that gives the agent 19 typed tools instead. Every run has a deadline and capped output, and a crash comes back as a source-level backtrace that is checked against the build ID of the binary that was deployed. It works with Claude Code and Codex, on QNX OS 8.0 targets under QEMU.
 
-Tutorial: the codelab [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/) (about 45 minutes; source in [codelab/](codelab/qnx-mcp-agent-target.md), dry runs in [codelab/DRYRUN.md](codelab/DRYRUN.md)). The agent skill file is [skills/qnx-mcp/SKILL.md](skills/qnx-mcp/SKILL.md).
+![The agent talks MCP to qnx-mcp on the build host, which builds with the QNX SDP and reaches the QNX OS 8.0 QEMU target over ssh](codelab/img/overview.png)
 
-## What the tools do
+* Demo video: [qnx-mcp: a QNX 8.0 target for AI coding agents](https://youtu.be/D49Cq9S1k0Y)
+* Step-by-step codelab: [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/)
+* Design notes: [docs/DESIGN.md](docs/DESIGN.md). Test logs and target observations: [docs/evidence](docs/evidence).
 
-qnx-mcp composes the commands, finds the cores, picks the matching gdb and sysroot and parses the output, on the target and on the host, and returns objects:
+## Quickstart
 
-* **Crash notification from dumper.** A small C helper on the target (`qnx-mcp-run`) registers a pulse with dumper (`DCMD_DUMPER_NOTIFYEVENT`) before the program starts. When the program dies from a signal that dumper handles, the helper waits for the pulse carrying that pid and asks `DCMD_DUMPER_GETPATH` for the exact core path, then moves the core into the run's own directory. In the example below the whole crashing run took 44 ms, and dumper's completion pulse was already waiting when the helper saw the program exit (`core_ready_ms: 0`).
-* **Verified crash provenance.** Each run keeps a snapshot of the exact binary that was deployed. `get_crash` downloads the core with a size and SHA-256 check and refuses it (`core_mismatch`) unless the executable the core names is the run's content-addressed binary, the pid in the core is the run's pid, and the GNU build ID in the executable's note in the core's memory matches. A rebuilt binary, a binary without a build ID and a modified snapshot are refused (`test_crash_slice`).
-* **Bounded runs.** Every run has a wall-clock deadline, capped output (truncation is reported), stdin on `/dev/null`, its own process group, and the whole group is killed when the program ends, so a forked child does not outlive the run. If the client cancels a call, the server kills its ssh and the helper notices the closed session and kills the program. Long-running programs get `run_start`, `run_poll` (output cursors) and `run_stop`.
-* **Structured system state.** `processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack and the id of the thread that faulted.
+You need an Ubuntu x86_64 build host with KVM and QEMU, and QNX SDP 8.0 (tested with the non-commercial licence). Details are under [Requirements and tested versions](#requirements-and-tested-versions).
 
-## Example (abridged)
-
-From the v0.1 test run (`docs/evidence/test-run-v0.1.log`), the crash demo in `examples/crash_demo`:
-
-`deploy_and_run(target="tb", binary=".../crash_demo")`
-```json
-{"run_id": "r-1680de50d5cd", "outcome": "crashed", "signal_name": "SIGSEGV", "stdout": "imu: average offset 6\n",
- "dumper": "notified", "core_path": "/tmp/qnx-mcp/runs/r-1680de50d5cd/crash_demo.core",
- "dumper_core_path": "/data/var/dumper/crash_demo.core", "remote_path": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
- "duration_ms": 44, "core_ready_ms": 0, "group_clean": true,
- "next_step": "call get_crash with target='tb' and run_id='r-1680de50d5cd' for a source-level backtrace"}
+```sh
+git clone https://github.com/NikhilGogu/qnx-mcp.git && cd qnx-mcp
+python3 -m venv ~/venv-qnx-mcp
+~/venv-qnx-mcp/bin/pip install -e '.[test]'
+claude mcp add -s project qnx -e QNX_MCP_ALLOW_TARGETS='dev*' -- ~/venv-qnx-mcp/bin/qnx-mcp
 ```
 
-`get_crash(target="tb", run_id="r-1680de50d5cd")`
-```json
-{"summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in read_calibration at .../examples/crash_demo/crash.c:21; stack: read_calibration() <- average_offset() <- main(). Fault address 0x0 means a NULL pointer dereference.",
- "faulting_instruction": "=> 0x52c64838b1 <read_calibration+32>:\tmov    (%rax),%eax",
- "frames": [{"level": 0, "function": "read_calibration", "line": 21}, {"level": 1, "function": "average_offset", "line": 28}, {"level": 2, "function": "main", "line": 46}],
- "locals_frame0": [{"name": "s", "type": "const struct sensor *", "value": "0x3c26d9aab8", "arg": true}, {"name": "index", "type": "int", "value": "0", "arg": true}],
- "provenance": {"core_executable": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo", "core_pid": 66793494, "core_build_id": "c65158d019120da0f95c3df1a466d88b", "build_id_match": true, "executable_match": true, "pid_match": true, "verified": true}}
+The package is installed from the clone; it is not on PyPI. Start `claude` and type a first prompt:
+
+```text
+What qnx tools do you have? Run environment_check and tell me if anything needs fixing.
 ```
 
-The same call with `core_path` and a rebuilt `binary`:
-```json
-{"ok": false, "error": {"code": "core_mismatch", "message": "the core's executable has build ID c65158d019120da0f95c3df1a466d88b, the binary 0d42bd18fe0b4cb9ec2eeb2e1a83556c",
- "hint": "Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed."}}
+The agent should list the 19 tools and report that every required check passes. Then ask it to create a target (the allowlist above accepts names that start with `dev`):
+
+```text
+Create a QNX target named dev1 and show me its status.
 ```
 
-## Requirements and tested versions
+From there the agent can build, deploy, run, read crash backtraces, thread states and logs. [Configure your agent](#configure-your-agent) covers Codex and running the server through `ssh -T`; the codelab walks through a crash and a deadlock.
 
-Tested on (commands and output in [docs/evidence/versions.txt](docs/evidence/versions.txt)):
+## Why it matters for QNX
 
-| Component | Version |
-|---|---|
-| Build host | Ubuntu 22.04.5 LTS, x86_64, KVM, libvirt `virbr0` network |
-| QNX SDP | 8.0 (gcc 12.2.0 targets, `ntox86_64-gdb` 14.2), non-commercial licence |
-| Targets | QNX OS 8.0.0 x86_64 QEMU images built by mkqnximage |
-| QEMU | 6.2.0 |
-| Python | 3.10.12, `mcp` SDK 2.3.0 |
-| OpenSSH client | 8.9p1 |
-| Clients | Claude Code 2.1.312, Codex CLI 0.160.0 |
+* **Crash evidence tied to one build.** `get_crash` returns a backtrace only when the core's executable, its pid and its GNU build ID match the run that crashed. A rebuilt binary is refused with `core_mismatch`, so a backtrace in a bug report names the exact build.
+* **Runs that cannot hang a pipeline.** Each run has a wall-clock deadline, capped output and its own process group, which is killed when the program ends. If the client cancels the call, the program is killed on the target. The outcome is one of `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`.
+* **Agent-driven test loops on QNX targets in CI.** Targets are created and booted headless, the server speaks MCP over stdio, and results are structured JSON, so the loop of build, run, read the crash and fix can be scripted on a host that has KVM and the SDP, for example a self-hosted runner. The hosted CI of this repository runs only the offline tests, because the live-target tests need a QNX SDP.
 
-aarch64 builds work (`build(arch="aarch64le")` is tested); aarch64 targets are not.
+Limits today: QEMU x86_64 targets created by mkqnximage on a libvirt network. Real boards and aarch64 targets are not supported yet (aarch64 builds work). The full list is under [Limitations](#limitations).
 
 ## Install
 
@@ -117,6 +101,67 @@ The test passed the same keys as `-c mcp_servers.qnx.command=...` overrides to `
 ```json
 { "servers": { "qnx": { "type": "stdio", "command": "/home/me/venv-qnx-mcp/bin/qnx-mcp", "env": { "QNX_MCP_ALLOW_TARGETS": "dev*" } } } }
 ```
+
+## Status and background
+
+qnx-mcp is a Model Context Protocol (MCP) server that gives coding agents typed, bounded tools for QNX OS 8.0 development. An agent can boot QNX QEMU targets with mkqnximage, build with the QNX SDP toolchain, deploy and run programs with timeouts, turn dumper core files into source-level backtraces, and read `pidin` and `slog2info` output as JSON. It runs on the build host (where the SDP and QEMU live) and speaks MCP over stdio, locally or through `ssh -T`.
+
+Status: v0.3.0. v0.2 added the tools an agent needs when it has no shell on the target (`file_list`, `process_stop`, and `remote_binary` for `deploy_and_run` and `run_start`), and v0.2.1 addressed the review findings on them; every review finding and its status is in docs/DESIGN.md section 10. v0.3.0 fixes two gaps found in the study under "Debugging without a target shell" below: `process_stop` handles services started with a relative path, and `remote_binary` refuses shells and system programs. Test logs, target observations, tool versions and client session transcripts are in [docs/evidence](docs/evidence). Design notes and the security model in detail: [docs/DESIGN.md](docs/DESIGN.md).
+
+Tutorial: the codelab [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/) (about 45 minutes; source in [codelab/](codelab/qnx-mcp-agent-target.md), dry runs in [codelab/DRYRUN.md](codelab/DRYRUN.md)). The agent skill file is [skills/qnx-mcp/SKILL.md](skills/qnx-mcp/SKILL.md).
+
+## What the tools do
+
+qnx-mcp composes the commands, finds the cores, picks the matching gdb and sysroot and parses the output, on the target and on the host, and returns objects:
+
+* **Crash notification from dumper.** A small C helper on the target (`qnx-mcp-run`) registers a pulse with dumper (`DCMD_DUMPER_NOTIFYEVENT`) before the program starts. When the program dies from a signal that dumper handles, the helper waits for the pulse carrying that pid and asks `DCMD_DUMPER_GETPATH` for the exact core path, then moves the core into the run's own directory. In the example below the whole crashing run took 44 ms, and dumper's completion pulse was already waiting when the helper saw the program exit (`core_ready_ms: 0`).
+* **Verified crash provenance.** Each run keeps a snapshot of the exact binary that was deployed. `get_crash` downloads the core with a size and SHA-256 check and refuses it (`core_mismatch`) unless the executable the core names is the run's content-addressed binary, the pid in the core is the run's pid, and the GNU build ID in the executable's note in the core's memory matches. A rebuilt binary, a binary without a build ID and a modified snapshot are refused (`test_crash_slice`).
+* **Bounded runs.** Every run has a wall-clock deadline, capped output (truncation is reported), stdin on `/dev/null`, its own process group, and the whole group is killed when the program ends, so a forked child does not outlive the run. If the client cancels a call, the server kills its ssh and the helper notices the closed session and kills the program. Long-running programs get `run_start`, `run_poll` (output cursors) and `run_stop`.
+* **Structured system state.** `processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack and the id of the thread that faulted.
+
+## Example (abridged)
+
+From the v0.1 test run (`docs/evidence/test-run-v0.1.log`), the crash demo in `examples/crash_demo`:
+
+`deploy_and_run(target="tb", binary=".../crash_demo")`
+```json
+{"run_id": "r-1680de50d5cd", "outcome": "crashed", "signal_name": "SIGSEGV", "stdout": "imu: average offset 6\n",
+ "dumper": "notified", "core_path": "/tmp/qnx-mcp/runs/r-1680de50d5cd/crash_demo.core",
+ "dumper_core_path": "/data/var/dumper/crash_demo.core", "remote_path": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
+ "duration_ms": 44, "core_ready_ms": 0, "group_clean": true,
+ "next_step": "call get_crash with target='tb' and run_id='r-1680de50d5cd' for a source-level backtrace"}
+```
+
+`get_crash(target="tb", run_id="r-1680de50d5cd")`
+```json
+{"summary": "SIGSEGV (SEGV_MAPERR (address not mapped)) at fault address 0x0 in read_calibration at .../examples/crash_demo/crash.c:21; stack: read_calibration() <- average_offset() <- main(). Fault address 0x0 means a NULL pointer dereference.",
+ "faulting_instruction": "=> 0x52c64838b1 <read_calibration+32>:\tmov    (%rax),%eax",
+ "frames": [{"level": 0, "function": "read_calibration", "line": 21}, {"level": 1, "function": "average_offset", "line": 28}, {"level": 2, "function": "main", "line": 46}],
+ "locals_frame0": [{"name": "s", "type": "const struct sensor *", "value": "0x3c26d9aab8", "arg": true}, {"name": "index", "type": "int", "value": "0", "arg": true}],
+ "provenance": {"core_executable": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo", "core_pid": 66793494, "core_build_id": "c65158d019120da0f95c3df1a466d88b", "build_id_match": true, "executable_match": true, "pid_match": true, "verified": true}}
+```
+
+The same call with `core_path` and a rebuilt `binary`:
+```json
+{"ok": false, "error": {"code": "core_mismatch", "message": "the core's executable has build ID c65158d019120da0f95c3df1a466d88b, the binary 0d42bd18fe0b4cb9ec2eeb2e1a83556c",
+ "hint": "Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed."}}
+```
+
+## Requirements and tested versions
+
+Tested on (commands and output in [docs/evidence/versions.txt](docs/evidence/versions.txt)):
+
+| Component | Version |
+|---|---|
+| Build host | Ubuntu 22.04.5 LTS, x86_64, KVM, libvirt `virbr0` network |
+| QNX SDP | 8.0 (gcc 12.2.0 targets, `ntox86_64-gdb` 14.2), non-commercial licence |
+| Targets | QNX OS 8.0.0 x86_64 QEMU images built by mkqnximage |
+| QEMU | 6.2.0 |
+| Python | 3.10.12, `mcp` SDK 2.3.0 |
+| OpenSSH client | 8.9p1 |
+| Clients | Claude Code 2.1.312, Codex CLI 0.160.0 |
+
+aarch64 builds work (`build(arch="aarch64le")` is tested); aarch64 targets are not.
 
 ## Tools
 
