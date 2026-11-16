@@ -1,0 +1,45 @@
+name: release
+
+# On a version tag: build the wheel, install it in a fresh venv, run the offline tests
+# against the installed package, check that `qnx-mcp --check` runs, and attach the wheel
+# to a GitHub Release. Publishing to PyPI is a separate, manual step.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tag matches the package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, pyproject.toml $version"; exit 1; }
+      - name: Build the wheel
+        run: python -m pip wheel --no-deps -w dist .
+      - name: Install the wheel in a fresh venv and run the offline tests
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install "$(ls dist/*.whl)[test]"
+          # src/ is not on the path here, so the tests import the installed wheel.
+          cd tests
+          /tmp/venv/bin/python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py
+      - name: qnx-mcp --check runs and reports the missing SDP
+        run: |
+          set +e
+          out=$(QNX_MCP_SDP_ENV=/nonexistent /tmp/venv/bin/qnx-mcp --check)
+          status=$?
+          echo "$out"
+          test $status -eq 1 && echo "$out" | grep -q '^FAIL  qnx_sdp'
+      - name: Create the release with the wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.whl --title "qnx-mcp $GITHUB_REF_NAME" --notes "See CHANGELOG.md."

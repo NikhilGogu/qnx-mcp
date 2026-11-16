@@ -42,7 +42,7 @@ Duration: 4:00
 You need:
 
 1. **QNX SDP 8.0 with a free non-commercial licence.** If you do not have one yet, follow the QNX codelab [Get a Free Non-Commercial QNX 8.0 License](https://qnx.github.io/codelabs/get-non-commercial-qnx-license/), then install QNX SDP 8.0 with the QNX Software Center. This codelab assumes it is installed in `~/qnx800` (the Software Center default), so that `~/qnx800/qnxsdp-env.sh` exists.
-2. **Ubuntu (22.04 or later, x86_64) with KVM and QEMU.** Your user must be able to use `/dev/kvm`, and the default libvirt network must be up, because mkqnximage targets get their address from it:
+2. **Ubuntu (22.04 or later, x86_64) with KVM and QEMU.** On a Mac or a Windows machine, do this codelab on such a Linux host over SSH; the README section "Agent on macOS or Windows" shows how to connect an agent on your laptop to qnx-mcp on that host. Your user must be able to use `/dev/kvm`, and the default libvirt network must be up, because mkqnximage targets get their address from it:
 
     ```bash
     sudo apt install qemu-system-x86 libvirt-daemon-system bridge-utils python3-venv git openssh-client
@@ -770,6 +770,8 @@ target status.
 The program received one argument containing `;` and a space, tried to open a file with that name, and the target is still running.
 
 qnx-mcp has no tool that runs a shell command. A shell tool would make every other limit (allowlist, path checks, deadlines, output caps, verified core files) optional for an agent that has been talked into misusing it, for example by text planted in a log file it reads. With typed tools the server checks each argument. Keep the permission prompts of your agent's own shell on.
+
+These limits stop mistakes and bad arguments. They do not stop a hostile agent. The program the agent builds runs as root on `cl1`, and a Makefile in your workspace can run any command on your machine. The README's Security model has the full table.
 
 ---
 

@@ -702,3 +702,141 @@ def test_workspace_defaults_to_the_working_directory(tmp_path: Path, monkeypatch
     monkeypatch.chdir("/")
     root = {c["check"]: c for c in environment_check(Config.from_env({"HOME": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none")}))["checks"]}
     assert not root["workspace"]["ok"] and "fix" in root["workspace"]
+
+
+def test_package_version_matches_pyproject():
+    """The release workflow builds tag v<version>; pyproject.toml and __version__ must agree."""
+    import re
+    from qnx_mcp import __version__
+    toml = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert re.search(r'(?m)^version = "([^"]+)"$', toml).group(1) == __version__
+
+
+def test_environment_check_points_hosts_without_kvm_to_ssh_mode(tmp_path: Path, monkeypatch):
+    from qnx_mcp import ops
+    cfg = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_WORKSPACE": str(tmp_path)})
+    real_exists = os.path.exists
+    monkeypatch.setattr(ops.os.path, "exists", lambda p: False if p == "/dev/kvm" else real_exists(p))
+    kvm = {c["check"]: c for c in ops.environment_check(cfg)["checks"]}["kvm"]
+    assert not kvm["ok"] and "ssh -T" in kvm["fix"] and "adduser" not in kvm["fix"], kvm
+    monkeypatch.setattr(ops.os.path, "exists", lambda p: True if p == "/dev/kvm" else real_exists(p))
+    monkeypatch.setattr(ops.os, "access", lambda p, mode: False)
+    kvm = {c["check"]: c for c in ops.environment_check(cfg)["checks"]}["kvm"]
+    assert not kvm["ok"] and "adduser" in kvm["fix"], kvm
+
+
+def test_build_passes_separate_and_wider_forms(tmp_path: Path):
+    """MCP-09: forms that are safe when checked as pairs or with a constrained value."""
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "config.h").write_text("#define X 1\n")
+    cflags = ["-g", "-I", str(proj / "include"), "-I", "include", "-D", "NAME", "-D", "LEVEL=2", "-U", "NDEBUG",
+              "-isystem", str(proj / "include"), "-iquote", "include", "-include", "config.h", '-DVERSION="1.2"',
+              "-D", 'GREETING="hi"', f"-fdebug-prefix-map={proj}=/src", f"-ffile-prefix-map={proj}=."]
+    ldflags = ["-L", str(proj), "-Wl,--build-id,--as-needed", f"-Wl,-Map={proj / 'out.map'}"]
+    r = build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
+    assert r["ok"], r
+    (qcc,) = _recorded(log)
+    i = qcc.index("-g")
+    assert qcc[i:i + len(cflags)] == cflags and qcc[-len(ldflags):] == ldflags, qcc
+    (proj / "Makefile").write_text("all:\n\t@:\n")
+    make_args = ["install", "-j", "4", f"PREFIX={proj / 'stage'}", f"DESTDIR={proj / 'dest'}", "CFLAGS=-I include -D X=1 -g"]
+    assert build(cfg, str(proj), system="make", make_args=make_args)["ok"]
+    assert _recorded(log)[1][4:] == make_args
+
+
+REJECTED_GROUPS = [
+    ("cflags", ["-include", "/etc/passwd"]),
+    ("cflags", ["-include", "../../x.h"]),
+    ("cflags", ["-include", "include"]),  # a directory, not a file
+    ("cflags", ["-isystem", "../.."]),
+    ("cflags", ["-isystem", "/etc"]),
+    ("cflags", ["-iquote", "/usr/include"]),
+    ("cflags", ["-I", "/etc"]),
+    ("cflags", ["-I", "-wrapper"]),
+    ("cflags", ["-D", "X=$(id)"]),
+    ("cflags", ["-D", "-wrapper"]),
+    ("cflags", ["-D"]),
+    ("cflags", ["-U", "X=1"]),
+    ("cflags", ['-DX="a`id`"']),
+    ("cflags", ['-DX="a;b"']),
+    ("cflags", ['-DX="a\\b"']),
+    ("cflags", ['-DX="a\nb"']),
+    ("cflags", ["-fdebug-prefix-map=../x=/y"]),
+    ("cflags", ["-fdebug-prefix-map=$x=/y"]),
+    ("cflags", ["-fdebug-prefix-map=/x"]),
+    ("ldflags", ["-L", "/usr/lib"]),
+    ("ldflags", ["-Wl,-rpath,/data/lib"]),  # ld also searches -rpath dirs on the build host at link time
+    ("cflags", ['-DMSG="hello world"']),
+    ("cflags", ['-DX="a>b"']),
+    ("cflags", ["-DX='a'"]),
+    ("cflags", ['-DX="a -wrapper /tmp/x"']),
+    ("ldflags", ["-Wl,-Map=../out.map"]),
+    ("make_args", ["PREFIX=/usr"]),
+    ("make_args", ["PREFIX=../stage"]),
+    ("make_args", ["DESTDIR=/"]),
+    ("make_args", ["CROSS_COMPILE=x86_64-pc-nto-qnx8.0.0-"]),
+    ("make_args", ['CFLAGS=-DMSG="a b"']),
+    ("make_args", ["CFLAGS=-include /etc/passwd"]),
+    ("make_args", ["CFLAGS=-I"]),
+]
+
+
+@pytest.mark.parametrize("field,args", REJECTED_GROUPS, ids=[f"{f}:{a!r}" for f, a in REJECTED_GROUPS])
+def test_build_rejects_unsafe_pairs_and_values(tmp_path: Path, field: str, args: list[str]):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    system = "make" if field == "make_args" else "qcc"
+    (proj / "Makefile").write_text("all:\n\t@:\n")
+    with pytest.raises(QnxMcpError) as e:
+        build(cfg, str(proj), system=system, **{field: args})
+    assert e.value.code in ("invalid_argument", "path_not_allowed"), e.value.to_dict()
+    assert field in e.value.message, e.value.message
+    assert _recorded(log) == [], "nothing may run when an argument is refused"
+
+
+def test_quoted_define_values_are_qcc_only(tmp_path: Path, monkeypatch):
+    """make and cmake hand CFLAGS to a shell in their recipes, so a value with quotes or spaces is refused there."""
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "CMakeLists.txt").write_text("project(x C)\n")
+    monkeypatch.setattr(sdk.shutil, "which", lambda name, path=None: str(tmp_path / "fakebin" / name))
+    for flags in (['-DMSG="a"'], ["-D", 'MSG="x"']):
+        with pytest.raises(QnxMcpError) as e:
+            sdk.build(cfg, str(proj), system="cmake", cflags=flags)
+        assert e.value.code == "invalid_argument" and "qcc" in e.value.message, e.value.message
+    assert _recorded(log) == []
+
+
+def _literal_build_calls() -> list[tuple[str, str, dict]]:
+    """Every build call in the SDK and end-to-end tests whose flag arguments are literals."""
+    import ast
+    found = []
+    here = Path(__file__).parent
+    for f in sorted(here.glob("test_*e2e.py")) + [here / "test_build_sdk.py"]:
+        for node in ast.walk(ast.parse(f.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            is_tool = node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "build"
+            is_fn = isinstance(node.func, ast.Name) and node.func.id in ("build", "_build")
+            if not (is_tool or is_fn):
+                continue
+            kw = {}
+            for k in node.keywords:
+                if k.arg in ("cflags", "ldflags", "make_args", "system"):
+                    kw[k.arg] = ast.literal_eval(k.value)
+            found.append((f.name, node.lineno, kw))
+    return found
+
+
+def test_live_test_build_arguments_pass_the_allow_list(tmp_path: Path):
+    """The SDK and end-to-end tests never ran after the allow-list was added; each of their build arguments must pass it."""
+    from qnx_mcp.sdk import check_build_args
+    cfg, ws, _ = _fake_sdp(tmp_path)
+    calls = _literal_build_calls()
+    assert len(calls) >= 15 and any(kw for _, _, kw in calls), calls
+    for name, line, kw in calls:
+        check_build_args(cfg, ws / "proj", kw.get("system", "qcc"), kw.get("cflags"), kw.get("ldflags"), kw.get("make_args"))

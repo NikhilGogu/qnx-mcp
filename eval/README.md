@@ -24,6 +24,8 @@ Eight hardened tasks whose fault needs evidence from the target. Arm A screening
 
 ## Results, phase 3: no shell on the target (3 and 4 November 2026)
 
+A note on names: the results directory `least-privilege-2026-11-03` keeps the name it was given in the preregistration. The study did not measure least privilege. It measured an agent with no shell on the target, enforced by PATH wrappers for ssh, scp and sftp and by a review of the transcripts. The agent and those wrappers ran as the same host user, so an agent that set out to bypass them could have. [PROTOCOL.md](PROTOCOL.md) is unchanged.
+
 Arm A (root shell over SSH) against arm C (qnx-mcp v0.2.1 only; the agent's ssh, scp and sftp refuse the target), the eight v2 tasks, 5 trials per task, arm and model, 160 trials, all scored ([summary](results/least-privilege-2026-11-03/summary.md)):
 
 | model | arm A oracle pass | arm C oracle pass | median cost A / C (USD) | median turns A / C |
