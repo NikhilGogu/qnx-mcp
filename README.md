@@ -38,7 +38,7 @@ From there the agent can build, deploy, run, read crash backtraces, thread state
 ## Why it matters for QNX
 
 * **Crash evidence tied to one build.** `get_crash` returns a backtrace only when the core's executable, its pid and its GNU build ID match the run that crashed. A rebuilt binary is refused with `core_mismatch`, so a backtrace in a bug report names the exact build.
-* **Runs that cannot hang a pipeline.** Each run has a wall-clock deadline, capped output and its own process group, which is killed when the program ends. If the client cancels the call, the program is killed on the target. The outcome is one of `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`.
+* **Bounded runs.** Each run has a wall-clock deadline, capped output and its own process group, which is killed when the program ends. A descendant that calls `setsid()` leaves the group and keeps running; `process_stop` can end it afterwards. If the client cancels the call, the program is killed on the target. The outcome is one of `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`.
 * **Agent-driven test loops on QNX targets in CI.** Targets are created and booted headless, the server speaks MCP over stdio, and results are structured JSON, so the loop of build, run, read the crash and fix can be scripted on a host that has KVM and the SDP, for example a self-hosted runner. The hosted CI of this repository runs only the offline tests, because the live-target tests need a QNX SDP.
 
 Limits today: QEMU x86_64 targets created by mkqnximage on a libvirt network. Real boards and aarch64 targets are not supported yet (aarch64 builds work). The full list is under [Limitations](#limitations).
@@ -301,9 +301,18 @@ Limits:
 
 ## Security model
 
-The agent is treated as capable, fallible and possibly prompt-injected. The server enforces the limits, and the tool descriptions explain them.
+The agent is treated as capable, fallible and possibly prompt-injected. The server enforces the limits, and the tool descriptions explain them. This table is the short version.
 
-**What holds and what does not.** Every tool is typed and bounded; `build` arguments are allow-listed; every host path must be inside the workspace. These rules guard the build host against what an agent passes in, and guard against mistakes. They are not a sandbox against a hostile agent: an agent can still build its own program and run it as root on the target, and an agent that can write files in the workspace can write a Makefile or CMakeLists.txt that runs any command on the build host.
+| Risk | Covered? | How, or why not |
+|---|---|---|
+| Agent arguments that run host commands (compiler, linker and make options) | Yes | `check_build_args` allow-list, before any tool starts (`tests/test_units.py`) |
+| Agent host paths outside the project | Yes | Every host path must resolve inside the workspace, symlinks included |
+| Agent mistakes on the target: stopping a system process, starting a shell, writing into qnx-mcp's directory | Yes, for mistakes | Path rules in `process_stop`, `remote_binary`, `file_put` and `file_list`. A program the agent builds can still do these things itself |
+| The agent's own program acting as root on the target | Only with `QNX_MCP_RUN_AS`, not yet tested on a target | By default programs run as root. With `QNX_MCP_RUN_AS` the runner drops the program to that uid and gid |
+| Build files in the workspace running host commands | No | make and cmake run the tree's own files with the server user's rights. Only build trees you trust |
+| The agent using the target's SSH key directly | No | qnx-mcp reads the key as the server user. An agent with a shell as that user can use it too. Run the agent as another user if this matters |
+
+These rules guard the build host against what an agent passes in, and guard against mistakes. They are not a sandbox against a hostile agent.
 
 **Scope of the path rules (v0.2 and later).** The rules on `process_stop`, `file_list` and `remote_binary` guard against mistakes: an agent stopping a system process, starting qnx-mcp's own runner, or misreading where a directory is. They do not stop an agent that sets out to break them: `deploy_and_run` runs any program the agent builds, as root, and such a program can stop any process or change any file. Since v0.3.0 `remote_binary` refuses shells and system programs; a program the agent builds can still do what a shell does. The races that remain are listed under Limitations.
 
