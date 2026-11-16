@@ -598,6 +598,10 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
     "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set. "
     "cmake mode sets CMAKE_C_FLAGS and CMAKE_CXX_FLAGS from cflags and CMAKE_EXE_LINKER_FLAGS from ldflags on every configure (empty when omitted); "
     "make mode refuses cflags and ldflags (pass make_args=['CFLAGS=...'] or LDFLAGS/LDLIBS instead). "
+
+
+    "qcc mode builds the given sources (default: every *.c/*.cpp in path) with -g -O0 -Wall unless cflags is set; sources need a "
+    ".c, .cc, .cpp, .cxx, .s or .S extension, and .o/.so inputs must be ELF files and .a inputs ar archives inside the workspace. "
     "Returns diagnostics[] with file, line, column, severity, message (gcc JSON diagnostics in qcc mode, parsed text for make/cmake), "
     "linker errors, and artifacts[] with path, arch, build_id and debug_info for deploy_and_run. ok=false with error.code build_failed when compilation fails.",
     annotations=_ann(False, True, False),

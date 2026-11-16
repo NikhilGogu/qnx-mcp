@@ -1260,3 +1260,43 @@ def test_state_dir_that_ssh_would_split_is_refused(tmp_path: Path, name: str):
     good = cfg_for(tmp_path / "state")
     assert f"UserKnownHostsFile={good.state_dir / 'targets' / 'tb1' / 'known_hosts'}" in Target(good, "tb1")._ssh_opts()
     assert {c["check"]: c for c in environment_check(good)["checks"]}["state_dir"]["ok"]
+
+
+def test_qcc_inputs_are_checked_by_content(tmp_path: Path):
+    """GNU ld reads an input it does not recognise as a linker script, so a name ending in .o, .a or .so is not enough."""
+    from helpers import write_elf
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    for name in ("x.o", "libx.a", "libx.so"):
+        (proj / name).write_text("INPUT(/etc/hosts)\n")
+    (proj / "thin.a").write_bytes(b"!<thin>\n")
+    for arg in ("x.o", "libx.a", "libx.so", str(proj / "x.o"), "missing.o", "thin.a"):
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(proj), system="qcc", ldflags=[arg])
+        assert e.value.code == "invalid_argument" and repr(arg) in e.value.message and "ldflags" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == []
+    write_elf(proj / "ok.o")
+    write_elf(proj / "libok.so")
+    (proj / "libok.a").write_bytes(b"!<arch>\n")
+    assert build(cfg, str(proj), system="qcc", ldflags=["ok.o", "libok.a", str(proj / "libok.so")])["ok"]
+    assert _recorded(log)[0][-3:] == ["ok.o", "libok.a", str(proj / "libok.so")]
+
+
+def test_qcc_sources_need_a_source_extension(tmp_path: Path):
+    """gcc hands a file with an unknown extension to the linker, which reads it as a linker script."""
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    for name in ("x.ld", "x.txt", "x", "x.h"):
+        (proj / name).write_text("INPUT(/etc/hosts)\n")
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(proj), system="qcc", sources=[name])
+        assert e.value.code == "invalid_argument" and "sources" in e.value.message and repr(name) in e.value.message, e.value.to_dict()
+    with pytest.raises(QnxMcpError) as e:
+        build(cfg, str(proj / "x.txt"))  # a file as path becomes the first source
+    assert e.value.code == "invalid_argument" and "sources" in e.value.message
+    assert _recorded(log) == []
+    for name in ("a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"):
+        (proj / name).write_text("\n")
+    assert build(cfg, str(proj), system="qcc", sources=["a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"])["ok"]
