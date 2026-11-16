@@ -12,7 +12,7 @@ An AI coding agent with a raw SSH shell on a QNX target can run unbounded comman
 
 ## Quickstart
 
-You need an Ubuntu x86_64 build host with KVM and QEMU, and QNX SDP 8.0 (tested with the non-commercial licence). Details are under [Requirements and tested versions](#requirements-and-tested-versions).
+You need an Ubuntu x86_64 build host with KVM and QEMU, and QNX SDP 8.0 (tested with the non-commercial licence). On macOS or Windows, run the agent there and qnx-mcp on such a host; see [Agent on macOS or Windows](#configure-your-agent). Details are under [Requirements and tested versions](#requirements-and-tested-versions).
 
 ```sh
 git clone https://github.com/NikhilGogu/qnx-mcp.git && cd qnx-mcp
@@ -95,6 +95,18 @@ With the SDK and QEMU on a separate build box, run the server there through ssh 
 ```sh
 claude mcp add -s project qnx -- ssh -T buildbox env "QNX_MCP_ALLOW_TARGETS='dev*'" /home/me/venv-qnx-mcp/bin/qnx-mcp
 ```
+
+**Agent on macOS or Windows.** QEMU targets need KVM, so qnx-mcp, the QNX SDP and the targets stay on a Linux x86_64 host, and the agent on your laptop starts the server there through `ssh -T`, as above. Two things change:
+
+* Host paths in tool calls are paths on the Linux host. The agent has to read and edit the project there, for example through your editor's remote mode, or in a directory both machines mount.
+* The ssh session starts in your home directory on the Linux host, so set the workspace explicitly:
+
+```sh
+claude mcp add -s project qnx -- ssh -T buildbox env "QNX_MCP_ALLOW_TARGETS='dev*'" \
+  QNX_MCP_WORKSPACE=/home/me/project /home/me/venv-qnx-mcp/bin/qnx-mcp
+```
+
+`qnx-mcp --check` on a machine without `/dev/kvm` says the same. This setup has not yet been tried from a Mac or a Windows machine.
 
 **Codex CLI** (tested, transcript in [docs/evidence/codex-session.json](docs/evidence/codex-session.json)), in `~/.codex/config.toml`:
 ```toml

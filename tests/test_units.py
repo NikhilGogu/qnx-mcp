@@ -710,3 +710,16 @@ def test_package_version_matches_pyproject():
     from qnx_mcp import __version__
     toml = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
     assert re.search(r'(?m)^version = "([^"]+)"$', toml).group(1) == __version__
+
+
+def test_environment_check_points_hosts_without_kvm_to_ssh_mode(tmp_path: Path, monkeypatch):
+    from qnx_mcp import ops
+    cfg = Config.from_env({"HOME": str(tmp_path), "QNX_MCP_WORKSPACE": str(tmp_path)})
+    real_exists = os.path.exists
+    monkeypatch.setattr(ops.os.path, "exists", lambda p: False if p == "/dev/kvm" else real_exists(p))
+    kvm = {c["check"]: c for c in ops.environment_check(cfg)["checks"]}["kvm"]
+    assert not kvm["ok"] and "ssh -T" in kvm["fix"] and "adduser" not in kvm["fix"], kvm
+    monkeypatch.setattr(ops.os.path, "exists", lambda p: True if p == "/dev/kvm" else real_exists(p))
+    monkeypatch.setattr(ops.os, "access", lambda p, mode: False)
+    kvm = {c["check"]: c for c in ops.environment_check(cfg)["checks"]}["kvm"]
+    assert not kvm["ok"] and "adduser" in kvm["fix"], kvm

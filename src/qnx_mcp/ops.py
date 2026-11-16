@@ -1005,7 +1005,14 @@ def environment_check(cfg: Config) -> dict[str, Any]:
         add("tool:cmake", bool(shutil.which("cmake")), shutil.which("cmake") or "not found (only needed for CMake projects)", "apt install cmake")
     except QnxMcpError as e:
         add("qnx_sdp", False, e.message, e.hint)
-    add("kvm", os.access("/dev/kvm", os.W_OK), "/dev/kvm writable" if os.access("/dev/kvm", os.W_OK) else "/dev/kvm not writable: QEMU will be very slow", "sudo adduser $USER kvm, then log in again.")
+    if not os.path.exists("/dev/kvm"):
+        add("kvm", False, "no /dev/kvm on this host: QEMU targets need a Linux x86_64 host with KVM",
+            "Run qnx-mcp on a Linux host with KVM and the QNX SDP, and connect your agent to it through ssh -T "
+            "(README, \"Agent on macOS or Windows\").")
+    else:
+        writable = os.access("/dev/kvm", os.W_OK)
+        add("kvm", writable, "/dev/kvm writable" if writable else "/dev/kvm not writable: QEMU will be very slow",
+            "sudo adduser $USER kvm, then log in again.")
     for tool in ("qemu-system-x86_64", "ssh", "scp"):
         add(f"tool:{tool}", bool(shutil.which(tool)), shutil.which(tool) or "not found", f"Install {tool} (apt install qemu-system-x86 openssh-client).")
     key = Path(str(cfg.ssh_key) + ".pub")
