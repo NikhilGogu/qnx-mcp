@@ -20,7 +20,7 @@ from typing import Any
 
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
-from .target import Target
+from .target import STATE_DIR_FIX, Target, ssh_path_problem
 from .util import (
     ENV_NAME_RE, REMOTE_NAME_RE, WORKSPACE_HINT, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
     private_dir, quote_argv, tail, uncancellable, within, write_private,
@@ -1021,6 +1021,8 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")
     add("targets_dir", True, str(cfg.targets_dir))
+    why = ssh_path_problem(cfg.state_dir)
+    add("state_dir", why is None, why or str(cfg.state_dir), STATE_DIR_FIX)
     add("remote_binary_roots", True, (":".join(cfg.remote_binary_roots) or "none: every remote_binary is refused")
         + " (QNX_MCP_REMOTE_BINARY_ROOTS; shells and /proc/boot, /bin, /sbin, /usr, /system are always refused)")
     ws = ", ".join(str(w) for w in cfg.workspace)
