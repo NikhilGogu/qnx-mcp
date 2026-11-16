@@ -370,6 +370,8 @@ QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2
   python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py                       # builds, boots and destroys tb2
 ```
 
+On a Linux host with the SDP and a running target, `scripts/live-tests.sh` runs all of these in order and writes one log to `docs/evidence/test-run-<version>.log` (its header lists the variables it needs). It has not been run on the current code yet.
+
 Last full run on the build box (v0.3.0, 4 Nov 2026, with `QNX_MCP_TARGETS_DIR` set to the box's targets directory): 92 passed in 161.1 s (67 unit, 5 offline MCP, 2 skill, 3 SDK build, 9 slice end-to-end, 3 shell-free end-to-end, 3 lifecycle end-to-end; log in [docs/evidence/test-run.log](docs/evidence/test-run.log); the v0.1 run is [test-run-v0.1.log](docs/evidence/test-run-v0.1.log)). The end-to-end tests drive the server through an MCP `ClientSession` over stdio.
 
 ## Limitations
