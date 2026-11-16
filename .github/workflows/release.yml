@@ -31,7 +31,7 @@ jobs:
           /tmp/venv/bin/pip install "$(ls dist/*.whl)[test]"
           # src/ is not on the path here, so the tests import the installed wheel.
           cd tests
-          /tmp/venv/bin/python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py
+          /tmp/venv/bin/python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py test_nonroot.py
       - name: qnx-mcp --check runs and reports the missing SDP
         run: |
           set +e
