@@ -18,7 +18,7 @@ QNX publishes Markdown agent skills ([qnx/qnx-agent-skills](https://github.com/q
 | Services | `nohup`, then tail files by hand | `run_start` / `run_poll` (byte cursors) / `run_stop` |
 | Which target? | whatever IP the agent typed | named targets, allowlist, per-target lock, pinned host key |
 
-Skills tell the agent what to do; qnx-mcp runs it and returns structured results. The skill file [skills/qnx-mcp/SKILL.md](../skills/qnx-mcp/SKILL.md) says which qnx-mcp tool to use when.
+Skills tell the agent what to do; qnx-mcp runs it and returns structured results. The two fit together: qnx-agent-skills describes itself as a workspace that gives a coding agent a QNX 8.0 knowledge base (platform facts, porting, packaging, patches), and qnx-mcp is the tool layer for build, run and crash analysis on a target. QNX also publishes [qnx/claude-code-qnx](https://github.com/qnx/claude-code-qnx), which runs Claude Code on a QNX system under Node.js. That puts the agent on the target; qnx-mcp keeps the agent and the toolchain on the build host and reaches the target through bounded tools. The skill file [skills/qnx-mcp/SKILL.md](../skills/qnx-mcp/SKILL.md) says which qnx-mcp tool to use when.
 
 Another MCP server for QNX 8.0, [ChHaEoN/qnx-mcp-server](https://github.com/ChHaEoN/qnx-mcp-server), is described in its README as read-only: it diagnoses a QEMU target over verified SSH/SFTP with four tools (`system_info`, `list_processes`, `read_system_log`, `read_file`) and accepts no execution, target write or delete. qnx-mcp also creates targets, builds, deploys and runs programs and analyses crashes.
 

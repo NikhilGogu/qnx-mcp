@@ -1,6 +1,6 @@
 ---
 name: qnx-mcp
-description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background, including programs already installed on the target; copy files and list target directories; stop processes qnx-mcp did not start; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available, and especially when you have no shell on the target. Written for qnx-mcp v0.3.0 (19 tools)."
+description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background, including programs already installed on the target; copy files and list target directories; stop processes qnx-mcp did not start; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available, and especially when you have no shell on the target. Written for qnx-mcp v0.4.0.dev0 (19 tools)."
 license: Apache-2.0
 ---
 
@@ -79,4 +79,9 @@ Follow the chain: a REPLY-blocked client points at a server; look at that server
 * `process_not_allowed` means `process_stop` will not touch that process (pid 1, procnto, a critical process, qnx-mcp's runner, or an executable in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` or outside `/tmp` and `/data`). Do not look for another way to stop it; report it. Use `run_stop` for runs that qnx-mcp started.
 * `process_stop` identifies the process by pid and start time and checks it again before each signal. `process_not_found` saying it changed means the pid now belongs to another process or the program called exec: call `processes` again. An error whose `details.signal_sent` is true means a signal did go out (for example SIGKILL was withheld because the program changed, or its state could not be read): check with `processes` before you act again.
 * `remote_binary` starts only programs below `/tmp` or `/data` (the server's `QNX_MCP_REMOTE_BINARY_ROOTS`), never a shell (`sh`, `ksh`, `esh`, `fesh`, `uesh`, `toybox`, ...) and nothing in `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` or `/tmp/qnx-mcp`, also not through a symlink (`path_not_allowed`). To do something a system tool would do, write a small program, `build` it and run it with `binary`.
-* Programs run as root on the target. Use disposable development targets.
+* Programs run as root on the target unless the server sets `QNX_MCP_RUN_AS`; each run result says so in `run_as`, and `environment_check` lists, per tool, which identity it acts with under `privileges`. If a run ends with `exec_failed` and `exec_error` starts with "could not drop privileges", the program never started: report it to the user, do not retry without the setting. Use disposable development targets.
+* `config_error` means the server's own configuration is unusable (for example a bad `QNX_MCP_RUN_AS`). You cannot fix it; tell the user.
+
+## Next to QNX's own agent repositories
+
+QNX publishes [qnx/qnx-agent-skills](https://github.com/qnx/qnx-agent-skills), a workspace of agent skills for QNX 8.0 work (platform facts, porting, packaging), which reaches the target over plain SSH. Use its knowledge for what to do; use the qnx tools to build, run and inspect on the target. [qnx/claude-code-qnx](https://github.com/qnx/claude-code-qnx) runs Claude Code itself on a QNX system with Node.js; qnx-mcp instead runs on the build host and reaches the target over SSH.
