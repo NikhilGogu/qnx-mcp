@@ -1456,3 +1456,56 @@ def test_remote_dirs_are_private_or_refused(tmp_path: Path):
     (tmp_path / "plain").write_text("x")
     assert sh([tmp_path / "plain"]).returncode == 4
     assert "test -O " in _secure_dirs_script(["/tmp/qnx-mcp"])  # another owner is refused (needs root to test here)
+
+
+def _linkmap_core(path: Path, exe: str, exe_bid: bytes, prev: int = 0) -> Path:
+    """A minimal ELF64 core with one PT_NOTE holding a QNX QNT_LINK_MAP note laid out as a QNX 8.0 dumper writes it
+    (sys/qnx_linkmap_note.h): header, r_debug and link_maps, string table, then the build ID table at a 4-byte boundary."""
+    strtab = b"PIE\0" + exe.encode() + b"\0libc.so.6\0/proc/boot/\0"
+    lib_name, lib_path = 5 + len(exe), 15 + len(exe)
+    r_debug = struct.pack("<iiQQIIQQII", 1, 0, 0x1000, 0, 0, 0, 0, 0, 0, 0)
+    maps = struct.pack("<8Q", 0x400000, 0, 0, 0x2000, prev, 0, 0, 4) + struct.pack("<8Q", 0x800000, lib_name, 0, 0, 0x1000, 0, 0, lib_path)
+    lm = r_debug + maps
+    bids = b"".join(struct.pack("<HH", 0, len(b)) + b + b"\0" * (-len(b) % 4) for b in (exe_bid, bytes(range(16))))
+    pad = b"\0" * (-(32 + len(lm) + len(strtab)) % 4)
+    desc = struct.pack("<IIII16x", 1, len(lm), len(strtab), len(bids)) + lm + strtab + pad + bids
+    note = struct.pack("<III", 4, len(desc), 11) + b"QNX\0" + desc + b"\0" * (-len(desc) % 4)
+    phoff, noteoff = 64, 64 + 56
+    ehdr = b"\x7fELF\x02\x01\x01" + b"\0" * 9 + struct.pack("<HHIQQQIHHHHHH", 4, 62, 1, 0, phoff, 0, 0, 64, 56, 1, 0, 0, 0)
+    phdr = struct.pack("<IIQQQQQQ", 4, 0, noteoff, 0, 0, len(note), 0, 0)
+    path.write_bytes(ehdr + phdr + note)
+    return path
+
+
+def test_core_link_map_names_the_build_id_that_ran(tmp_path: Path):
+    from qnx_mcp.parsers import core_exe_build_id
+    core = _linkmap_core(tmp_path / "c.core", "/data/opt/crash", bytes.fromhex("aa" * 16))
+    assert core_exe_build_id(str(core), "/data/opt/crash") == {"build_id": "aa" * 16, "path": "/data/opt/crash"}
+    assert core_exe_build_id(str(core), "/data/opt/other") is None  # not the executable gdb names: undecided
+    assert core_exe_build_id(str(_linkmap_core(tmp_path / "n.core", "/data/opt/crash", b"")), "/data/opt/crash")["build_id"] is None
+    assert core_exe_build_id(str(_linkmap_core(tmp_path / "p.core", "/data/opt/crash", b"\xaa" * 16, prev=8)), "/data/opt/crash") is None
+    (tmp_path / "short.core").write_bytes(core.read_bytes()[:150])
+    assert core_exe_build_id(str(tmp_path / "short.core"), "/data/opt/crash") is None
+
+
+@pytest.mark.parametrize("core_bid,bin_bid,expected", [
+    ("aa" * 16, "bb" * 16, "mismatch"),  # another program: before, verified false with a ?? backtrace
+    ("aa" * 16, None, "mismatch"),  # the binary has no build ID, the program that ran had one
+    ("", "aa" * 16, "mismatch"),  # the program that ran had none, the binary has one
+    ("aa" * 16, "aa" * 16, (True, "build ID, executable path and pid match")),
+    ("", None, (False, "pid and path match; build ID not available (neither the program that ran nor this binary has one)")),
+], ids=["other-build-id", "binary-without-id", "core-without-id", "same", "neither"])
+def test_remote_run_build_id_comes_from_the_core_link_map(tmp_path: Path, monkeypatch, core_bid, bin_bid, expected):
+    """A wrong host binary used to leave a remote_binary run unverified with useless frames; the dumper's link map
+    note records the executable's build ID, so a different one is a core_mismatch."""
+    from qnx_mcp import crash
+    monkeypatch.setattr(crash, "core_read", lambda *a: None)  # a wrong binary finds nothing at its own note address
+    core = _linkmap_core(tmp_path / "c.core", "/data/opt/crash", bytes.fromhex(core_bid))
+    args = (core, Path("bin"), {"build_id": bin_bid} if bin_bid else {}, "b" * 64, _REMOTE_REC, _mi(exe="/data/opt/crash", note=True), _CORE_INFO)
+    if expected == "mismatch":
+        with pytest.raises(QnxMcpError) as e:
+            crash._provenance(*args)
+        assert e.value.code == "core_mismatch" and e.value.details["provenance"]["core_build_id_source"] == "link_map", e.value.to_dict()
+        return
+    ev = crash._provenance(*args)
+    assert ev["verified"] is expected[0] and ev["evidence"] == expected[1], ev

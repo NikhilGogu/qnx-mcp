@@ -492,3 +492,67 @@ def gnu_build_id(note: bytes, end: str = "<") -> str | None:
         if owner == b"GNU" and ntype == 3:
             return desc.hex()
     return None
+
+
+QNT_LINK_MAP = 11  # sys/elf_nto.h; layout in sys/qnx_linkmap_note.h
+
+
+def core_exe_build_id(path: str, exe: str | None) -> dict[str, Any] | None:
+    """The build ID of the crashed executable as recorded by the QNX dumper in the core's QNT_LINK_MAP note.
+
+    The note holds the process's link map (r_debug, then one link_map per loaded object, the executable first)
+    and a build ID table with one entry per link_map, in the same order. This needs no host binary, so it can
+    tell a wrong binary from a right one. Returns {"build_id": hex or None, "path": ...} when the note is
+    complete and its first entry is the executable gdb names (`exe`); None when that cannot be decided."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+            if len(head) < 64 or head[:4] != b"\x7fELF" or head[4] != 2 or head[5] != 1:
+                return None
+            (e_phoff,) = struct.unpack_from("<Q", head, 32)
+            e_phentsize, e_phnum = struct.unpack_from("<HH", head, 54)
+            f.seek(e_phoff)
+            ph = f.read(e_phentsize * e_phnum)
+            blobs = []
+            for n in range(e_phnum):
+                p_type, _, p_offset, _, _, p_filesz = struct.unpack_from("<IIQQQQ", ph, n * e_phentsize)
+                if p_type == 4 and p_filesz <= 1 << 20:
+                    f.seek(p_offset)
+                    blobs.append(f.read(p_filesz))
+    except (OSError, struct.error):
+        return None
+    maps = [d for b in blobs for owner, ntype, d in _notes(b, "<") if owner == b"QNX" and ntype == QNT_LINK_MAP]
+    if len(maps) != 1:
+        return None
+    d = maps[0]
+    try:
+        version, lmsz, strsz, bidsz = struct.unpack_from("<IIII", d, 0)
+        if version != 1 or lmsz < 56 or (lmsz - 56) % 64:
+            return None
+        lm, st = d[32:32 + lmsz], d[32 + lmsz:32 + lmsz + strsz]
+        bstart = (32 + lmsz + strsz + 3) & ~3
+        bt = d[bstart:bstart + bidsz]
+        if len(lm) != lmsz or len(st) != strsz or len(bt) != bidsz:
+            return None
+        (r_map,) = struct.unpack_from("<Q", lm, 8)
+        entries = [struct.unpack_from("<8Q", lm, 56 + i * 64) for i in range((lmsz - 56) // 64)]
+        ids, i = [], 0
+        while i < len(bt):
+            dtype, dsz = struct.unpack_from("<HH", bt, i)
+            if i + 4 + dsz > len(bt) or dtype != 0:
+                return None
+            ids.append(bt[i + 4:i + 4 + dsz].hex() or None)
+            i += 4 + ((dsz + 3) & ~3)
+    except struct.error:
+        return None
+    if not entries or len(ids) != len(entries) or entries[0][4] != 0:
+        return None  # the executable is the head of the list (no l_prev), one build ID entry per object
+
+    def string(off: int) -> str | None:
+        end = st.find(b"\0", off)
+        return st[off:end].decode("utf-8", "replace") if 0 <= off < len(st) and end >= 0 else None
+
+    exe_path = string(entries[0][7])
+    if exe is None or exe_path != exe or r_map == 0:
+        return None
+    return {"build_id": ids[0], "path": exe_path}

@@ -162,6 +162,14 @@ def test_remote_binary_runs(tmp_path: Path):
             err, mm = await c.call("get_crash", target=TARGET, run_id=cr["run_id"], binary=b2["artifacts"][0]["path"])
             assert err and mm["error"]["code"] == "core_mismatch", mm
             print(f"\nget_crash with a rebuilt binary: {mm['error']['code']}: {mm['error']['message']}")
+            # A different program, or the same one without or with a build ID, against a core whose link map note names
+            # the build ID that ran: refused, never an unverified backtrace with ?? frames.
+            for core_run, wrong, what in ((cr, echo, "another program"), (cr, nb["artifacts"][0]["path"], "a binary without build ID"),
+                                          (cn, str(exe), "a binary with build ID for a core without one")):
+                err, w = await c.call("get_crash", target=TARGET, run_id=core_run["run_id"], binary=wrong)
+                assert err and w["error"]["code"] == "core_mismatch", (what, w)
+                assert w["error"]["details"]["provenance"]["core_build_id_source"] == "link_map", (what, w)
+                print(f"get_crash with {what}: {w['error']['code']}: {w['error']['message']}")
 
             err, st = await c.call("run_start", target=TARGET, remote_binary=f"{base}/bin/ticker", timeout_s=30)
             assert not err and st["remote_binary"] is True, st
