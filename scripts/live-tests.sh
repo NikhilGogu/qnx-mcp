@@ -52,7 +52,7 @@ suite() {
     "$PYTHON" --version
 } | tee -a "$log"
 suite "$PYTHON" -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py
-suite "$PYTHON" -m pytest -q -s -p no:asyncio test_build_sdk.py
+suite "$PYTHON" -m pytest -q -s -p no:asyncio test_build_sdk.py test_boundary_sdk.py
 suite "$PYTHON" -m pytest -q -s -p no:asyncio test_slice_e2e.py test_shellfree_e2e.py
 suite "$PYTHON" -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py
 echo "log: $log"
