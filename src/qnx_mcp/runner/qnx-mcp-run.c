@@ -41,9 +41,8 @@
  * reported as exec_error and the program does not start (fail closed). An agent's -C cwd is entered after
  * the drop, with the new identity. Pruning removes a work directory's contents as its owner, so files the
  * program leaves behind (symlinks included) are never removed with root's rights.
- * NOT VERIFIED ON A TARGET: the drop sequence uses POSIX calls that QNX OS 8.0 documents (setgroups,
- * setgid, setuid), but it has not been run on a QNX target yet; whether dumper still writes and notifies
- * a core for a program that dropped to a non-root uid is also unverified (tests/test_nonroot_e2e.py).
+ * Run on a QNX 8.0 x86_64 QEMU target as uid 1000 (tests/test_nonroot_e2e.py): the drop holds, dumper still
+ * writes and notifies a core, and the runner then takes the core as root (take_core).
  *
  * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
  * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
@@ -1122,6 +1121,28 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
     if (err->fd != -1) { close(err->fd); err->fd = -1; }
 }
 
+/* dumper writes the core as the program's user (0640). Make it the runner's own (root) and 0600 while it is still
+ * in dumper's directory (on mkqnximage images /data/var/dumper, 0700 and owned by dumper's uid), which the program's
+ * user cannot reach; so no process of that user can open it there or after it moves into the run directory. The
+ * descriptor is opened without following links, and the moved file is checked to be the same inode. */
+static const char *take_core(const char *path, struct stat *st)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1) {
+        return strerror(errno);
+    }
+    const char *err = NULL;
+    if (fstat(fd, st) == -1) {
+        err = strerror(errno);
+    } else if (!S_ISREG(st->st_mode)) {
+        err = "not a regular file";
+    } else if (fchown(fd, geteuid(), getegid()) == -1 || fchmod(fd, 0600) == -1) {
+        err = strerror(errno);
+    }
+    close(fd);
+    return err;
+}
+
 /* Runs while the program is still an unreaped zombie (when waitid is available), so a pulse that
  * names its pid cannot come from another process that reused the pid. */
 static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
@@ -1170,10 +1191,16 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
             const char *base = strrchr(r->dumper_core_path, '/');
             base = base ? base + 1 : r->dumper_core_path;
             char dst[PATH_MAX];
+            struct stat st, now;
+            const char *taken;
             if (snprintf(dst, sizeof dst, "%s/%s", o->core_dir, base) >= (int)sizeof dst) {
                 r->core_move_error = "path too long";
+            } else if ((taken = take_core(r->dumper_core_path, &st)) != NULL) {
+                r->core_move_error = taken; /* left in dumper's directory */
             } else if (rename(r->dumper_core_path, dst) == -1) {
                 r->core_move_error = strerror(errno);
+            } else if (lstat(dst, &now) == -1 || now.st_dev != st.st_dev || now.st_ino != st.st_ino) {
+                r->core_move_error = "the moved core is not the file that was taken";
             } else {
                 snprintf(r->core_path, sizeof r->core_path, "%s", dst);
             }

@@ -7,13 +7,14 @@
  * Copyright 2026 The qnx-mcp authors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Usage: escape [--other-run DIR] [--escape]
- *   --other-run DIR  also try to list DIR and read DIR/stdout (another run's directory)
+ * Usage: escape [--other-run DIR] [--core FILE] [--escape]
+ *   --other-run DIR  also try to list DIR and DIR/work, read DIR/stdout and a file in DIR/work (another run's directory)
+ *   --core FILE      also try to open FILE (a core of an earlier run) for reading and for writing
+ * Every run also tries to create a file in its own run directory, in qnx-mcp's directories on the path to its
+ * executable and in its own work directory (the current directory); only the last should succeed.
  *   --escape         fork a child that calls setsid() and outlives the run (prints its pid), then exit
  *
- * NOT VERIFIED ON A TARGET: the QNX-specific attempts (ThreadCtl(_NTO_TCTL_IO), mmap_device_memory, the
- * /proc paths) follow the QNX OS 8.0 documentation; which errno each returns for a non-root process is
- * what the end-to-end test records.
+ * Run on a QNX 8.0 x86_64 QEMU target as uid 1000 and 1001; tests/test_nonroot_e2e.py checks the errno of each.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -53,6 +54,26 @@ static void report(const char *attempt, int ok, int e)
     fflush(stdout);
 }
 
+static void try_open(const char *attempt, const char *path, int flags)
+{
+    int fd = open(path, flags);
+    int e = errno;
+    if (fd != -1) {
+        close(fd);
+    }
+    report(attempt, fd != -1, e);
+}
+
+static void try_list(const char *attempt, const char *path)
+{
+    DIR *d = opendir(path);
+    int e = errno;
+    if (d != NULL) {
+        closedir(d);
+    }
+    report(attempt, d != NULL, e);
+}
+
 static void try_create(const char *attempt, const char *path)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
@@ -67,10 +88,13 @@ static void try_create(const char *attempt, const char *path)
 int main(int argc, char *argv[])
 {
     const char *other = NULL;
+    const char *core = NULL;
     int escape = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--other-run") == 0 && i + 1 < argc) {
             other = argv[++i];
+        } else if (strcmp(argv[i], "--core") == 0 && i + 1 < argc) {
+            core = argv[++i];
         } else if (strcmp(argv[i], "--escape") == 0) {
             escape = 1;
         }
@@ -122,21 +146,35 @@ int main(int argc, char *argv[])
     report("mmap_device_memory", m != MAP_FAILED, e);
 #endif
 
+    /* Write scope: the program's cwd is its run's work directory and argv[0] is its executable in apps/<hash>/. */
+    try_create("create_in_own_work", "qnx-mcp-escape-probe");
+    try_create("create_in_own_run_dir", "../qnx-mcp-escape-probe");
+    try_create("create_in_runs", "../../qnx-mcp-escape-probe");
+    try_create("create_in_qnx_mcp_root", "/tmp/qnx-mcp/qnx-mcp-escape-probe");
+    try_create("create_in_apps", "/tmp/qnx-mcp/apps/qnx-mcp-escape-probe");
+    try_create("create_in_bin", "/tmp/qnx-mcp/bin/qnx-mcp-escape-probe");
+    char p[1024];
+    const char *slash = strrchr(argv[0], '/');
+    if (slash != NULL && (size_t)(slash - argv[0]) < sizeof p - 32) {
+        snprintf(p, sizeof p, "%.*s/qnx-mcp-escape-probe", (int)(slash - argv[0]), argv[0]);
+        try_create("create_in_own_app_dir", p);
+    }
+    try_list("list_qnx_mcp_root", "/tmp/qnx-mcp");
+    try_list("list_runs", "/tmp/qnx-mcp/runs");
+    try_list("list_apps", "/tmp/qnx-mcp/apps");
+
     if (other != NULL) {
-        DIR *d = opendir(other);
-        e = errno;
-        if (d != NULL) {
-            closedir(d);
-        }
-        report("list_other_run", d != NULL, e);
-        char p[1024];
+        try_list("list_other_run", other);
         snprintf(p, sizeof p, "%s/stdout", other);
-        fd = open(p, O_RDONLY);
-        e = errno;
-        if (fd != -1) {
-            close(fd);
-        }
-        report("read_other_run_output", fd != -1, e);
+        try_open("read_other_run_output", p, O_RDONLY);
+        snprintf(p, sizeof p, "%s/work", other);
+        try_list("list_other_run_work", p);
+        snprintf(p, sizeof p, "%s/work/made-by-program.txt", other);
+        try_open("read_other_run_work_file", p, O_RDONLY);
+    }
+    if (core != NULL) {
+        try_open("open_core_read", core, O_RDONLY);
+        try_open("open_core_write", core, O_WRONLY);
     }
     return 0;
 }
