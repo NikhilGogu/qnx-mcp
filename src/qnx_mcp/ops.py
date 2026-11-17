@@ -20,7 +20,7 @@ from typing import Any
 
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
-from .target import STATE_DIR_FIX, Target, ssh_path_problem
+from .target import SSH_KEY_FIX, STATE_DIR_FIX, Target, ssh_key_problem, ssh_path_problem
 from .util import (
     ENV_NAME_RE, REMOTE_NAME_RE, WORKSPACE_HINT, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
     private_dir, quote_argv, tail, uncancellable, within, write_private,
@@ -1032,7 +1032,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     for tool in ("qemu-system-x86_64", "ssh", "scp"):
         add(f"tool:{tool}", bool(shutil.which(tool)), shutil.which(tool) or "not found", f"Install {tool} (apt install qemu-system-x86 openssh-client).")
     key = Path(str(cfg.ssh_key) + ".pub")
-    add("ssh_key", key.is_file(), str(key), "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
+    key_why = ssh_key_problem(cfg.ssh_key)
+    add("ssh_key", key.is_file() and key_why is None, key_why or str(key),
+        SSH_KEY_FIX if key_why else "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
     add("dhcp_leases", cfg.leases.is_file(), str(cfg.leases), "Not fatal: IP lookup falls back to mkqnximage --getip (arp).")
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")

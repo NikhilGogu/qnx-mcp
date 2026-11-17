@@ -1324,3 +1324,31 @@ def test_qcc_library_search_is_checked_by_content(tmp_path: Path):
     (proj / "lib" / "libok2.a").write_bytes(b"!<arch>\n")
     assert build(cfg, str(proj), system="qcc", ldflags=["-Llib", "-lok", "-lok2", "-lm"])["ok"]
     assert _recorded(log)[0][-4:] == ["-Llib", "-lok", "-lok2", "-lm"]
+
+
+@pytest.mark.parametrize("name", ["key%%", "key%h", "key$HOME", "key${HOME}"])
+def test_ssh_key_that_ssh_would_expand_is_refused(tmp_path: Path, name: str):
+    """ssh expands % tokens and variables in the -i file name, so it would open another file than the one configured."""
+    from qnx_mcp.ops import environment_check
+    d = tmp_path / "targets" / "tb1" / "local" / "misc_files"
+    d.mkdir(parents=True)
+    (d.parent / "options").write_text("OPT_ARCH='x86_64'\n")
+    (d / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc root@qnx\n")
+
+    def cfg_for(key: Path) -> Config:
+        return Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "state"),
+                                "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none"),
+                                "QNX_MCP_SSH_KEY": str(key)})
+
+    bad = cfg_for(tmp_path / name)
+    Path(str(bad.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    with pytest.raises(QnxMcpError) as e:
+        Target(bad, "tb1")._ssh_opts()
+    assert e.value.code == "internal_error" and "QNX_MCP_SSH_KEY" in (e.value.hint or ""), e.value.to_dict()
+    check = {c["check"]: c for c in environment_check(bad)["checks"]}["ssh_key"]
+    assert not check["ok"] and "QNX_MCP_SSH_KEY" in check["fix"]
+    good = cfg_for(tmp_path / "key dir" / "id_ed25519")  # whitespace is fine: -i is one argument and is not split
+    (tmp_path / "key dir").mkdir()
+    Path(str(good.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    assert ["-i", str(good.ssh_key)] == Target(good, "tb1")._ssh_opts()[-2:]
+    assert {c["check"]: c for c in environment_check(good)["checks"]}["ssh_key"]["ok"]

@@ -47,12 +47,21 @@ _RAM_RE = re.compile(r"\d{1,6}[MG]")
 # (ssh_config(5)), so a state path with any of these would silently point the host-key pin elsewhere.
 _SSH_UNSAFE_PATH_RE = re.compile(r"[\s\"'\\%$]")
 STATE_DIR_FIX = "Set QNX_MCP_STATE_DIR to a path without whitespace, quotes, backslashes, '%' or '$'."
+# ssh also expands %-tokens and ${VAR} in the -i identity file name (ssh_config(5), IdentityFile).
+_SSH_KEY_UNSAFE_RE = re.compile(r"[%$]")
+SSH_KEY_FIX = "Set QNX_MCP_SSH_KEY to a path without '%' or '$'."
 
 
 def ssh_path_problem(path: Path) -> str | None:
     """Why ssh would not read this path as one file name in an -o option (None: it would)."""
     m = _SSH_UNSAFE_PATH_RE.search(str(path))
     return f"{path} contains {m.group()!r}, which ssh treats as a separator or expands in UserKnownHostsFile" if m else None
+
+
+def ssh_key_problem(path: Path) -> str | None:
+    """Why ssh would not open this exact file for -i (None: it would)."""
+    m = _SSH_KEY_UNSAFE_RE.search(str(path))
+    return f"{path} contains {m.group()!r}, which ssh expands in an identity file name" if m else None
 
 
 # Restarts the image's dumper with the same arguments as mkqnximage's startup script plus
@@ -286,6 +295,9 @@ class Target:
         why = ssh_path_problem(self.known_hosts)
         if why:
             raise QnxMcpError("internal_error", f"the host-key pin file cannot be passed to ssh: {why}", hint=STATE_DIR_FIX)
+        why = ssh_key_problem(self.cfg.ssh_key)
+        if why:
+            raise QnxMcpError("internal_error", f"the ssh key cannot be passed to ssh: {why}", hint=SSH_KEY_FIX)
         private_dir(self.state)
         keys = self.image_host_keys()
         try:
