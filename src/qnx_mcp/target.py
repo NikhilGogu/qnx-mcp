@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .abilities import LOGIN_USER, privileges
 from .sdk import ARCHES, check_arch, sdk_env, sdk_tool
 from .util import (
     Config, ProcResult, QnxMcpError, check_cancelled, check_remote_path, check_target_name, file_lock, private_dir,
@@ -47,12 +48,21 @@ _RAM_RE = re.compile(r"\d{1,6}[MG]")
 # (ssh_config(5)), so a state path with any of these would silently point the host-key pin elsewhere.
 _SSH_UNSAFE_PATH_RE = re.compile(r"[\s\"'\\%$]")
 STATE_DIR_FIX = "Set QNX_MCP_STATE_DIR to a path without whitespace, quotes, backslashes, '%' or '$'."
+# ssh also expands %-tokens and ${VAR} in the -i identity file name (ssh_config(5), IdentityFile).
+_SSH_KEY_UNSAFE_RE = re.compile(r"[%$]")
+SSH_KEY_FIX = "Set QNX_MCP_SSH_KEY to a path without '%' or '$'."
 
 
 def ssh_path_problem(path: Path) -> str | None:
     """Why ssh would not read this path as one file name in an -o option (None: it would)."""
     m = _SSH_UNSAFE_PATH_RE.search(str(path))
     return f"{path} contains {m.group()!r}, which ssh treats as a separator or expands in UserKnownHostsFile" if m else None
+
+
+def ssh_key_problem(path: Path) -> str | None:
+    """Why ssh would not open this exact file for -i (None: it would)."""
+    m = _SSH_KEY_UNSAFE_RE.search(str(path))
+    return f"{path} contains {m.group()!r}, which ssh expands in an identity file name" if m else None
 
 
 # Restarts the image's dumper with the same arguments as mkqnximage's startup script plus
@@ -286,6 +296,9 @@ class Target:
         why = ssh_path_problem(self.known_hosts)
         if why:
             raise QnxMcpError("internal_error", f"the host-key pin file cannot be passed to ssh: {why}", hint=STATE_DIR_FIX)
+        why = ssh_key_problem(self.cfg.ssh_key)
+        if why:
+            raise QnxMcpError("internal_error", f"the ssh key cannot be passed to ssh: {why}", hint=SSH_KEY_FIX)
         private_dir(self.state)
         keys = self.image_host_keys()
         try:
@@ -359,20 +372,20 @@ class Target:
     def ssh(self, argv: Sequence[str], *, timeout: float, what: str = "remote command", ip: str | None = None,
             check: bool = True, hold_stdin: bool = False, max_output: int = 8 << 20) -> ProcResult:
         """Run argv on the target; every element is quoted for the remote shell."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
                           max_output=max_output)
         self._classify(r, what, timeout, check)
         return r
 
     def ssh_script(self, script: str, *, timeout: float, what: str, ip: str | None = None, check: bool = True) -> ProcResult:
         """Run a fixed shell script. Callers build `script` only from constants and quote_argv()."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", script], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", script], ip, timeout=timeout)
         self._classify(r, what, timeout, check)
         return r
 
     def put(self, local: Path, remote: str, *, timeout: float, ip: str | None = None) -> None:
         check_remote_path(remote)
-        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"root@{a}:{remote}"], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"{LOGIN_USER}@{a}:{remote}"], ip, timeout=timeout)
         self._classify(r, f"copy to {remote}", timeout, check=False)
         if r.returncode != 0:
             raise QnxMcpError("deploy_failed", f"scp to {self.name}:{remote} failed", stderr=tail(r.err, 800))
@@ -385,7 +398,7 @@ class Target:
             def restart() -> None:
                 f.seek(0)
                 f.truncate()
-            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"root@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
+            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
                               ip, before_retry=restart, timeout=timeout, max_output=size, stdout_file=f)
         self._classify(r, f"copy from {remote}", timeout, check=False)
         if r.returncode != 0 or r.streamed_over(size):
@@ -411,7 +424,7 @@ class Target:
             if use_getip:
                 next_getip = time.monotonic() + 10
             for ip in self.candidates(getip=use_getip, getip_timeout=8):  # authenticated attempts only, no port probes
-                r = run(["ssh", *self._ssh_opts(), f"root@{ip}", "--", "true"], timeout=10)
+                r = run(["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{ip}", "--", "true"], timeout=10)
                 if r.returncode == 0:
                     return ip
                 if "Host key verification failed" in r.err or "REMOTE HOST IDENTIFICATION" in r.err:
@@ -564,6 +577,7 @@ class Target:
             "directory": str(self.dir),
             "host_key_policy": self.host_key_policy(),
             "ip": None,
+            "privileges": {k: v for k, v in privileges(self.cfg).items() if k != "tools"},
         }
         if pid is None or not probe:
             return st
@@ -589,9 +603,17 @@ class Target:
                 st["dumper_args"] = dumper or None
                 st["core_naming"] = "sequential" if re.search(r"\s-[nN]\b", f" {dumper}") else "fixed"
             except QnxMcpError as e:
+                # The ssh field reports what the target answered (or that it did not). A refusal made on this host before
+                # ssh runs (unsafe state dir or key path, missing host keys or key) is the server's configuration, so it
+                # fails the call with the same error every other tool returns.
+                if e.code not in PROBE_ERRORS:
+                    raise
                 st["state"] = "booting" if e.code in ("ssh_failed", "timeout") else st["state"]
                 st["ssh"] = e.to_dict()
         return st
+
+
+PROBE_ERRORS = ("ssh_failed", "timeout", "host_key_mismatch", "remote_failed")
 
 
 def list_targets(cfg: Config) -> list[dict[str, Any]]:

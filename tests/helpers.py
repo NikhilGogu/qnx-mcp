@@ -15,7 +15,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 PASS_ENV = ("HOME", "PATH", "USER", "LANG", "QNX_MCP_HOME", "QNX_MCP_SDP_ENV", "QNX_MCP_TARGETS_DIR", "QNX_MCP_STATE_DIR",
-            "QNX_MCP_ALLOW_TARGETS", "QNX_MCP_SSH_KEY", "QNX_MCP_DHCP_LEASES", "QNX_MCP_WORKSPACE")
+            "QNX_MCP_ALLOW_TARGETS", "QNX_MCP_SSH_KEY", "QNX_MCP_DHCP_LEASES", "QNX_MCP_WORKSPACE",
+            "QNX_MCP_RUN_AS")  # set it to run the whole live suite with programs as that user
 
 
 class Client:

@@ -18,9 +18,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .abilities import describe_program_identity, privileges
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
-from .target import STATE_DIR_FIX, Target, ssh_path_problem
+from .target import SSH_KEY_FIX, STATE_DIR_FIX, Target, ssh_key_problem, ssh_path_problem
 from .util import (
     ENV_NAME_RE, REMOTE_NAME_RE, WORKSPACE_HINT, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
     private_dir, quote_argv, tail, uncancellable, within, write_private,
@@ -147,8 +148,9 @@ def _snapshot_binary(local: Path, dest_dir: Path, arch: str) -> tuple[Path, str,
 def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, mode: str, hasher: str | None) -> None:
     """scp to a unique temporary name, verify size, mode and SHA-256 on the target, then rename."""
     tmp = f"{remote}.part-{uuid.uuid4().hex[:8]}"
-    t.put(local, tmp, timeout=300, ip=ip)
     try:
+        # inside the try: a failed or cancelled scp can leave a partial copy at the temporary name
+        t.put(local, tmp, timeout=300, ip=ip)
         r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([hasher or tmp, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
         got = _parse_runner(r.out, "upload verification")
         if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
@@ -160,9 +162,34 @@ def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, m
             )
         t.ssh(["mv", "-f", tmp, remote], timeout=30, what="upload rename", ip=ip)
     except BaseException:
-        with contextlib.suppress(QnxMcpError):
+        with uncancellable(), contextlib.suppress(QnxMcpError):
             t.ssh(["rm", "-f", tmp], timeout=15, what="upload cleanup", ip=ip, check=False)
         raise
+
+
+def _dir_mode(d: str) -> str:
+    """The one mode each qnx-mcp directory on the target gets, whoever programs run as, so the order of root and
+    non-root runs never matters. A non-root program must reach its own executable (apps/<hash>/<name>) and its
+    own run directory's work directory, so the directories on those paths are 0711: other users can pass
+    through them but cannot list them. The runner's directory stays 0700 (only root starts it), and a run
+    directory is created 0700; the runner makes it 0711 for a non-root run, whose files there stay root's 0600."""
+    if d == f"{REMOTE_ROOT}/bin" or d.startswith(f"{REMOTE_ROOT}/runs/"):
+        return "0700"
+    return "0711"
+
+
+def _secure_dirs_script(dirs: list[tuple[str, str]]) -> str:
+    """POSIX sh for the target. /tmp is writable by every local user, so each directory (parents first) is created
+    with its mode (_dir_mode) when missing and must then be a real directory owned by the user running the script
+    (root), else exit 4. Without this, a user who created /tmp/qnx-mcp first could swap the runner or an app, or
+    read cores and output."""
+    parts = []
+    for d, mode in dirs:
+        q = quote_argv([d])
+        parts.append(f"{{ test -L {q} || test -d {q} || mkdir -m {mode} {q}; }}; "
+                     f"if test -L {q} || ! test -d {q} || ! test -O {q} || ! chmod {mode} {q}; then "
+                     f"echo {quote_argv([f'qnx-mcp: refused {d}: not a directory owned by this user'])} >&2; exit 4; fi;")
+    return " ".join(parts)
 
 
 def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mkdirs: list[str], prune: bool = False) -> str:
@@ -176,10 +203,12 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     runner_local, digest = runner_binary(t.cfg, t.arch)
     runner_sha, runner_size = _sha256_file(runner_local), runner_local.stat().st_size
     runner_remote = f"{REMOTE_ROOT}/bin/qnx-mcp-run-{digest}"
-    dirs = sorted({f"{REMOTE_ROOT}/bin", f"{REMOTE_ROOT}/runs", f"{REMOTE_ROOT}/apps", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
+    dirs = sorted({REMOTE_ROOT, f"{REMOTE_ROOT}/bin", f"{REMOTE_ROOT}/runs", f"{REMOTE_ROOT}/apps", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
     for d in dirs:
         check_remote_path(d)
-    parts = [f"mkdir -p {quote_argv(dirs)} || exit 3; R={quote_argv([runner_remote])};"]
+        if not _in_managed_dir(d):
+            raise QnxMcpError("internal_error", f"{d} is outside {REMOTE_ROOT}")
+    parts = [f"{_secure_dirs_script([(d, _dir_mode(d)) for d in dirs])} R={quote_argv([runner_remote])};"]
     for p in [runner_remote, *(f[1] for f in files)]:
         q = quote_argv([p])
         # exactly one line per file, even if the runner is missing or broken
@@ -194,7 +223,12 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
         parts.append(f"if test \"$(\"$R\" -V 2>/dev/null)\" = {ver}; then "
                      f"\"$R\" -G {REMOTE_ROOT}/runs -k {KEEP_REMOTE_RUNS} -a 300 {quote_argv(keep_runs)} >/dev/null 2>&1; "
                      f"\"$R\" -G {REMOTE_ROOT}/apps -k {KEEP_APPS} -a 600 {quote_argv(keep_apps)} >/dev/null 2>&1; fi;")
-    r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip)
+    r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip, check=False)
+    if r.returncode == 4:
+        raise QnxMcpError("remote_failed", f"qnx-mcp's directory on {t.name} is not private: {tail(r.err.strip(), 300)}",
+                          hint=f"Another user created it, or it is a link. Remove {REMOTE_ROOT} on the target as root and retry.")
+    if r.returncode != 0:
+        raise QnxMcpError("remote_failed", f"deploy check on {t.name} exited with status {r.returncode}", stdout=tail(r.out, 800), stderr=tail(r.err, 800))
     lines = [line for line in r.out.split("\n") if line.strip()]
     if len(lines) != len(files) + 1:
         raise QnxMcpError("remote_failed", "deploy check output was not recognised", stdout=tail(r.out, 800))
@@ -242,6 +276,28 @@ def _check_args(args: list[Any] | None, env: dict[str, str] | None) -> list[str]
             raise QnxMcpError("invalid_argument", f"{field} is {size} bytes; the limit is {ARGV_MAX}",
                               hint="Pass large inputs as a file (file_put) and give the program its path.")
     return out
+
+
+def _run_as_argv(cfg: Config) -> list[str]:
+    """Runner option for non-root runs. A bad QNX_MCP_RUN_AS refuses the run rather than running it as root."""
+    if cfg.run_as_error:
+        raise QnxMcpError("config_error", f"{cfg.run_as_error}, so this server refuses to start programs",
+                          hint="Ask the person running qnx-mcp to fix QNX_MCP_RUN_AS (numeric uid:gid, not 0) or unset it; environment_check shows it.")
+    return ["-u", f"{cfg.run_as[0]}:{cfg.run_as[1]}"] if cfg.run_as else []
+
+
+def _run_as_field(cfg: Config) -> dict[str, int] | None:
+    return {"uid": cfg.run_as[0], "gid": cfg.run_as[1]} if cfg.run_as else None
+
+
+DROP_FAILED = "could not drop privileges"  # how qnx-mcp-run.c starts exec_error when -u failed
+
+
+def _drop_failed_step(res: dict[str, Any]) -> str | None:
+    if str(res.get("exec_error") or "").startswith(DROP_FAILED):
+        return ("the program did not start: the runner could not switch to the QNX_MCP_RUN_AS user on the target; "
+                "check that the server runs the target tools as root (target_status.privileges) and that the uid and gid are valid there")
+    return None
 
 
 def _outcome(res: dict[str, Any]) -> str:
@@ -371,7 +427,7 @@ def _crash_step(target: str, rid: str, rec: dict[str, Any]) -> str:
 
 def _finish_record(rec: dict[str, Any], res: dict[str, Any]) -> None:
     rec.update(state="finished", outcome=_outcome(res), finished_at=time.time(),
-               **{k: res.get(k) for k in ("pid", "exit_code", "signal", "signal_name", "core_path", "dumper_core_path", "dumper")})
+               **{k: res.get(k) for k in ("pid", "exit_code", "signal", "signal_name", "core_path", "dumper_core_path", "dumper", "core_exposed")})
 
 
 def deploy_and_run(
@@ -388,7 +444,7 @@ def deploy_and_run(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = _check_args(args, env)
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096) + _run_as_argv(cfg)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -398,6 +454,7 @@ def deploy_and_run(
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "oneshot", "state": "running", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
+            "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)
         argv = [runner, "-S", *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args]
@@ -423,9 +480,12 @@ def deploy_and_run(
     result: dict[str, Any] = {
         "ok": True, "run_id": rid, "target": target, "outcome": _outcome(res), "binary": prog["binary"], "binary_sha256": prog["binary_sha256"],
         "build_id": prog["build_id"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"], "args": args,
-        "started_at": rec["started_at"], **res,
+        "started_at": rec["started_at"], "run_as": rec["run_as"], **res,
     }
-    if result.get("core_path"):
+    drop_failed = _drop_failed_step(res)
+    if drop_failed:
+        result["next_step"] = drop_failed
+    elif result.get("core_path"):
         result["next_step"] = _crash_step(target, rid, rec)
     elif res.get("core_expected"):
         result["next_step"] = f"no core reported (dumper={res.get('dumper')}); check target_status.dumper_running"
@@ -451,7 +511,7 @@ def run_start(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = _check_args(args, env)
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536) + _run_as_argv(cfg)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -461,7 +521,7 @@ def run_start(
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "background", "state": "starting", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
-            "deadline": time.time() + timeout_s,
+            "deadline": time.time() + timeout_s, "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)  # ownership is on disk before anything is launched
         _reconcile_starts(t, ip, exclude=rid)
@@ -487,7 +547,7 @@ def run_start(
     return {
         "ok": True, "run_id": rid, "target": target, "state": "running", "pid": res.get("pid"), "runner_pid": res.get("runner_pid"),
         "binary": prog["binary"], "binary_sha256": prog["binary_sha256"], "remote_path": prog["remote_path"], "remote_binary": prog["remote_binary"],
-        "args": args, "deadline_s": timeout_s,
+        "args": args, "deadline_s": timeout_s, "run_as": rec["run_as"],
         "next_step": f"call run_poll with run_id={rid!r} for output (pass back stdout_next/stderr_next as offsets); run_stop ends it",
     }
 
@@ -555,6 +615,7 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
         rec = _owned_background(t, run_id)  # read inside the target lock
         ip = t.require_ip()
         deadline = time.monotonic() + wait_s
+        interval = 0.5
         while True:
             p = _poll_once(t, ip, rec, stdout_offset, stderr_offset, max_kb * 1024)
             state = _apply_poll(t, rec, p)
@@ -562,7 +623,10 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
             if state != "running" or new or time.monotonic() >= deadline:
                 break
             check_cancelled()
-            time.sleep(0.5)
+            # Every poll is a new ssh session with a full key exchange, and the image's sshd penalises bursts of
+            # connections; backing off to 2 s keeps a 60 s wait to about 32 sessions.
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+            interval = min(interval * 2, 2.0)
     out, err = p.get("stdout") or {}, p.get("stderr") or {}
     result: dict[str, Any] = {
         "ok": True, "run_id": run_id, "target": target, "state": state, "alive": bool(p.get("alive")), "pid": rec.get("pid"),
@@ -675,8 +739,8 @@ def file_put(cfg: Config, target: str, local_path: str, remote_path: str, mode: 
                 raise QnxMcpError("file_exists", f"{remote} already exists on {target}", hint="Pass overwrite=true to replace it.")
             tmp_name = f".{os.path.basename(remote)}.part-{uuid.uuid4().hex[:8]}"
             tmp = f"{os.path.dirname(remote)}/{tmp_name}"
-            t.put(snap, tmp, timeout=300, ip=ip)
             try:
+                t.put(snap, tmp, timeout=300, ip=ip)  # a failed or cancelled scp can leave a partial copy
                 r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([runner, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
                 got = _parse_runner(r.out, "upload verification")
                 if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
@@ -1032,7 +1096,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     for tool in ("qemu-system-x86_64", "ssh", "scp"):
         add(f"tool:{tool}", bool(shutil.which(tool)), shutil.which(tool) or "not found", f"Install {tool} (apt install qemu-system-x86 openssh-client).")
     key = Path(str(cfg.ssh_key) + ".pub")
-    add("ssh_key", key.is_file(), str(key), "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
+    key_why = ssh_key_problem(cfg.ssh_key)
+    add("ssh_key", key.is_file() and key_why is None, key_why or str(key),
+        SSH_KEY_FIX if key_why else "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
     add("dhcp_leases", cfg.leases.is_file(), str(cfg.leases), "Not fatal: IP lookup falls back to mkqnximage --getip (arp).")
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")
@@ -1049,7 +1115,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
         ws += "; '/' confines nothing"
     add("workspace", not (unconfined and cfg.workspace_from_cwd), ws,
         "Set QNX_MCP_WORKSPACE to your project directories, or start the server in your project directory.")
+    add("program_identity", not cfg.run_as_error, describe_program_identity(cfg),
+        "Set QNX_MCP_RUN_AS to a numeric non-root uid:gid that exists on your targets, or unset it.")
     for c in checks:
         if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):
             c["optional"] = True
-    return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks}
+    return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks, "privileges": privileges(cfg)}

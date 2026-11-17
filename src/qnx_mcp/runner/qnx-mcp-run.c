@@ -29,7 +29,20 @@
  * Run options: -t timeout_ms, -m max bytes kept per stream, -w core_wait_ms, -C cwd,
  *   -e NAME=VALUE (repeatable), -R dir (move the core file there and lock dir/active while running),
  *   -S (stop the program when stdin reaches EOF, which is how the ssh client going away shows up here),
+ *   -u uid:gid (run the program as that user and group, see below),
  *   policy options (refuse a program that is not an executable regular file or that the policy does not allow).
+ *
+ * Non-root runs (-u uid:gid, needs -R dir): the runner itself keeps its identity (root on mkqnximage targets),
+ * so it can still talk to dumper, move the core and read /proc. Before the program starts, the run directory
+ * becomes mode 0711 (the program cannot list it), files the runner creates there are 0600, and an empty
+ * dir/work (mode 0700, owned by uid:gid) becomes the program's default working directory. In the child,
+ * after the process group and stdio are set up, the supplementary groups are set to gid alone, then setgid
+ * and setuid; the drop is checked (real and effective ids, and setuid(0) must now fail). Any failure is
+ * reported as exec_error and the program does not start (fail closed). An agent's -C cwd is entered after
+ * the drop, with the new identity. Pruning removes a work directory's contents as its owner, so files the
+ * program leaves behind (symlinks included) are never removed with root's rights.
+ * Run on a QNX 8.0 x86_64 QEMU target as uid 1000 (tests/test_nonroot_e2e.py): the drop holds, dumper still
+ * writes and notifies a core, and the runner then takes the core as root (take_core).
  *
  * The program runs in its own process group with stdin on /dev/null. When it exits, its exit is seen
  * with waitid(WNOWAIT): the zombie keeps the pid and the group id reserved while the rest of the group
@@ -50,6 +63,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <grp.h>
 #include <limits.h>
 #include <poll.h>
 #include <pthread.h>
@@ -673,8 +687,77 @@ struct opts {
     char *envs[MAX_ENV];
     int nenv;
     int watch_stdin;
+    int drop;          /* -u given: run the program as uid:gid */
+    uid_t uid;
+    gid_t gid;
+    char workdir[PATH_MAX];
     char **prog;
 };
+
+/* Become uid:gid for good. Returns 0 or an errno. A runner that is not root can only "become" itself. */
+static int drop_privileges(uid_t uid, gid_t gid)
+{
+    if (geteuid() != 0) {
+        return getuid() == uid && geteuid() == uid && getgid() == gid && getegid() == gid ? 0 : EPERM;
+    }
+    gid_t groups[1] = {gid};
+    if (setgroups(1, groups) == -1) {
+        return errno;
+    }
+    if (setgid(gid) == -1) {
+        return errno;
+    }
+    if (setuid(uid) == -1) {
+        return errno;
+    }
+    if (getuid() != uid || geteuid() != uid || getgid() != gid || getegid() != gid) {
+        return EPERM;
+    }
+    if (uid != 0 && (setuid(0) != -1 || seteuid(0) != -1)) {
+        return EPERM; /* root could be regained: do not run the program */
+    }
+    return 0;
+}
+
+/* -u: make the run directory unlistable for the program and give it its own working directory.
+ * Runs before anything is created in the run directory, so the umask covers every file there. */
+static void prepare_drop(struct opts *o)
+{
+    if (o->core_dir == NULL) {
+        fail("-u needs -R dir", 0);
+    }
+    umask(077);
+    if (chmod(o->core_dir, 0711) == -1) {
+        fail("chmod run directory", errno);
+    }
+    if (snprintf(o->workdir, sizeof o->workdir, "%s/work", o->core_dir) >= (int)sizeof o->workdir) {
+        fail("run directory path too long", ENAMETOOLONG);
+    }
+    if (mkdir(o->workdir, 0700) == -1 && errno != EEXIST) {
+        fail("mkdir work", errno);
+    }
+    int fd = open(o->workdir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    if (fd == -1 || fstat(fd, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        fail("open work", fd == -1 ? errno : ENOTDIR);
+    }
+    /* QNX 8.0 answers fchown and fchmod on a directory descriptor with ENOSYS (seen on a QEMU target), so
+     * the path is used then. The run directory is root's and the program has not started, so nobody else can
+     * replace dir/work in between; the result is still checked against the opened directory. */
+    if (fchown(fd, o->uid, o->gid) == -1 || fchmod(fd, 0700) == -1) {
+        struct stat now;
+        if (errno != ENOSYS || lchown(o->workdir, o->uid, o->gid) == -1 || lstat(o->workdir, &now) == -1 ||
+            !S_ISDIR(now.st_mode) || now.st_dev != st.st_dev || now.st_ino != st.st_ino || chmod(o->workdir, 0700) == -1 ||
+            lstat(o->workdir, &now) == -1 || now.st_dev != st.st_dev || now.st_ino != st.st_ino ||
+            now.st_uid != o->uid || now.st_gid != o->gid || (now.st_mode & 07777) != 0700) {
+            fail("chown work", errno ? errno : EPERM);
+        }
+    }
+    close(fd);
+    if (o->cwd == NULL) {
+        o->cwd = o->workdir;
+    }
+}
 
 struct sink {
     int fd;     /* pipe read end, -1 once closed */
@@ -703,6 +786,7 @@ struct result {
     char core_path[PATH_MAX];
     char dumper_core_path[PATH_MAX];
     const char *core_move_error;
+    char core_exposed[PATH_MAX + 96]; /* why the program's user could reach the core before take_core, or "" */
 };
 
 static void sink_read(struct sink *s)
@@ -823,6 +907,12 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
             close(outp[1]);
             close(errp[1]);
         }
+        int dropped = 0;
+        if (e == 0 && o->drop) {
+            e = drop_privileges(o->uid, o->gid);
+            dropped = e != 0; /* reported as a negative errno: the drop failed, not the exec */
+            umask(022);
+        }
         for (int i = 0; e == 0 && i < o->nenv; i++) {
             if (putenv(o->envs[i]) != 0) {
                 e = errno;
@@ -834,6 +924,9 @@ static pid_t start_child(const struct opts *o, int *out_rd, int *err_rd, int *ex
         if (e == 0) {
             execvp(o->prog[0], o->prog);
             e = errno;
+        }
+        if (dropped) {
+            e = -e;
         }
         (void)!write(execp[1], &e, sizeof e);
         _exit(127);
@@ -1029,6 +1122,78 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
     if (err->fd != -1) { close(err->fd); err->fd = -1; }
 }
 
+/* dumper writes the core as the program's user (0640). Make it the runner's own (root) and 0600 while it is still
+ * in dumper's directory, then move it; so no process of that user can open it after that. The descriptor is opened
+ * without following links, and the moved file is checked to be the same inode. This keeps the core from the user
+ * only if the user could not reach dumper's directory before (core_reachable). */
+/* Whether the program's user (-u) could have reached the core where dumper wrote it, and so opened, changed or
+ * replaced it before take_core. On mkqnximage images dumper writes to /data/var/dumper (0700, dumper's uid), but
+ * the core of a user with a home directory goes to that home (dumper -D), which the user owns. Conservative: no
+ * directory from the core's up to / may belong to the user or be writable by group or others (sticky excepted),
+ * and the core's own directory must give group and others nothing (so no ACL entry can grant anything either).
+ * Writes the reason to why and returns 1 when the core was reachable or this could not be checked. */
+static int core_reachable(const struct opts *o, const char *path, char *why, size_t n)
+{
+    char dir[PATH_MAX];
+    if (!o->drop) {
+        return 0;
+    }
+    if (path[0] != '/' || snprintf(dir, sizeof dir, "%s", path) >= (int)sizeof dir) {
+        snprintf(why, n, "could not check the core path %s", path);
+        return 1;
+    }
+    for (int first = 1;; first = 0) {
+        char *slash = strrchr(dir, '/');
+        if (slash == dir) {
+            slash[1] = '\0';
+        } else {
+            *slash = '\0';
+        }
+        struct stat st;
+        if (lstat(dir, &st) == -1) {
+            snprintf(why, n, "could not check %s", dir);
+            return 1;
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            snprintf(why, n, "dumper wrote it below %s, which is a link that was not followed for the check", dir);
+            return 1;
+        }
+        if (st.st_uid == o->uid) {
+            snprintf(why, n, "dumper wrote it in %s, which belongs to the program's user", dir);
+            return 1;
+        }
+        if (first && (st.st_mode & 077) != 0) {
+            snprintf(why, n, "dumper wrote it in %s, which is open to group or others (mode %04o)", dir, (unsigned)(st.st_mode & 07777));
+            return 1;
+        }
+        if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0 && (st.st_mode & S_ISVTX) == 0) {
+            snprintf(why, n, "%s, above dumper's directory, is writable by group or others", dir);
+            return 1;
+        }
+        if (strcmp(dir, "/") == 0) {
+            return 0;
+        }
+    }
+}
+
+static const char *take_core(const char *path, struct stat *st)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1) {
+        return strerror(errno);
+    }
+    const char *err = NULL;
+    if (fstat(fd, st) == -1) {
+        err = strerror(errno);
+    } else if (!S_ISREG(st->st_mode)) {
+        err = "not a regular file";
+    } else if (fchown(fd, geteuid(), getegid()) == -1 || fchmod(fd, 0600) == -1) {
+        err = strerror(errno);
+    }
+    close(fd);
+    return err;
+}
+
 /* Runs while the program is still an unreaped zombie (when waitid is available), so a pulse that
  * names its pid cannot come from another process that reused the pid. */
 static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
@@ -1077,10 +1242,17 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
             const char *base = strrchr(r->dumper_core_path, '/');
             base = base ? base + 1 : r->dumper_core_path;
             char dst[PATH_MAX];
+            struct stat st, now;
+            const char *taken;
+            core_reachable(o, r->dumper_core_path, r->core_exposed, sizeof r->core_exposed);
             if (snprintf(dst, sizeof dst, "%s/%s", o->core_dir, base) >= (int)sizeof dst) {
                 r->core_move_error = "path too long";
+            } else if ((taken = take_core(r->dumper_core_path, &st)) != NULL) {
+                r->core_move_error = taken; /* left in dumper's directory */
             } else if (rename(r->dumper_core_path, dst) == -1) {
                 r->core_move_error = strerror(errno);
+            } else if (lstat(dst, &now) == -1 || now.st_dev != st.st_dev || now.st_ino != st.st_ino) {
+                r->core_move_error = "the moved core is not the file that was taken";
             } else {
                 snprintf(r->core_path, sizeof r->core_path, "%s", dst);
             }
@@ -1094,7 +1266,13 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     int core_expected = r->signaled && dumper_signal(r->signo);
     j_head(f);
     fprintf(f, ",\"pid\":%d,\"exec_error\":", (int)r->pid);
-    j_cstr(f, r->exec_errno ? strerror(r->exec_errno) : NULL);
+    if (r->exec_errno < 0) {
+        char why[160];
+        snprintf(why, sizeof why, "could not drop privileges (-u): %s", strerror(-r->exec_errno));
+        j_cstr(f, why);
+    } else {
+        j_cstr(f, r->exec_errno ? strerror(r->exec_errno) : NULL);
+    }
     fprintf(f, ",\"exited\":%s,\"exit_code\":", r->exited ? "true" : "false");
     if (r->exited) {
         fprintf(f, "%d", r->exit_code);
@@ -1133,6 +1311,8 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     j_cstr(f, r->have_core ? r->dumper_core_path : NULL);
     fputs(",\"core_move_error\":", f);
     j_cstr(f, r->core_move_error);
+    fputs(",\"core_exposed\":", f);
+    j_cstr(f, r->have_core && r->core_exposed[0] ? r->core_exposed : NULL);
     j_warnings(f);
     fputs("}\n", f);
 }
@@ -1315,9 +1495,10 @@ static int mode_background(struct opts *o, const char *dir)
     struct sink out = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
     struct sink err = {-1, NULL, -1, o->max_bytes, 0, 0, 0};
     snprintf(path, sizeof path, "%s/stdout", dir);
-    out.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    /* program output may hold secrets: only the owner (root) reads it */
+    out.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     snprintf(path, sizeof path, "%s/stderr", dir);
-    err.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    err.file = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (out.file == -1 || err.file == -1) {
         msg[0] = msg[0] ? msg[0] : errno;
     }
@@ -1463,6 +1644,51 @@ static int rm_entry(const char *p, const struct stat *st, int flag, struct FTW *
     return remove(p) == 0 || errno == ENOENT ? 0 : -1;
 }
 
+static int rm_below(const char *p, const struct stat *st, int flag, struct FTW *ftw)
+{
+    return ftw->level == 0 ? 0 : rm_entry(p, st, flag, ftw);
+}
+
+/* A non-root run's dir/work belongs to the program's user, who may have left symlinks or may still be
+ * changing it (a process that escaped with setsid). Its contents are removed by a child that has become
+ * that user, so nothing is removed with root's rights; then the empty directory is removed here (the run
+ * directory itself is root's, so the program cannot swap dir/work for something else). Returns -1 when
+ * the work directory could not be emptied, and the run directory is then kept. */
+static int remove_work_as_owner(const char *rundir)
+{
+    char w[PATH_MAX];
+    struct stat st;
+    if (snprintf(w, sizeof w, "%s/work", rundir) >= (int)sizeof w) {
+        return -1;
+    }
+    if (lstat(w, &st) == -1) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!S_ISDIR(st.st_mode) || st.st_uid == geteuid()) {
+        return 0; /* nothing another user controls: the caller's removal handles it */
+    }
+    pid_t pid = fork();
+    if (pid == -1) {
+        return -1;
+    }
+    if (pid == 0) {
+        if (drop_privileges(st.st_uid, st.st_gid) != 0) {
+            _exit(1);
+        }
+        _exit(nftw(w, rm_below, 16, FTW_DEPTH | FTW_PHYS) == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return -1;
+    }
+    return rmdir(w) == 0 || errno == ENOENT ? 0 : -1;
+}
+
 struct dent {
     char name[NAME_MAX + 1];
     time_t mtime;
@@ -1534,6 +1760,9 @@ static int mode_prune(const char *dir, long keep, long age_s, char **protect, in
             continue;
         }
         snprintf(p, sizeof p, "%s/%s", dir, v[i].name);
+        if (remove_work_as_owner(p) != 0) {
+            continue;
+        }
         if (nftw(p, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0) {
             removed++;
         }
@@ -2063,7 +2292,7 @@ int main(int argc, char *argv[])
     size_t max_chunk = 65536;
     int opt;
 
-    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:SB:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:N:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:m:w:C:e:R:Su:B:P:O:E:L:K:H:G:k:a:p:X:D:r:x:cI:nVl:Z:q:s:fA:F:Y:T:N:")) != -1) {
         switch (opt) {
         case 't': o.timeout_ms = num_arg(optarg, 1, 86400000L); break;
         case 'm': o.max_bytes = (size_t)num_arg(optarg, 1, 64L << 20); break;
@@ -2077,6 +2306,23 @@ int main(int argc, char *argv[])
             break;
         case 'R': o.core_dir = optarg; break;
         case 'S': o.watch_stdin = 1; break;
+        case 'u': {
+            char *end = NULL;
+            errno = 0;
+            unsigned long u = strtoul(optarg, &end, 10);
+            if (errno != 0 || end == optarg || *end != ':' || u == 0 || u > 0x7ffffffeUL) {
+                fail("bad -u uid:gid", 0);
+            }
+            const char *gs = end + 1;
+            unsigned long g = strtoul(gs, &end, 10);
+            if (errno != 0 || end == gs || *end != '\0' || g == 0 || g > 0x7ffffffeUL) {
+                fail("bad -u uid:gid", 0);
+            }
+            o.drop = 1;
+            o.uid = (uid_t)u;
+            o.gid = (gid_t)g;
+            break;
+        }
         case 'B': bg_dir = optarg; break;
         case 'P': poll_dir = optarg; break;
         case 'O': out_off = (unsigned long long)num_arg(optarg, 0, LONG_MAX); break;
@@ -2187,6 +2433,9 @@ int main(int argc, char *argv[])
     }
     signal(SIGPIPE, SIG_IGN);
 
+    if (o.drop) {
+        prepare_drop(&o);
+    }
     if (bg_dir != NULL) {
         o.watch_stdin = 0;
         return mode_background(&o, bg_dir);

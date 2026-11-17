@@ -1052,7 +1052,8 @@ def test_prepare_uploads_nothing_when_everything_matches(fake_target):
     fake = FakeRemote(t, [_reply("\n".join(lines) + "\n")])
     assert prepare(t, "10.0.0.1", [entry], ["/tmp/qnx-mcp/runs/r-000000000001"]) == "/tmp/qnx-mcp/bin/qnx-mcp-run-d1g3st"
     (kind, script), = fake.calls
-    assert kind == "script" and script.startswith("mkdir -p /tmp/qnx-mcp/apps /tmp/qnx-mcp/apps/0123456789abcdef /tmp/qnx-mcp/bin")
+    assert kind == "script" and script.startswith("{ test -L /tmp/qnx-mcp || ")
+    assert "test -O /tmp/qnx-mcp/bin " in script
     assert "/tmp/qnx-mcp/runs/r-000000000001" in script and " -G " not in script
 
 
@@ -1300,3 +1301,256 @@ def test_qcc_sources_need_a_source_extension(tmp_path: Path):
     for name in ("a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"):
         (proj / name).write_text("\n")
     assert build(cfg, str(proj), system="qcc", sources=["a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"])["ok"]
+
+
+def test_qcc_library_search_is_checked_by_content(tmp_path: Path):
+    """ld opens libNAME.so or libNAME.a in each -L directory for -lNAME and reads a text file as a linker script."""
+    from helpers import write_elf
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "lib").mkdir()
+    (proj / "lib" / "libtext.so").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libtext2.a").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libthin.a").write_bytes(b"!<thin>\n")
+    write_elf(tmp_path / "outside.so")
+    (proj / "lib" / "liblink.so").symlink_to(tmp_path / "outside.so")
+    for cflags, ldflags in ((None, ["-Llib", "-ltext"]), (None, ["-L", "lib", "-ltext"]), (None, ["-L" + str(proj / "lib"), "-ltext2"]),
+                            (None, ["-Llib", "-lthin"]), (["-ltext"], ["-Llib"]), (None, ["-Llib", "-llink"])):
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
+        assert e.value.code in ("invalid_argument", "path_not_allowed") and "ldflags" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == []
+    write_elf(proj / "lib" / "libok.so")
+    (proj / "lib" / "libok2.a").write_bytes(b"!<arch>\n")
+    assert build(cfg, str(proj), system="qcc", ldflags=["-Llib", "-lok", "-lok2", "-lm"])["ok"]
+    assert _recorded(log)[0][-4:] == ["-Llib", "-lok", "-lok2", "-lm"]
+
+
+@pytest.mark.parametrize("name", ["key%%", "key%h", "key$HOME", "key${HOME}"])
+def test_ssh_key_that_ssh_would_expand_is_refused(tmp_path: Path, name: str):
+    """ssh expands % tokens and variables in the -i file name, so it would open another file than the one configured."""
+    from qnx_mcp.ops import environment_check
+    d = tmp_path / "targets" / "tb1" / "local" / "misc_files"
+    d.mkdir(parents=True)
+    (d.parent / "options").write_text("OPT_ARCH='x86_64'\n")
+    (d / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc root@qnx\n")
+
+    def cfg_for(key: Path) -> Config:
+        return Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "state"),
+                                "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none"),
+                                "QNX_MCP_SSH_KEY": str(key)})
+
+    bad = cfg_for(tmp_path / name)
+    Path(str(bad.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    with pytest.raises(QnxMcpError) as e:
+        Target(bad, "tb1")._ssh_opts()
+    assert e.value.code == "internal_error" and "QNX_MCP_SSH_KEY" in (e.value.hint or ""), e.value.to_dict()
+    check = {c["check"]: c for c in environment_check(bad)["checks"]}["ssh_key"]
+    assert not check["ok"] and "QNX_MCP_SSH_KEY" in check["fix"]
+    good = cfg_for(tmp_path / "key dir" / "id_ed25519")  # whitespace is fine: -i is one argument and is not split
+    (tmp_path / "key dir").mkdir()
+    Path(str(good.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    assert ["-i", str(good.ssh_key)] == Target(good, "tb1")._ssh_opts()[-2:]
+    assert {c["check"]: c for c in environment_check(good)["checks"]}["ssh_key"]["ok"]
+
+
+def test_upload_removes_a_partial_copy_after_a_failed_or_cancelled_copy(fake_target):
+    """scp can leave part of the file at the temporary name; it is removed even when the call was cancelled."""
+    from qnx_mcp import util
+    from qnx_mcp.ops import _upload
+    t, _, app = fake_target
+    sha, size = _sha(app), app.stat().st_size
+    ctx = util.CallContext()
+    ctx.cancelled = True
+    fake = FakeRemote(t, [QnxMcpError("cancelled", "the client cancelled this call"), _reply()])
+    ssh = fake.ssh
+
+    def ssh_like_run(argv, **kw):
+        util.check_cancelled()  # the real ssh refuses to start inside a cancelled call
+        return ssh(argv, **kw)
+
+    t.ssh = ssh_like_run
+    token = util.CURRENT_CALL.set(ctx)
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            _upload(t, "10.0.0.1", app, "/tmp/qnx-mcp/apps/x/app", sha, size, "0755", "/tmp/qnx-mcp/bin/r")
+    finally:
+        util.CURRENT_CALL.reset(token)
+    assert e.value.code == "cancelled"
+    (k1, (_, tmp)), (k2, rm) = fake.calls
+    assert k1 == "put" and k2 == "ssh" and rm == ["rm", "-f", tmp] and tmp.startswith("/tmp/qnx-mcp/apps/x/app.part-")
+
+
+def test_missing_core_build_id_message_does_not_blame_the_core():
+    """The core's build ID is read at the address of the given binary's note, so a wrong binary finds none there
+    either; seen on a target with a core that does hold a build ID. The message must not say the core has none."""
+    from qnx_mcp import crash
+    with pytest.raises(QnxMcpError) as e:
+        crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, None, _mi(), _CORE_INFO)
+    assert e.value.code == "core_mismatch" and "not the one that crashed" in e.value.message, e.value.to_dict()
+    rec = {**_RUN_REC, "remote_binary": True, "remote_path": "/tmp/qnx-mcp/apps/abc/crash"}
+    ev = crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, rec, _mi(), _CORE_INFO)
+    assert ev["verified"] is False and "may not be the one that ran" in ev["evidence"], ev
+
+
+def test_run_poll_backoff_opens_fewer_sessions(tmp_path: Path, monkeypatch):
+    """Each poll is a new ssh session; a long wait backs off to one every 2 s and still ends at its deadline."""
+    from qnx_mcp import ops
+    d = tmp_path / "targets" / "tb1" / "local"
+    d.mkdir(parents=True)
+    (d / "options").write_text("OPT_ARCH='x86_64'\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+    clock = [1000.0]
+    sleeps: list[float] = []
+    polls: list[float] = []
+    new_output_at = [None]
+
+    def poll_once(t, ip, rec, out_off, err_off, max_bytes):
+        polls.append(clock[0])
+        nxt = 5 if new_output_at[0] is not None and clock[0] >= new_output_at[0] else 0
+        return {"alive": True, "status": None, "stdout": {"next": nxt, "size": nxt}, "stderr": {"next": 0, "size": 0}}
+
+    def sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    monkeypatch.setattr(ops, "_poll_once", poll_once)
+    monkeypatch.setattr(ops.time, "sleep", sleep)
+    monkeypatch.setattr(ops.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ops, "_owned_background", lambda t, rid: {"run_id": rid, "state": "running", "pid": 7})
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    r = ops.run_poll(cfg, "tb1", "r-000000000001", wait_s=60)
+    assert r["state"] == "running" and r["stdout"] == ""
+    assert sleeps[:4] == [0.5, 1.0, 2.0, 2.0] and max(sleeps) <= 2.0
+    assert len(polls) <= 35 and clock[0] - 1000.0 <= 60.0 + 1e-9 and polls[-1] - 1000.0 >= 58.0, (len(polls), clock[0])
+    polls.clear()
+    sleeps.clear()
+    new_output_at[0] = clock[0] + 3.0
+    r = ops.run_poll(cfg, "tb1", "r-000000000001", wait_s=60)
+    assert r["stdout_next"] == 5 and len(polls) == 4  # 0, 0.5, 1.5, 3.5: stops at the first poll that sees output
+
+
+def test_remote_dirs_are_private_or_refused(tmp_path: Path):
+    """The fragment prepare sends to the target, run here with the local sh: directories end up with their mode and
+    owned by the user running it; a link, a file or (on the target) another user's directory stops it with exit 4."""
+    import subprocess
+    from qnx_mcp.ops import _secure_dirs_script
+    root = tmp_path / "qnx-mcp"
+
+    def sh(dirs: list[tuple[Path, str]]) -> subprocess.CompletedProcess:
+        return subprocess.run(["sh", "-c", _secure_dirs_script([(str(d), m) for d, m in dirs])], capture_output=True, text=True, timeout=10)
+
+    tree = [(root, "0711"), (root / "apps", "0711"), (root / "apps" / "0123456789abcdef", "0711"), (root / "bin", "0700"),
+            (root / "runs", "0711"), (root / "runs" / "r-000000000001", "0700")]
+    assert sh(tree).returncode == 0
+    assert all(d.is_dir() and stat.S_IMODE(d.stat().st_mode) == int(m, 8) for d, m in tree)
+    (root / "runs").chmod(0o777)
+    assert sh(tree).returncode == 0 and stat.S_IMODE((root / "runs").stat().st_mode) == 0o711
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o755)
+    linked = tmp_path / "linked"
+    linked.symlink_to(elsewhere)
+    r = sh([(linked, "0711"), (linked / "bin", "0700")])
+    assert r.returncode == 4 and str(linked) in r.stderr and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755 and not (elsewhere / "bin").exists()
+    (tmp_path / "plain").write_text("x")
+    assert sh([(tmp_path / "plain", "0711")]).returncode == 4
+    assert "test -O " in _secure_dirs_script([("/tmp/qnx-mcp", "0711")])  # another owner is refused (needs root to test here)
+
+
+def _linkmap_core(path: Path, exe: str, exe_bid: bytes, prev: int = 0) -> Path:
+    """A minimal ELF64 core with one PT_NOTE holding a QNX QNT_LINK_MAP note laid out as a QNX 8.0 dumper writes it
+    (sys/qnx_linkmap_note.h): header, r_debug and link_maps, string table, then the build ID table at a 4-byte boundary."""
+    strtab = b"PIE\0" + exe.encode() + b"\0libc.so.6\0/proc/boot/\0"
+    lib_name, lib_path = 5 + len(exe), 15 + len(exe)
+    r_debug = struct.pack("<iiQQIIQQII", 1, 0, 0x1000, 0, 0, 0, 0, 0, 0, 0)
+    maps = struct.pack("<8Q", 0x400000, 0, 0, 0x2000, prev, 0, 0, 4) + struct.pack("<8Q", 0x800000, lib_name, 0, 0, 0x1000, 0, 0, lib_path)
+    lm = r_debug + maps
+    bids = b"".join(struct.pack("<HH", 0, len(b)) + b + b"\0" * (-len(b) % 4) for b in (exe_bid, bytes(range(16))))
+    pad = b"\0" * (-(32 + len(lm) + len(strtab)) % 4)
+    desc = struct.pack("<IIII16x", 1, len(lm), len(strtab), len(bids)) + lm + strtab + pad + bids
+    note = struct.pack("<III", 4, len(desc), 11) + b"QNX\0" + desc + b"\0" * (-len(desc) % 4)
+    phoff, noteoff = 64, 64 + 56
+    ehdr = b"\x7fELF\x02\x01\x01" + b"\0" * 9 + struct.pack("<HHIQQQIHHHHHH", 4, 62, 1, 0, phoff, 0, 0, 64, 56, 1, 0, 0, 0)
+    phdr = struct.pack("<IIQQQQQQ", 4, 0, noteoff, 0, 0, len(note), 0, 0)
+    path.write_bytes(ehdr + phdr + note)
+    return path
+
+
+def test_core_link_map_names_the_build_id_that_ran(tmp_path: Path):
+    from qnx_mcp.parsers import core_exe_build_id
+    core = _linkmap_core(tmp_path / "c.core", "/data/opt/crash", bytes.fromhex("aa" * 16))
+    assert core_exe_build_id(str(core), "/data/opt/crash") == {"build_id": "aa" * 16, "path": "/data/opt/crash"}
+    assert core_exe_build_id(str(core), "/data/opt/other") is None  # not the executable gdb names: undecided
+    assert core_exe_build_id(str(_linkmap_core(tmp_path / "n.core", "/data/opt/crash", b"")), "/data/opt/crash")["build_id"] is None
+    assert core_exe_build_id(str(_linkmap_core(tmp_path / "p.core", "/data/opt/crash", b"\xaa" * 16, prev=8)), "/data/opt/crash") is None
+    (tmp_path / "short.core").write_bytes(core.read_bytes()[:150])
+    assert core_exe_build_id(str(tmp_path / "short.core"), "/data/opt/crash") is None
+
+
+@pytest.mark.parametrize("core_bid,bin_bid,expected", [
+    ("aa" * 16, "bb" * 16, "mismatch"),  # another program: before, verified false with a ?? backtrace
+    ("aa" * 16, None, "mismatch"),  # the binary has no build ID, the program that ran had one
+    ("", "aa" * 16, "mismatch"),  # the program that ran had none, the binary has one
+    ("aa" * 16, "aa" * 16, (True, "build ID, executable path and pid match")),
+    ("", None, (False, "pid and path match; build ID not available (neither the program that ran nor this binary has one)")),
+], ids=["other-build-id", "binary-without-id", "core-without-id", "same", "neither"])
+def test_remote_run_build_id_comes_from_the_core_link_map(tmp_path: Path, monkeypatch, core_bid, bin_bid, expected):
+    """A wrong host binary used to leave a remote_binary run unverified with useless frames; the dumper's link map
+    note records the executable's build ID, so a different one is a core_mismatch."""
+    from qnx_mcp import crash
+    monkeypatch.setattr(crash, "core_read", lambda *a: None)  # a wrong binary finds nothing at its own note address
+    core = _linkmap_core(tmp_path / "c.core", "/data/opt/crash", bytes.fromhex(core_bid))
+    args = (core, Path("bin"), {"build_id": bin_bid} if bin_bid else {}, "b" * 64, _REMOTE_REC, _mi(exe="/data/opt/crash", note=True), _CORE_INFO)
+    if expected == "mismatch":
+        with pytest.raises(QnxMcpError) as e:
+            crash._provenance(*args)
+        assert e.value.code == "core_mismatch" and e.value.details["provenance"]["core_build_id_source"] == "link_map", e.value.to_dict()
+        return
+    ev = crash._provenance(*args)
+    assert ev["verified"] is expected[0] and ev["evidence"] == expected[1], ev
+
+
+@pytest.mark.parametrize("name", ["state dir", "state%h"])
+def test_target_status_refuses_an_unsafe_state_dir_like_other_tools(tmp_path: Path, monkeypatch, name: str):
+    """target_status used to return ok:true with the refusal in its ssh field; every other tool fails the call."""
+    d = tmp_path / "targets" / "tb1" / "local" / "misc_files"
+    d.mkdir(parents=True)
+    (d.parent / "options").write_text("OPT_ARCH='x86_64'\n")
+    (d / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc root@qnx\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / name),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+    monkeypatch.setattr(Target, "qemu_pid", lambda self: 4242)
+    monkeypatch.setattr(Target, "lookup_ip", lambda self: "10.0.0.1")
+    with pytest.raises(QnxMcpError) as e:
+        Target(cfg, "tb1").status(probe=True)
+    assert e.value.code == "internal_error" and "QNX_MCP_STATE_DIR" in (e.value.hint or ""), e.value.to_dict()
+
+
+def test_remote_dir_modes_let_a_non_root_program_reach_only_its_own_paths(fake_target):
+    """With every directory 0700 (as merged from imp-b1) a run as uid 1000 ended exec_failed: Permission denied on a
+    QNX 8.0 target. The program needs search access on the path to its executable and to its run's work directory;
+    the runner's directory and new run directories stay 0700. The modes do not depend on QNX_MCP_RUN_AS, so a root
+    run after a non-root run (or the other way round) sets the same modes."""
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    lines = [_runner_json(sha256=_sha(runner), size=runner.stat().st_size, mode="0755"), _runner_json(sha256=entry[2], size=entry[3], mode="0755")]
+    fake = FakeRemote(t, [_reply("\n".join(lines) + "\n")])
+    prepare(t, "10.0.0.1", [entry], ["/tmp/qnx-mcp/runs/r-000000000001"])
+    script = fake.calls[0][1]
+    for d, mode in (("/tmp/qnx-mcp", "0711"), ("/tmp/qnx-mcp/apps", "0711"), ("/tmp/qnx-mcp/apps/0123456789abcdef", "0711"),
+                    ("/tmp/qnx-mcp/runs", "0711"), ("/tmp/qnx-mcp/bin", "0700"), ("/tmp/qnx-mcp/runs/r-000000000001", "0700")):
+        assert f"mkdir -m {mode} {d};" in script and f"chmod {mode} {d};" in script, (d, mode)
+
+
+def test_provenance_says_when_the_run_user_could_reach_the_core():
+    """dumper writes the core of a user with a home directory into that home, which the user owns, so a process of
+    that user could change it before the runner takes it; the runner reports that and get_crash passes it on."""
+    from qnx_mcp import crash
+    rec = {**_RUN_REC, "core_exposed": "dumper wrote it in /data/home/qnxuser/cores, which belongs to the program's user"}
+    ev = crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, rec, _mi(), _CORE_INFO)
+    assert ev["verified"] is True and ev["core_exposed"] == rec["core_exposed"], ev
+    assert ev["evidence"].startswith("executable path and pid match; the run's user could reach the core") and "/data/home/qnxuser" in ev["evidence"]
+    assert crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, _RUN_REC, _mi(), _CORE_INFO)["core_exposed"] is None
