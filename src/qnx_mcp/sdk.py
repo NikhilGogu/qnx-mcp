@@ -311,12 +311,52 @@ def _check_cmake_build_args(args: list[str]) -> None:
             raise _refuse(field, str(a), "cmake --build accepts --target NAME, -j N, --parallel N, --config NAME, --clean-first and -v only")
 
 
+def _check_library_search(cfg: Config, root: Path, flags: list[str]) -> None:
+    """For -lNAME, ld opens libNAME.so or libNAME.a in each -L directory and reads a file it does not
+    recognise as a linker script, so these candidates are checked by content like direct inputs."""
+    dirs: list[str] = []
+    names: list[str] = []
+    i = 0
+    while i < len(flags):
+        a = flags[i]
+        if a == "-L" and i + 1 < len(flags):
+            dirs.append(flags[i + 1])
+            i += 2
+            continue
+        if isinstance(a, str) and a.startswith("-L") and _CC_PATH_RE.fullmatch(a):
+            dirs.append(a[2:])
+        elif isinstance(a, str) and a.startswith("-l"):
+            names.append(a[2:])
+        i += 1
+    for d in dirs:
+        base = Path(d) if d.startswith("/") else root / d
+        for name in names:
+            for ext in (".so", ".a"):
+                cand = base / f"lib{name}{ext}"
+                if not os.path.lexists(cand):
+                    continue
+                shown = f"-L{d} -l{name}"
+                if not within(cand, cfg.workspace):
+                    raise QnxMcpError("path_not_allowed", f"ldflags argument {shown!r}: {os.path.realpath(cand)} is outside the workspace",
+                                      hint=WORKSPACE_HINT, field="ldflags", argument=shown)
+                try:
+                    with open(cand, "rb") as f:
+                        head = f.read(len(_INPUT_MAGIC[ext]))
+                except OSError:
+                    head = b""
+                if head != _INPUT_MAGIC[ext]:
+                    raise _refuse("ldflags", shown, f"{cand} must be an ELF shared library or an ar archive "
+                                  "(anything else would be read as a linker script)")
+
+
 def check_build_args(cfg: Config, root: Path, system: str, cflags: list[str] | None, ldflags: list[str] | None,
                      make_args: list[str] | None, sources: list[str] | None = None) -> None:
     """Refuse any agent-supplied build argument outside the allow-list (QnxMcpError naming the argument)."""
     files = system == "qcc"
     for field, flags in (("cflags", cflags), ("ldflags", ldflags)):
         _check_cc_flags(cfg, root, field, list(flags or []), files=files, quoted_defines=system == "qcc")
+    if files:
+        _check_library_search(cfg, root, list(cflags or []) + list(ldflags or []))
     for s_ in sources or []:
         if not isinstance(s_, str) or not s_ or s_.startswith(("-", "@")) or "\n" in s_:
             raise _refuse("sources", str(s_), "a source is a file path, never an option")

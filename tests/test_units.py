@@ -1300,3 +1300,27 @@ def test_qcc_sources_need_a_source_extension(tmp_path: Path):
     for name in ("a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"):
         (proj / name).write_text("\n")
     assert build(cfg, str(proj), system="qcc", sources=["a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"])["ok"]
+
+
+def test_qcc_library_search_is_checked_by_content(tmp_path: Path):
+    """ld opens libNAME.so or libNAME.a in each -L directory for -lNAME and reads a text file as a linker script."""
+    from helpers import write_elf
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "lib").mkdir()
+    (proj / "lib" / "libtext.so").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libtext2.a").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libthin.a").write_bytes(b"!<thin>\n")
+    write_elf(tmp_path / "outside.so")
+    (proj / "lib" / "liblink.so").symlink_to(tmp_path / "outside.so")
+    for cflags, ldflags in ((None, ["-Llib", "-ltext"]), (None, ["-L", "lib", "-ltext"]), (None, ["-L" + str(proj / "lib"), "-ltext2"]),
+                            (None, ["-Llib", "-lthin"]), (["-ltext"], ["-Llib"]), (None, ["-Llib", "-llink"])):
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
+        assert e.value.code in ("invalid_argument", "path_not_allowed") and "ldflags" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == []
+    write_elf(proj / "lib" / "libok.so")
+    (proj / "lib" / "libok2.a").write_bytes(b"!<arch>\n")
+    assert build(cfg, str(proj), system="qcc", ldflags=["-Llib", "-lok", "-lok2", "-lm"])["ok"]
+    assert _recorded(log)[0][-4:] == ["-Llib", "-lok", "-lok2", "-lm"]
