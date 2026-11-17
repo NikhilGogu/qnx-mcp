@@ -1053,7 +1053,7 @@ def test_prepare_uploads_nothing_when_everything_matches(fake_target):
     assert prepare(t, "10.0.0.1", [entry], ["/tmp/qnx-mcp/runs/r-000000000001"]) == "/tmp/qnx-mcp/bin/qnx-mcp-run-d1g3st"
     (kind, script), = fake.calls
     assert kind == "script" and script.startswith("{ test -L /tmp/qnx-mcp || ")
-    assert "mkdir -m 0700 /tmp/qnx-mcp/apps/0123456789abcdef;" in script and "test -O /tmp/qnx-mcp/bin " in script
+    assert "test -O /tmp/qnx-mcp/bin " in script
     assert "/tmp/qnx-mcp/runs/r-000000000001" in script and " -G " not in script
 
 
@@ -1433,29 +1433,30 @@ def test_run_poll_backoff_opens_fewer_sessions(tmp_path: Path, monkeypatch):
 
 
 def test_remote_dirs_are_private_or_refused(tmp_path: Path):
-    """The fragment prepare sends to the target, run here with the local sh: directories end up 0700 and owned by the
-    user running it; a link, a file or (on the target) another user's directory stops it with exit 4."""
+    """The fragment prepare sends to the target, run here with the local sh: directories end up with their mode and
+    owned by the user running it; a link, a file or (on the target) another user's directory stops it with exit 4."""
     import subprocess
     from qnx_mcp.ops import _secure_dirs_script
     root = tmp_path / "qnx-mcp"
 
-    def sh(dirs: list[Path]) -> subprocess.CompletedProcess:
-        return subprocess.run(["sh", "-c", _secure_dirs_script([str(d) for d in dirs])], capture_output=True, text=True, timeout=10)
+    def sh(dirs: list[tuple[Path, str]]) -> subprocess.CompletedProcess:
+        return subprocess.run(["sh", "-c", _secure_dirs_script([(str(d), m) for d, m in dirs])], capture_output=True, text=True, timeout=10)
 
-    tree = [root, root / "apps", root / "apps" / "0123456789abcdef", root / "bin", root / "runs", root / "runs" / "r-000000000001"]
+    tree = [(root, "0711"), (root / "apps", "0711"), (root / "apps" / "0123456789abcdef", "0711"), (root / "bin", "0700"),
+            (root / "runs", "0711"), (root / "runs" / "r-000000000001", "0700")]
     assert sh(tree).returncode == 0
-    assert all(d.is_dir() and stat.S_IMODE(d.stat().st_mode) == 0o700 for d in tree)
+    assert all(d.is_dir() and stat.S_IMODE(d.stat().st_mode) == int(m, 8) for d, m in tree)
     (root / "runs").chmod(0o777)
-    assert sh(tree).returncode == 0 and stat.S_IMODE((root / "runs").stat().st_mode) == 0o700
+    assert sh(tree).returncode == 0 and stat.S_IMODE((root / "runs").stat().st_mode) == 0o711
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir(mode=0o755)
     linked = tmp_path / "linked"
     linked.symlink_to(elsewhere)
-    r = sh([linked, linked / "bin"])
+    r = sh([(linked, "0711"), (linked / "bin", "0700")])
     assert r.returncode == 4 and str(linked) in r.stderr and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755 and not (elsewhere / "bin").exists()
     (tmp_path / "plain").write_text("x")
-    assert sh([tmp_path / "plain"]).returncode == 4
-    assert "test -O " in _secure_dirs_script(["/tmp/qnx-mcp"])  # another owner is refused (needs root to test here)
+    assert sh([(tmp_path / "plain", "0711")]).returncode == 4
+    assert "test -O " in _secure_dirs_script([("/tmp/qnx-mcp", "0711")])  # another owner is refused (needs root to test here)
 
 
 def _linkmap_core(path: Path, exe: str, exe_bid: bytes, prev: int = 0) -> Path:
@@ -1525,3 +1526,20 @@ def test_target_status_refuses_an_unsafe_state_dir_like_other_tools(tmp_path: Pa
     with pytest.raises(QnxMcpError) as e:
         Target(cfg, "tb1").status(probe=True)
     assert e.value.code == "internal_error" and "QNX_MCP_STATE_DIR" in (e.value.hint or ""), e.value.to_dict()
+
+
+def test_remote_dir_modes_let_a_non_root_program_reach_only_its_own_paths(fake_target):
+    """With every directory 0700 (as merged from imp-b1) a run as uid 1000 ended exec_failed: Permission denied on a
+    QNX 8.0 target. The program needs search access on the path to its executable and to its run's work directory;
+    the runner's directory and new run directories stay 0700. The modes do not depend on QNX_MCP_RUN_AS, so a root
+    run after a non-root run (or the other way round) sets the same modes."""
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    lines = [_runner_json(sha256=_sha(runner), size=runner.stat().st_size, mode="0755"), _runner_json(sha256=entry[2], size=entry[3], mode="0755")]
+    fake = FakeRemote(t, [_reply("\n".join(lines) + "\n")])
+    prepare(t, "10.0.0.1", [entry], ["/tmp/qnx-mcp/runs/r-000000000001"])
+    script = fake.calls[0][1]
+    for d, mode in (("/tmp/qnx-mcp", "0711"), ("/tmp/qnx-mcp/apps", "0711"), ("/tmp/qnx-mcp/apps/0123456789abcdef", "0711"),
+                    ("/tmp/qnx-mcp/runs", "0711"), ("/tmp/qnx-mcp/bin", "0700"), ("/tmp/qnx-mcp/runs/r-000000000001", "0700")):
+        assert f"mkdir -m {mode} {d};" in script and f"chmod {mode} {d};" in script, (d, mode)

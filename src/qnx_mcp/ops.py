@@ -167,15 +167,27 @@ def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, m
         raise
 
 
-def _secure_dirs_script(dirs: list[str]) -> str:
+def _dir_mode(d: str) -> str:
+    """The one mode each qnx-mcp directory on the target gets, whoever programs run as, so the order of root and
+    non-root runs never matters. A non-root program must reach its own executable (apps/<hash>/<name>) and its
+    own run directory's work directory, so the directories on those paths are 0711: other users can pass
+    through them but cannot list them. The runner's directory stays 0700 (only root starts it), and a run
+    directory is created 0700; the runner makes it 0711 for a non-root run, whose files there stay root's 0600."""
+    if d == f"{REMOTE_ROOT}/bin" or d.startswith(f"{REMOTE_ROOT}/runs/"):
+        return "0700"
+    return "0711"
+
+
+def _secure_dirs_script(dirs: list[tuple[str, str]]) -> str:
     """POSIX sh for the target. /tmp is writable by every local user, so each directory (parents first) is created
-    0700 when missing and must then be a real directory owned by the user running the script (root), else exit 4.
-    Without this, a user who created /tmp/qnx-mcp first could swap the runner or an app, or read cores and output."""
+    with its mode (_dir_mode) when missing and must then be a real directory owned by the user running the script
+    (root), else exit 4. Without this, a user who created /tmp/qnx-mcp first could swap the runner or an app, or
+    read cores and output."""
     parts = []
-    for d in dirs:
+    for d, mode in dirs:
         q = quote_argv([d])
-        parts.append(f"{{ test -L {q} || test -d {q} || mkdir -m 0700 {q}; }}; "
-                     f"if test -L {q} || ! test -d {q} || ! test -O {q} || ! chmod 0700 {q}; then "
+        parts.append(f"{{ test -L {q} || test -d {q} || mkdir -m {mode} {q}; }}; "
+                     f"if test -L {q} || ! test -d {q} || ! test -O {q} || ! chmod {mode} {q}; then "
                      f"echo {quote_argv([f'qnx-mcp: refused {d}: not a directory owned by this user'])} >&2; exit 4; fi;")
     return " ".join(parts)
 
@@ -196,7 +208,7 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
         check_remote_path(d)
         if not _in_managed_dir(d):
             raise QnxMcpError("internal_error", f"{d} is outside {REMOTE_ROOT}")
-    parts = [f"{_secure_dirs_script(dirs)} R={quote_argv([runner_remote])};"]
+    parts = [f"{_secure_dirs_script([(d, _dir_mode(d)) for d in dirs])} R={quote_argv([runner_remote])};"]
     for p in [runner_remote, *(f[1] for f in files)]:
         q = quote_argv([p])
         # exactly one line per file, even if the runner is missing or broken
