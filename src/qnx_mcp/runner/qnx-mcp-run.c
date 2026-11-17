@@ -742,8 +742,17 @@ static void prepare_drop(struct opts *o)
     if (fd == -1 || fstat(fd, &st) == -1 || !S_ISDIR(st.st_mode)) {
         fail("open work", fd == -1 ? errno : ENOTDIR);
     }
+    /* QNX 8.0 answers fchown and fchmod on a directory descriptor with ENOSYS (seen on a QEMU target), so
+     * the path is used then. The run directory is root's and the program has not started, so nobody else can
+     * replace dir/work in between; the result is still checked against the opened directory. */
     if (fchown(fd, o->uid, o->gid) == -1 || fchmod(fd, 0700) == -1) {
-        fail("chown work", errno);
+        struct stat now;
+        if (errno != ENOSYS || lchown(o->workdir, o->uid, o->gid) == -1 || lstat(o->workdir, &now) == -1 ||
+            !S_ISDIR(now.st_mode) || now.st_dev != st.st_dev || now.st_ino != st.st_ino || chmod(o->workdir, 0700) == -1 ||
+            lstat(o->workdir, &now) == -1 || now.st_dev != st.st_dev || now.st_ino != st.st_ino ||
+            now.st_uid != o->uid || now.st_gid != o->gid || (now.st_mode & 07777) != 0700) {
+            fail("chown work", errno ? errno : EPERM);
+        }
     }
     close(fd);
     if (o->cwd == NULL) {
