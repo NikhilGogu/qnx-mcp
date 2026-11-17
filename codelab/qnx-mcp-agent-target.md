@@ -771,7 +771,7 @@ The program received one argument containing `;` and a space, tried to open a fi
 
 qnx-mcp has no tool that runs a shell command. A shell tool would make every other limit (allowlist, path checks, deadlines, output caps, verified core files) optional for an agent that has been talked into misusing it, for example by text planted in a log file it reads. With typed tools the server checks each argument. Keep the permission prompts of your agent's own shell on.
 
-These limits stop mistakes and bad arguments. They do not stop a hostile agent. The program the agent builds runs as root on `cl1` unless you set `QNX_MCP_RUN_AS` (not yet tested on a target), and a Makefile in your workspace can run any command on your machine. The README's Security model has the full table.
+These limits stop mistakes and bad arguments. They do not stop a hostile agent. The program the agent builds runs as root on `cl1` unless you set `QNX_MCP_RUN_AS` (tested on a QEMU target as uid 1000), and a Makefile in your workspace can run any command on your machine. The README's Security model has the full table.
 
 ---
 
