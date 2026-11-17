@@ -105,7 +105,8 @@ def test_crash_slice(tmp_path: Path):
             # Images made by target_create run dumper -n (crash_demo.1.core); other images keep the fixed name.
             core_name = r"crash_demo\.[0-9]+\.core" if st["core_naming"] == "sequential" else r"crash_demo\.core"
             assert r["dumper"] == "notified" and re.fullmatch(f"/tmp/qnx-mcp/runs/{r['run_id']}/{core_name}", r["core_path"]), r
-            assert r["dumper_core_path"].startswith("/data/var/dumper/") and r["group_clean"] and r["capture_complete"], r
+            # dumper writes a root program's core to its -d directory; a non-root user's may go to that user's home (dumper -D)
+            assert (r["dumper_core_path"].startswith("/data/var/dumper/") or os.environ.get("QNX_MCP_RUN_AS")) and r["group_clean"] and r["capture_complete"], r
             assert 0 <= r["core_ready_ms"] < 5000, r
             assert "imu: average offset 6" in r["stdout"] and r["binary_sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest()
             _show("deploy_and_run", {k: r[k] for k in ("run_id", "outcome", "signal_name", "stdout", "dumper", "core_path", "dumper_core_path",
