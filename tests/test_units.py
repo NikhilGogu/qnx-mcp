@@ -1509,3 +1509,19 @@ def test_remote_run_build_id_comes_from_the_core_link_map(tmp_path: Path, monkey
         return
     ev = crash._provenance(*args)
     assert ev["verified"] is expected[0] and ev["evidence"] == expected[1], ev
+
+
+@pytest.mark.parametrize("name", ["state dir", "state%h"])
+def test_target_status_refuses_an_unsafe_state_dir_like_other_tools(tmp_path: Path, monkeypatch, name: str):
+    """target_status used to return ok:true with the refusal in its ssh field; every other tool fails the call."""
+    d = tmp_path / "targets" / "tb1" / "local" / "misc_files"
+    d.mkdir(parents=True)
+    (d.parent / "options").write_text("OPT_ARCH='x86_64'\n")
+    (d / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc root@qnx\n")
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / name),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path)})
+    monkeypatch.setattr(Target, "qemu_pid", lambda self: 4242)
+    monkeypatch.setattr(Target, "lookup_ip", lambda self: "10.0.0.1")
+    with pytest.raises(QnxMcpError) as e:
+        Target(cfg, "tb1").status(probe=True)
+    assert e.value.code == "internal_error" and "QNX_MCP_STATE_DIR" in (e.value.hint or ""), e.value.to_dict()

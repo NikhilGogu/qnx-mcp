@@ -201,13 +201,13 @@ def test_server_refuses_unsafe_state_dir_key_and_args(tmp_path: Path):
 
     async def go():
         async with mcp_client({"QNX_MCP_STATE_DIR": str(tmp_path / "state dir")}) as c:
-            err, st = await c.call("target_status", name=TARGET)  # the probe reports the refusal in its ssh field
-            assert st["ssh"]["code"] == "internal_error" and "QNX_MCP_STATE_DIR" in st["ssh"]["hint"], st
+            err, st = await c.call("target_status", name=TARGET)  # refused like every other tool, not ok:true
+            assert err and st["error"]["code"] == "internal_error" and "QNX_MCP_STATE_DIR" in st["error"]["hint"], st
             err, ps = await c.call("processes", target=TARGET)
             assert err and ps["error"]["code"] == "internal_error" and "QNX_MCP_STATE_DIR" in ps["error"]["hint"], ps
         async with mcp_client({"QNX_MCP_STATE_DIR": state, "QNX_MCP_SSH_KEY": str(tmp_path / "key%h")}) as c:
             err, st = await c.call("target_status", name=TARGET)
-            assert st["ssh"]["code"] == "internal_error" and "QNX_MCP_SSH_KEY" in st["ssh"]["hint"], st
+            assert err and st["error"]["code"] == "internal_error" and "QNX_MCP_SSH_KEY" in st["error"]["hint"], st
             err, ps = await c.call("processes", target=TARGET)
             assert err and ps["error"]["code"] == "internal_error" and "QNX_MCP_SSH_KEY" in ps["error"]["hint"], ps
             err, env = await c.call("environment_check")

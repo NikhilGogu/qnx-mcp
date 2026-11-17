@@ -603,9 +603,17 @@ class Target:
                 st["dumper_args"] = dumper or None
                 st["core_naming"] = "sequential" if re.search(r"\s-[nN]\b", f" {dumper}") else "fixed"
             except QnxMcpError as e:
+                # The ssh field reports what the target answered (or that it did not). A refusal made on this host before
+                # ssh runs (unsafe state dir or key path, missing host keys or key) is the server's configuration, so it
+                # fails the call with the same error every other tool returns.
+                if e.code not in PROBE_ERRORS:
+                    raise
                 st["state"] = "booting" if e.code in ("ssh_failed", "timeout") else st["state"]
                 st["ssh"] = e.to_dict()
         return st
+
+
+PROBE_ERRORS = ("ssh_failed", "timeout", "host_key_mismatch", "remote_failed")
 
 
 def list_targets(cfg: Config) -> list[dict[str, Any]]:
