@@ -31,6 +31,8 @@ DEMO = ROOT / "examples" / "crash_demo"
 TICKER = '#include <stdio.h>\n#include <unistd.h>\nint main(void){ for (int i = 0;; i++) { printf("tick %d\\n", i); fflush(stdout); usleep(200000); } }\n'
 REFUSED = {"EPERM", "EACCES"}
 REFUSED_OR_READ_ONLY = REFUSED | {"EROFS"}
+# /proc/boot is the boot image; QNX 8.0 answers a create there with ENOENT (seen on a QEMU target as uid 1000).
+REFUSED_IN_PROC_BOOT = REFUSED_OR_READ_ONLY | {"ENOENT"}
 
 
 def _attempts(stdout: str) -> dict[str, dict]:
@@ -71,8 +73,9 @@ def test_program_runs_as_run_as_and_cannot_escalate(tmp_path: Path):
                 for name in ("signal_procnto", "signal_runner", "open_procnto_ctl_rw", "setuid_0",
                              "threadctl_io", "mmap_device_memory", "list_other_run", "read_other_run_output"):
                     assert got[name]["succeeded"] is False and got[name]["errno_name"] in REFUSED, got[name]
-                for name in ("create_in_proc_boot", "create_in_system_bin", "create_in_etc"):
+                for name in ("create_in_system_bin", "create_in_etc"):
                     assert got[name]["succeeded"] is False and got[name]["errno_name"] in REFUSED_OR_READ_ONLY, got[name]
+                assert got["create_in_proc_boot"]["succeeded"] is False and got["create_in_proc_boot"]["errno_name"] in REFUSED_IN_PROC_BOOT
                 # The run's own output still reaches the agent through the runner.
                 err, p = await c.call("run_poll", target=TARGET, run_id=other["run_id"])
                 assert not err and "tick" in p["stdout"], p
