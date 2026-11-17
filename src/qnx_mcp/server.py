@@ -670,7 +670,7 @@ async def run_start(
 @mcp.tool(
     title="Poll a background run",
     description="Read new output of a run_start run from byte offsets (pass back stdout_next and stderr_next) and its state: running, finished "
-    "(with outcome and the final result) or lost (target rebooted). wait_s waits up to that long for new output or the end. "
+    "(with outcome and the final result) or lost (target rebooted). wait_s waits up to that long for new output or the end, checking after 0.5 s, 1 s and then every 2 s. "
     "Only runs started by this server are accessible.",
     annotations=RO,
 )
