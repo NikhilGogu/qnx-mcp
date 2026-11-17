@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -101,7 +102,9 @@ def test_crash_slice(tmp_path: Path):
 
             err, r = await c.call("deploy_and_run", target=TARGET, binary=art["path"], timeout_s=20)
             assert not err and r["outcome"] == "crashed" and r["signal_name"] == "SIGSEGV", r
-            assert r["dumper"] == "notified" and r["core_path"] == f"/tmp/qnx-mcp/runs/{r['run_id']}/crash_demo.core", r
+            # Images made by target_create run dumper -n (crash_demo.1.core); other images keep the fixed name.
+            core_name = r"crash_demo\.[0-9]+\.core" if st["core_naming"] == "sequential" else r"crash_demo\.core"
+            assert r["dumper"] == "notified" and re.fullmatch(f"/tmp/qnx-mcp/runs/{r['run_id']}/{core_name}", r["core_path"]), r
             assert r["dumper_core_path"].startswith("/data/var/dumper/") and r["group_clean"] and r["capture_complete"], r
             assert 0 <= r["core_ready_ms"] < 5000, r
             assert "imu: average offset 6" in r["stdout"] and r["binary_sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest()

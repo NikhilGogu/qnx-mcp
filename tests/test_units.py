@@ -1300,3 +1300,94 @@ def test_qcc_sources_need_a_source_extension(tmp_path: Path):
     for name in ("a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"):
         (proj / name).write_text("\n")
     assert build(cfg, str(proj), system="qcc", sources=["a.c", "b.cpp", "c.cc", "d.cxx", "e.s", "f.S"])["ok"]
+
+
+def test_qcc_library_search_is_checked_by_content(tmp_path: Path):
+    """ld opens libNAME.so or libNAME.a in each -L directory for -lNAME and reads a text file as a linker script."""
+    from helpers import write_elf
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    proj = ws / "proj"
+    (proj / "lib").mkdir()
+    (proj / "lib" / "libtext.so").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libtext2.a").write_text("INPUT(/etc/hosts)\n")
+    (proj / "lib" / "libthin.a").write_bytes(b"!<thin>\n")
+    write_elf(tmp_path / "outside.so")
+    (proj / "lib" / "liblink.so").symlink_to(tmp_path / "outside.so")
+    for cflags, ldflags in ((None, ["-Llib", "-ltext"]), (None, ["-L", "lib", "-ltext"]), (None, ["-L" + str(proj / "lib"), "-ltext2"]),
+                            (None, ["-Llib", "-lthin"]), (["-ltext"], ["-Llib"]), (None, ["-Llib", "-llink"])):
+        with pytest.raises(QnxMcpError) as e:
+            build(cfg, str(proj), system="qcc", cflags=cflags, ldflags=ldflags)
+        assert e.value.code in ("invalid_argument", "path_not_allowed") and "ldflags" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == []
+    write_elf(proj / "lib" / "libok.so")
+    (proj / "lib" / "libok2.a").write_bytes(b"!<arch>\n")
+    assert build(cfg, str(proj), system="qcc", ldflags=["-Llib", "-lok", "-lok2", "-lm"])["ok"]
+    assert _recorded(log)[0][-4:] == ["-Llib", "-lok", "-lok2", "-lm"]
+
+
+@pytest.mark.parametrize("name", ["key%%", "key%h", "key$HOME", "key${HOME}"])
+def test_ssh_key_that_ssh_would_expand_is_refused(tmp_path: Path, name: str):
+    """ssh expands % tokens and variables in the -i file name, so it would open another file than the one configured."""
+    from qnx_mcp.ops import environment_check
+    d = tmp_path / "targets" / "tb1" / "local" / "misc_files"
+    d.mkdir(parents=True)
+    (d.parent / "options").write_text("OPT_ARCH='x86_64'\n")
+    (d / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc root@qnx\n")
+
+    def cfg_for(key: Path) -> Config:
+        return Config.from_env({"QNX_MCP_TARGETS_DIR": str(tmp_path / "targets"), "QNX_MCP_STATE_DIR": str(tmp_path / "state"),
+                                "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_WORKSPACE": str(tmp_path), "QNX_MCP_SDP_ENV": str(tmp_path / "none"),
+                                "QNX_MCP_SSH_KEY": str(key)})
+
+    bad = cfg_for(tmp_path / name)
+    Path(str(bad.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    with pytest.raises(QnxMcpError) as e:
+        Target(bad, "tb1")._ssh_opts()
+    assert e.value.code == "internal_error" and "QNX_MCP_SSH_KEY" in (e.value.hint or ""), e.value.to_dict()
+    check = {c["check"]: c for c in environment_check(bad)["checks"]}["ssh_key"]
+    assert not check["ok"] and "QNX_MCP_SSH_KEY" in check["fix"]
+    good = cfg_for(tmp_path / "key dir" / "id_ed25519")  # whitespace is fine: -i is one argument and is not split
+    (tmp_path / "key dir").mkdir()
+    Path(str(good.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
+    assert ["-i", str(good.ssh_key)] == Target(good, "tb1")._ssh_opts()[-2:]
+    assert {c["check"]: c for c in environment_check(good)["checks"]}["ssh_key"]["ok"]
+
+
+def test_upload_removes_a_partial_copy_after_a_failed_or_cancelled_copy(fake_target):
+    """scp can leave part of the file at the temporary name; it is removed even when the call was cancelled."""
+    from qnx_mcp import util
+    from qnx_mcp.ops import _upload
+    t, _, app = fake_target
+    sha, size = _sha(app), app.stat().st_size
+    ctx = util.CallContext()
+    ctx.cancelled = True
+    fake = FakeRemote(t, [QnxMcpError("cancelled", "the client cancelled this call"), _reply()])
+    ssh = fake.ssh
+
+    def ssh_like_run(argv, **kw):
+        util.check_cancelled()  # the real ssh refuses to start inside a cancelled call
+        return ssh(argv, **kw)
+
+    t.ssh = ssh_like_run
+    token = util.CURRENT_CALL.set(ctx)
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            _upload(t, "10.0.0.1", app, "/tmp/qnx-mcp/apps/x/app", sha, size, "0755", "/tmp/qnx-mcp/bin/r")
+    finally:
+        util.CURRENT_CALL.reset(token)
+    assert e.value.code == "cancelled"
+    (k1, (_, tmp)), (k2, rm) = fake.calls
+    assert k1 == "put" and k2 == "ssh" and rm == ["rm", "-f", tmp] and tmp.startswith("/tmp/qnx-mcp/apps/x/app.part-")
+
+
+def test_missing_core_build_id_message_does_not_blame_the_core():
+    """The core's build ID is read at the address of the given binary's note, so a wrong binary finds none there
+    either; seen on a target with a core that does hold a build ID. The message must not say the core has none."""
+    from qnx_mcp import crash
+    with pytest.raises(QnxMcpError) as e:
+        crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, None, _mi(), _CORE_INFO)
+    assert e.value.code == "core_mismatch" and "not the one that crashed" in e.value.message, e.value.to_dict()
+    rec = {**_RUN_REC, "remote_binary": True, "remote_path": "/tmp/qnx-mcp/apps/abc/crash"}
+    ev = crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, rec, _mi(), _CORE_INFO)
+    assert ev["verified"] is False and "may not be the one that ran" in ev["evidence"], ev

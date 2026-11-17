@@ -20,7 +20,7 @@ from typing import Any
 
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
-from .target import STATE_DIR_FIX, Target, ssh_path_problem
+from .target import SSH_KEY_FIX, STATE_DIR_FIX, Target, ssh_key_problem, ssh_path_problem
 from .util import (
     ENV_NAME_RE, REMOTE_NAME_RE, WORKSPACE_HINT, Config, QnxMcpError, check_cancelled, check_host_path, check_remote_path, check_run_id,
     private_dir, quote_argv, tail, uncancellable, within, write_private,
@@ -147,8 +147,9 @@ def _snapshot_binary(local: Path, dest_dir: Path, arch: str) -> tuple[Path, str,
 def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, mode: str, hasher: str | None) -> None:
     """scp to a unique temporary name, verify size, mode and SHA-256 on the target, then rename."""
     tmp = f"{remote}.part-{uuid.uuid4().hex[:8]}"
-    t.put(local, tmp, timeout=300, ip=ip)
     try:
+        # inside the try: a failed or cancelled scp can leave a partial copy at the temporary name
+        t.put(local, tmp, timeout=300, ip=ip)
         r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([hasher or tmp, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
         got = _parse_runner(r.out, "upload verification")
         if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
@@ -160,7 +161,7 @@ def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, m
             )
         t.ssh(["mv", "-f", tmp, remote], timeout=30, what="upload rename", ip=ip)
     except BaseException:
-        with contextlib.suppress(QnxMcpError):
+        with uncancellable(), contextlib.suppress(QnxMcpError):
             t.ssh(["rm", "-f", tmp], timeout=15, what="upload cleanup", ip=ip, check=False)
         raise
 
@@ -675,8 +676,8 @@ def file_put(cfg: Config, target: str, local_path: str, remote_path: str, mode: 
                 raise QnxMcpError("file_exists", f"{remote} already exists on {target}", hint="Pass overwrite=true to replace it.")
             tmp_name = f".{os.path.basename(remote)}.part-{uuid.uuid4().hex[:8]}"
             tmp = f"{os.path.dirname(remote)}/{tmp_name}"
-            t.put(snap, tmp, timeout=300, ip=ip)
             try:
+                t.put(snap, tmp, timeout=300, ip=ip)  # a failed or cancelled scp can leave a partial copy
                 r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([runner, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
                 got = _parse_runner(r.out, "upload verification")
                 if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
@@ -1032,7 +1033,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     for tool in ("qemu-system-x86_64", "ssh", "scp"):
         add(f"tool:{tool}", bool(shutil.which(tool)), shutil.which(tool) or "not found", f"Install {tool} (apt install qemu-system-x86 openssh-client).")
     key = Path(str(cfg.ssh_key) + ".pub")
-    add("ssh_key", key.is_file(), str(key), "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
+    key_why = ssh_key_problem(cfg.ssh_key)
+    add("ssh_key", key.is_file() and key_why is None, key_why or str(key),
+        SSH_KEY_FIX if key_why else "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
     add("dhcp_leases", cfg.leases.is_file(), str(cfg.leases), "Not fatal: IP lookup falls back to mkqnximage --getip (arp).")
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")

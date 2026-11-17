@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* In qcc mode `build` also checks the files that `-lNAME` finds in a `-L` directory (`libNAME.so`, `libNAME.a`) by content and by real path, because ld reads a text file found there as a linker script.
+* An ssh key path (`QNX_MCP_SSH_KEY`) with `%` or `$` is refused before ssh runs and reported by `environment_check`, because ssh expands these in the `-i` file name and would open another file.
+* An upload whose scp fails or is cancelled removes its `.part-` file on the target.
 * `build` refuses `cflags` and `ldflags` in make mode, where they were checked and then dropped. cmake mode now sets C, C++ and linker flags on every configure, empty when omitted.
 * The cmake toolchain file is written to a new file and renamed into place, so a symlink at its name is replaced instead of followed.
 * `get_crash` refuses a core with `core_mismatch` when gdb names no executable or no pid for it. Before, a missing value could compare equal to an empty field of the run record.

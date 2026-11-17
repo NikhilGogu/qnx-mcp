@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ pytestmark = pytest.mark.skipif(not CFG.sdp_env.is_file(), reason="QNX SDP not i
 SRC = '#include <stdio.h>\nint main(void)\n{\n    int unused;\n    puts("hello from QNX");\n    return 0;\n}\n'
 
 
+@pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake is not installed (optional for qnx-mcp)")
 def test_cmake_project(tmp_path: Path):
     (tmp_path / "main.c").write_text(SRC)
     (tmp_path / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.16)\nproject(hello C)\nadd_executable(hello main.c)\ntarget_compile_options(hello PRIVATE -Wall)\n")
