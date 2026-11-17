@@ -1379,3 +1379,15 @@ def test_upload_removes_a_partial_copy_after_a_failed_or_cancelled_copy(fake_tar
     assert e.value.code == "cancelled"
     (k1, (_, tmp)), (k2, rm) = fake.calls
     assert k1 == "put" and k2 == "ssh" and rm == ["rm", "-f", tmp] and tmp.startswith("/tmp/qnx-mcp/apps/x/app.part-")
+
+
+def test_missing_core_build_id_message_does_not_blame_the_core():
+    """The core's build ID is read at the address of the given binary's note, so a wrong binary finds none there
+    either; seen on a target with a core that does hold a build ID. The message must not say the core has none."""
+    from qnx_mcp import crash
+    with pytest.raises(QnxMcpError) as e:
+        crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, None, _mi(), _CORE_INFO)
+    assert e.value.code == "core_mismatch" and "not the one that crashed" in e.value.message, e.value.to_dict()
+    rec = {**_RUN_REC, "remote_binary": True, "remote_path": "/tmp/qnx-mcp/apps/abc/crash"}
+    ev = crash._provenance(Path("core"), Path("bin"), {"build_id": "ab" * 10}, "b" * 64, rec, _mi(), _CORE_INFO)
+    assert ev["verified"] is False and "may not be the one that ran" in ev["evidence"], ev

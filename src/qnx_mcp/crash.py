@@ -122,7 +122,8 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
     elif not bin_bid:
         problems.append("the binary has no GNU build ID, so a core not produced by a recorded run cannot be matched to it")
     elif not core_bid:
-        problems.append("the core does not contain its executable's build ID note")
+        problems.append("no build ID was found in the core at the address of this binary's build ID note "
+                        "(the core holds none, or this binary is not the one that crashed)")
     elif core_bid != bin_bid:
         problems.append(f"the core's executable has build ID {core_bid}, the binary {bin_bid}")
     if problems:
@@ -130,7 +131,7 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
                           hint="Pass the exact unstripped binary that crashed (same build), or use the run_id of the run that crashed.", provenance=ev)
     if remote and ev["build_id_match"] is not True:
         # The program came from the target, so only a build ID in the core ties the host binary to the code that ran.
-        ev["evidence"] = "pid and path match; build ID not available (" + ("the binary has none" if not bin_bid else "the core holds no build ID note") + ")"
+        ev["evidence"] = "pid and path match; build ID not available (" + ("the binary has none" if not bin_bid else "none in the core at the address of this binary's note; the binary may not be the one that ran") + ")"
         ev["verified"] = False
         return ev
     ev["evidence"] = ("build ID, " if ev["build_id_match"] else "") + ("executable path and pid match" if rec else "match")
