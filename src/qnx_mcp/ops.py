@@ -167,6 +167,19 @@ def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, m
         raise
 
 
+def _secure_dirs_script(dirs: list[str]) -> str:
+    """POSIX sh for the target. /tmp is writable by every local user, so each directory (parents first) is created
+    0700 when missing and must then be a real directory owned by the user running the script (root), else exit 4.
+    Without this, a user who created /tmp/qnx-mcp first could swap the runner or an app, or read cores and output."""
+    parts = []
+    for d in dirs:
+        q = quote_argv([d])
+        parts.append(f"{{ test -L {q} || test -d {q} || mkdir -m 0700 {q}; }}; "
+                     f"if test -L {q} || ! test -d {q} || ! test -O {q} || ! chmod 0700 {q}; then "
+                     f"echo {quote_argv([f'qnx-mcp: refused {d}: not a directory owned by this user'])} >&2; exit 4; fi;")
+    return " ".join(parts)
+
+
 def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mkdirs: list[str], prune: bool = False) -> str:
     """Make sure the runner and the given files are on the target with the right bytes.
 
@@ -178,10 +191,12 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     runner_local, digest = runner_binary(t.cfg, t.arch)
     runner_sha, runner_size = _sha256_file(runner_local), runner_local.stat().st_size
     runner_remote = f"{REMOTE_ROOT}/bin/qnx-mcp-run-{digest}"
-    dirs = sorted({f"{REMOTE_ROOT}/bin", f"{REMOTE_ROOT}/runs", f"{REMOTE_ROOT}/apps", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
+    dirs = sorted({REMOTE_ROOT, f"{REMOTE_ROOT}/bin", f"{REMOTE_ROOT}/runs", f"{REMOTE_ROOT}/apps", *mkdirs, *(os.path.dirname(f[1]) for f in files)})
     for d in dirs:
         check_remote_path(d)
-    parts = [f"mkdir -p {quote_argv(dirs)} || exit 3; R={quote_argv([runner_remote])};"]
+        if not _in_managed_dir(d):
+            raise QnxMcpError("internal_error", f"{d} is outside {REMOTE_ROOT}")
+    parts = [f"{_secure_dirs_script(dirs)} R={quote_argv([runner_remote])};"]
     for p in [runner_remote, *(f[1] for f in files)]:
         q = quote_argv([p])
         # exactly one line per file, even if the runner is missing or broken
@@ -196,7 +211,12 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
         parts.append(f"if test \"$(\"$R\" -V 2>/dev/null)\" = {ver}; then "
                      f"\"$R\" -G {REMOTE_ROOT}/runs -k {KEEP_REMOTE_RUNS} -a 300 {quote_argv(keep_runs)} >/dev/null 2>&1; "
                      f"\"$R\" -G {REMOTE_ROOT}/apps -k {KEEP_APPS} -a 600 {quote_argv(keep_apps)} >/dev/null 2>&1; fi;")
-    r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip)
+    r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip, check=False)
+    if r.returncode == 4:
+        raise QnxMcpError("remote_failed", f"qnx-mcp's directory on {t.name} is not private: {tail(r.err.strip(), 300)}",
+                          hint=f"Another user created it, or it is a link. Remove {REMOTE_ROOT} on the target as root and retry.")
+    if r.returncode != 0:
+        raise QnxMcpError("remote_failed", f"deploy check on {t.name} exited with status {r.returncode}", stdout=tail(r.out, 800), stderr=tail(r.err, 800))
     lines = [line for line in r.out.split("\n") if line.strip()]
     if len(lines) != len(files) + 1:
         raise QnxMcpError("remote_failed", "deploy check output was not recognised", stdout=tail(r.out, 800))

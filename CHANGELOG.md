@@ -16,6 +16,7 @@
 * Non-root runs: with `QNX_MCP_RUN_AS=uid:gid` the runner starts the agent's program as that user and group, and a failed drop stops the run before the program starts. Not yet tested on a target (`tests/test_nonroot_e2e.py`).
 * `environment_check` and `target_status` report `privileges`: the login user, who programs run as, and per tool its identity and what it needs on the target.
 * New error code `config_error` for server configuration the agent cannot fix.
+* `/tmp/qnx-mcp` and its subdirectories on the target must be root-owned real directories and are set to 0700; background output files are created 0600. Needs a live run to confirm.
 * `build` accepts two-element flag forms (`-I dir`, `-D NAME`), `-isystem`, `-iquote` and `-include` with workspace paths, `-Wl,-Map` with a workspace path, prefix maps, `PREFIX` and `DESTDIR` inside the workspace, and in qcc mode `-D` values that are double-quoted strings without spaces.
 * `build` refuses compiler, linker and make arguments outside an allow-list, and host paths are always confined to the workspace (the server's working directory when `QNX_MCP_WORKSPACE` is not set).
 * A tag `v<version>` builds the wheel, tests the installed wheel and attaches it to a GitHub Release (`.github/workflows/release.yml`).
