@@ -3,11 +3,12 @@
 # Run it on the Linux build host from the repository root, with the venv that has qnx-mcp installed:
 #
 #   QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2 \
-#     scripts/live-tests.sh
+#     QNX_MCP_E2E_RUN_AS=1000:1000 scripts/live-tests.sh
 #
 # QNX_MCP_ALLOW_TARGETS  must allow both targets below (the tests also check that other names are refused)
 # QNX_MCP_E2E_TARGET  a running target the tests may use (created with target_create)
 # QNX_MCP_E2E_CREATE  a target name the lifecycle test creates, boots and destroys (must not exist)
+# QNX_MCP_E2E_RUN_AS  numeric uid:gid for the non-root tests; it need not exist in the image's /etc/passwd
 #
 # The log goes to docs/evidence/test-run-<version>.log. Each suite runs even if an earlier one failed,
 # and the script exits non-zero if any did. A suite without a single passed test counts as failed:
@@ -29,6 +30,7 @@ fi
 
 : "${QNX_MCP_E2E_TARGET:?set QNX_MCP_E2E_TARGET to a running target}"
 : "${QNX_MCP_E2E_CREATE:?set QNX_MCP_E2E_CREATE to a target name that does not exist yet}"
+: "${QNX_MCP_E2E_RUN_AS:?set QNX_MCP_E2E_RUN_AS to a non-root uid:gid}"
 : "${QNX_MCP_ALLOW_TARGETS:?set QNX_MCP_ALLOW_TARGETS, for example 'tb,tb[0-9]*'}"
 export QNX_MCP_ALLOW_TARGETS
 PYTHON=${PYTHON:-python}
@@ -51,9 +53,10 @@ suite() {
     uname -srm
     "$PYTHON" --version
 } | tee -a "$log"
-suite "$PYTHON" -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py
+suite "$PYTHON" -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py test_nonroot.py
 suite "$PYTHON" -m pytest -q -s -p no:asyncio test_build_sdk.py test_boundary_sdk.py
 suite "$PYTHON" -m pytest -q -s -p no:asyncio test_slice_e2e.py test_shellfree_e2e.py
 suite "$PYTHON" -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py
+suite "$PYTHON" -m pytest -q -s -p no:asyncio test_nonroot_e2e.py
 echo "log: $log"
 exit $failed
