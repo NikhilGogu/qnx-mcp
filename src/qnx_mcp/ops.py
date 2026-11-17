@@ -147,8 +147,9 @@ def _snapshot_binary(local: Path, dest_dir: Path, arch: str) -> tuple[Path, str,
 def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, mode: str, hasher: str | None) -> None:
     """scp to a unique temporary name, verify size, mode and SHA-256 on the target, then rename."""
     tmp = f"{remote}.part-{uuid.uuid4().hex[:8]}"
-    t.put(local, tmp, timeout=300, ip=ip)
     try:
+        # inside the try: a failed or cancelled scp can leave a partial copy at the temporary name
+        t.put(local, tmp, timeout=300, ip=ip)
         r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([hasher or tmp, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
         got = _parse_runner(r.out, "upload verification")
         if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:
@@ -160,7 +161,7 @@ def _upload(t: Target, ip: str, local: Path, remote: str, sha: str, size: int, m
             )
         t.ssh(["mv", "-f", tmp, remote], timeout=30, what="upload rename", ip=ip)
     except BaseException:
-        with contextlib.suppress(QnxMcpError):
+        with uncancellable(), contextlib.suppress(QnxMcpError):
             t.ssh(["rm", "-f", tmp], timeout=15, what="upload cleanup", ip=ip, check=False)
         raise
 
@@ -675,8 +676,8 @@ def file_put(cfg: Config, target: str, local_path: str, remote_path: str, mode: 
                 raise QnxMcpError("file_exists", f"{remote} already exists on {target}", hint="Pass overwrite=true to replace it.")
             tmp_name = f".{os.path.basename(remote)}.part-{uuid.uuid4().hex[:8]}"
             tmp = f"{os.path.dirname(remote)}/{tmp_name}"
-            t.put(snap, tmp, timeout=300, ip=ip)
             try:
+                t.put(snap, tmp, timeout=300, ip=ip)  # a failed or cancelled scp can leave a partial copy
                 r = t.ssh_script(f"chmod {mode} {quote_argv([tmp])} && {quote_argv([runner, '-H', tmp])}", timeout=60, what="upload verification", ip=ip)
                 got = _parse_runner(r.out, "upload verification")
                 if got.get("sha256") != sha or got.get("size") != size or got.get("mode") != mode:

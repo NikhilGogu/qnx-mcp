@@ -1352,3 +1352,30 @@ def test_ssh_key_that_ssh_would_expand_is_refused(tmp_path: Path, name: str):
     Path(str(good.ssh_key) + ".pub").write_text("ssh-ed25519 AAAA x\n")
     assert ["-i", str(good.ssh_key)] == Target(good, "tb1")._ssh_opts()[-2:]
     assert {c["check"]: c for c in environment_check(good)["checks"]}["ssh_key"]["ok"]
+
+
+def test_upload_removes_a_partial_copy_after_a_failed_or_cancelled_copy(fake_target):
+    """scp can leave part of the file at the temporary name; it is removed even when the call was cancelled."""
+    from qnx_mcp import util
+    from qnx_mcp.ops import _upload
+    t, _, app = fake_target
+    sha, size = _sha(app), app.stat().st_size
+    ctx = util.CallContext()
+    ctx.cancelled = True
+    fake = FakeRemote(t, [QnxMcpError("cancelled", "the client cancelled this call"), _reply()])
+    ssh = fake.ssh
+
+    def ssh_like_run(argv, **kw):
+        util.check_cancelled()  # the real ssh refuses to start inside a cancelled call
+        return ssh(argv, **kw)
+
+    t.ssh = ssh_like_run
+    token = util.CURRENT_CALL.set(ctx)
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            _upload(t, "10.0.0.1", app, "/tmp/qnx-mcp/apps/x/app", sha, size, "0755", "/tmp/qnx-mcp/bin/r")
+    finally:
+        util.CURRENT_CALL.reset(token)
+    assert e.value.code == "cancelled"
+    (k1, (_, tmp)), (k2, rm) = fake.calls
+    assert k1 == "put" and k2 == "ssh" and rm == ["rm", "-f", tmp] and tmp.startswith("/tmp/qnx-mcp/apps/x/app.part-")
