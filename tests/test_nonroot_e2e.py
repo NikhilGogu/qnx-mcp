@@ -97,10 +97,14 @@ def test_crash_is_still_verified_as_run_as(tmp_path: Path):
             err, b = await c.call("build", path=str(DEMO), output=str(exe))
             assert not err, b
             err, r = await c.call("deploy_and_run", target=TARGET, binary=str(exe), timeout_s=30)
-            print("\n--- crash_demo as", RUN_AS, json.dumps({k: r.get(k) for k in ("outcome", "dumper", "core_path", "exec_error", "run_as")}))
+            print("\n--- crash_demo as", RUN_AS, json.dumps({k: r.get(k) for k in ("outcome", "dumper", "dumper_core_path", "core_path", "core_exposed", "exec_error", "run_as")}))
             assert not err and r["outcome"] == "crashed" and r["dumper"] == "notified" and r["core_path"], r
+            # Only dumper's own private directory keeps the core from the program's user until the runner takes it.
+            assert (r["core_exposed"] is None) == r["dumper_core_path"].startswith("/data/var/dumper/"), r
             err, cr = await c.call("get_crash", target=TARGET, run_id=r["run_id"])
             assert not err and cr["provenance"]["verified"] is True and cr["faulting_frame"]["function"] == "read_calibration", cr
+            assert cr["provenance"]["core_exposed"] == r["core_exposed"], cr["provenance"]
+            print("--- provenance evidence:", cr["provenance"]["evidence"])
     run_async(go())
 
 

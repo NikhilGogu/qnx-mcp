@@ -786,6 +786,7 @@ struct result {
     char core_path[PATH_MAX];
     char dumper_core_path[PATH_MAX];
     const char *core_move_error;
+    char core_exposed[PATH_MAX + 96]; /* why the program's user could reach the core before take_core, or "" */
 };
 
 static void sink_read(struct sink *s)
@@ -1122,9 +1123,59 @@ static void supervise(const struct opts *o, struct result *r, struct sink *out, 
 }
 
 /* dumper writes the core as the program's user (0640). Make it the runner's own (root) and 0600 while it is still
- * in dumper's directory (on mkqnximage images /data/var/dumper, 0700 and owned by dumper's uid), which the program's
- * user cannot reach; so no process of that user can open it there or after it moves into the run directory. The
- * descriptor is opened without following links, and the moved file is checked to be the same inode. */
+ * in dumper's directory, then move it; so no process of that user can open it after that. The descriptor is opened
+ * without following links, and the moved file is checked to be the same inode. This keeps the core from the user
+ * only if the user could not reach dumper's directory before (core_reachable). */
+/* Whether the program's user (-u) could have reached the core where dumper wrote it, and so opened, changed or
+ * replaced it before take_core. On mkqnximage images dumper writes to /data/var/dumper (0700, dumper's uid), but
+ * the core of a user with a home directory goes to that home (dumper -D), which the user owns. Conservative: no
+ * directory from the core's up to / may belong to the user or be writable by group or others (sticky excepted),
+ * and the core's own directory must give group and others nothing (so no ACL entry can grant anything either).
+ * Writes the reason to why and returns 1 when the core was reachable or this could not be checked. */
+static int core_reachable(const struct opts *o, const char *path, char *why, size_t n)
+{
+    char dir[PATH_MAX];
+    if (!o->drop) {
+        return 0;
+    }
+    if (path[0] != '/' || snprintf(dir, sizeof dir, "%s", path) >= (int)sizeof dir) {
+        snprintf(why, n, "could not check the core path %s", path);
+        return 1;
+    }
+    for (int first = 1;; first = 0) {
+        char *slash = strrchr(dir, '/');
+        if (slash == dir) {
+            slash[1] = '\0';
+        } else {
+            *slash = '\0';
+        }
+        struct stat st;
+        if (lstat(dir, &st) == -1) {
+            snprintf(why, n, "could not check %s", dir);
+            return 1;
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            snprintf(why, n, "dumper wrote it below %s, which is a link that was not followed for the check", dir);
+            return 1;
+        }
+        if (st.st_uid == o->uid) {
+            snprintf(why, n, "dumper wrote it in %s, which belongs to the program's user", dir);
+            return 1;
+        }
+        if (first && (st.st_mode & 077) != 0) {
+            snprintf(why, n, "dumper wrote it in %s, which is open to group or others (mode %04o)", dir, (unsigned)(st.st_mode & 07777));
+            return 1;
+        }
+        if ((st.st_mode & (S_IWGRP | S_IWOTH)) != 0 && (st.st_mode & S_ISVTX) == 0) {
+            snprintf(why, n, "%s, above dumper's directory, is writable by group or others", dir);
+            return 1;
+        }
+        if (strcmp(dir, "/") == 0) {
+            return 0;
+        }
+    }
+}
+
 static const char *take_core(const char *path, struct stat *st)
 {
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -1193,6 +1244,7 @@ static void wait_core(const struct opts *o, struct dumper *d, struct result *r)
             char dst[PATH_MAX];
             struct stat st, now;
             const char *taken;
+            core_reachable(o, r->dumper_core_path, r->core_exposed, sizeof r->core_exposed);
             if (snprintf(dst, sizeof dst, "%s/%s", o->core_dir, base) >= (int)sizeof dst) {
                 r->core_move_error = "path too long";
             } else if ((taken = take_core(r->dumper_core_path, &st)) != NULL) {
@@ -1259,6 +1311,8 @@ static void print_result(FILE *f, const struct result *r, const struct sink *out
     j_cstr(f, r->have_core ? r->dumper_core_path : NULL);
     fputs(",\"core_move_error\":", f);
     j_cstr(f, r->core_move_error);
+    fputs(",\"core_exposed\":", f);
+    j_cstr(f, r->have_core && r->core_exposed[0] ? r->core_exposed : NULL);
     j_warnings(f);
     fputs("}\n", f);
 }

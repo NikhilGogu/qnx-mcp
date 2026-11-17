@@ -81,6 +81,11 @@ def _gunzip(src: Path, limit: int) -> Path:
     return dst
 
 
+def _exposed_note(ev: dict[str, Any]) -> str:
+    """The evidence is read from the core, so it is only as good as the core: say so when the run's user could reach it."""
+    return f"; the run's user could reach the core before qnx-mcp took it ({ev['core_exposed']}), so a process of that user could have written this evidence" if ev["core_exposed"] else ""
+
+
 def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str, rec: dict[str, Any] | None,
                 mi: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
     """Evidence that the core belongs to this binary (and, for a run, to this run's process):
@@ -116,6 +121,7 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
         "executable_match": (exe is not None and exe in (rec["remote_path"], rec.get("remote_real_path"))) if rec else None,
         "pid_match": (core_pid is not None and core_pid == rec.get("pid")) if rec else None,
         "core_sha256": info["sha256"], "core_size": info["size"],
+        "core_exposed": rec.get("core_exposed") if rec else None,
     }
     problems = []
     if rec is not None:
@@ -142,10 +148,10 @@ def _provenance(core: Path, binary: Path, bin_info: dict[str, Any], bin_sha: str
         why = ("neither the program that ran nor this binary has one" if linkmap is not None else "the binary has none" if not bin_bid else
                "the core has no readable link map note naming this executable, and none in the core at the address of this binary's note; "
                "the binary may not be the one that ran")
-        ev["evidence"] = f"pid and path match; build ID not available ({why})"
+        ev["evidence"] = f"pid and path match; build ID not available ({why})" + _exposed_note(ev)
         ev["verified"] = False
         return ev
-    ev["evidence"] = ("build ID, " if ev["build_id_match"] else "") + ("executable path and pid match" if rec else "match")
+    ev["evidence"] = ("build ID, " if ev["build_id_match"] else "") + ("executable path and pid match" if rec else "match") + _exposed_note(ev)
     ev["verified"] = True
     return ev
 

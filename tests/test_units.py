@@ -1543,3 +1543,14 @@ def test_remote_dir_modes_let_a_non_root_program_reach_only_its_own_paths(fake_t
     for d, mode in (("/tmp/qnx-mcp", "0711"), ("/tmp/qnx-mcp/apps", "0711"), ("/tmp/qnx-mcp/apps/0123456789abcdef", "0711"),
                     ("/tmp/qnx-mcp/runs", "0711"), ("/tmp/qnx-mcp/bin", "0700"), ("/tmp/qnx-mcp/runs/r-000000000001", "0700")):
         assert f"mkdir -m {mode} {d};" in script and f"chmod {mode} {d};" in script, (d, mode)
+
+
+def test_provenance_says_when_the_run_user_could_reach_the_core():
+    """dumper writes the core of a user with a home directory into that home, which the user owns, so a process of
+    that user could change it before the runner takes it; the runner reports that and get_crash passes it on."""
+    from qnx_mcp import crash
+    rec = {**_RUN_REC, "core_exposed": "dumper wrote it in /data/home/qnxuser/cores, which belongs to the program's user"}
+    ev = crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, rec, _mi(), _CORE_INFO)
+    assert ev["verified"] is True and ev["core_exposed"] == rec["core_exposed"], ev
+    assert ev["evidence"].startswith("executable path and pid match; the run's user could reach the core") and "/data/home/qnxuser" in ev["evidence"]
+    assert crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, _RUN_REC, _mi(), _CORE_INFO)["core_exposed"] is None

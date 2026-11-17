@@ -198,6 +198,8 @@ class RunFields(_M):
     core_path: str | None = Field(description="Core path on the target (moved into the run's directory)")
     dumper_core_path: str | None = Field(description="Path dumper reported through DCMD_DUMPER_GETPATH")
     core_move_error: str | None
+    core_exposed: str | None = Field(None, description="Non-root runs: why the program's user could reach the core before the runner took it "
+                                     "(for example dumper wrote it in that user's home), so a process of that user could have changed it; null when it could not")
     warnings: list[dict[str, Any]]
 
 
@@ -318,6 +320,8 @@ class Provenance(_M):
     core_pid: int | None = Field(description="Process id in the core's thread list")
     core_build_id: str | None = Field(description="GNU build ID of the executable that ran, from the core's QNX link map note, else from the executable's note in the core's memory")
     core_build_id_source: Literal["link_map", "note"] | None = Field(None, description="Where core_build_id came from; link_map does not depend on the binary given")
+    core_exposed: str | None = Field(None, description="Set when the run's user could reach the core before the runner took it: the core, and so this "
+                                     "evidence, could have been written by a process of that user")
     build_id_match: bool | None
     executable_match: bool | None = Field(description="core_executable equals the content-addressed path the run deployed")
     pid_match: bool | None = Field(description="core_pid equals the pid of the run that crashed")

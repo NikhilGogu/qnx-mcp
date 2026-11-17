@@ -427,7 +427,7 @@ def _crash_step(target: str, rid: str, rec: dict[str, Any]) -> str:
 
 def _finish_record(rec: dict[str, Any], res: dict[str, Any]) -> None:
     rec.update(state="finished", outcome=_outcome(res), finished_at=time.time(),
-               **{k: res.get(k) for k in ("pid", "exit_code", "signal", "signal_name", "core_path", "dumper_core_path", "dumper")})
+               **{k: res.get(k) for k in ("pid", "exit_code", "signal", "signal_name", "core_path", "dumper_core_path", "dumper", "core_exposed")})
 
 
 def deploy_and_run(
