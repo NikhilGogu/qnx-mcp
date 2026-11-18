@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* SSH-only targets: `target_register` and `target_unregister` (21 tools) add an existing QNX 8.0 machine that is reachable only over SSH, such as QNX's QNX OS 8.0 AMI on AWS Graviton (aarch64le, user `qnxuser`), as a second target kind. `target_list` and `target_status` show `kind`. Offline tests only so far; no QNX OS 8.0 AMI run yet (`tests/test_ssh_target_e2e.py` is the live suite).
+* `QNX_MCP_SSH_HOSTS` (operator allowlist of hosts) decides which machines may be registered; unset refuses all. The host key is pinned on first contact only if it hashes to the given `host_key_fingerprint` (or with `QNX_MCP_TRUST_FIRST_USE=1`), then checked with `StrictHostKeyChecking=yes`. Host-key checking is never disabled.
+* `target_start`, `target_stop` and `target_destroy` refuse SSH-only targets with the new error code `target_kind_unsupported`; `target_register` outside the allowlist fails with the new code `ssh_host_not_allowed`.
+* `build` takes `target` and builds for that target's architecture; an explicit `arch` that differs is refused with `arch_mismatch`. `arch` now defaults to the target's, else x86_64.
+* The login user is taken from the target (`qnxuser` for SSH-only targets): `/tmp/qnx-mcp` ownership checks use `test -O`, `QNX_MCP_RUN_AS` is refused with `config_error` for a non-root login, and `privileges` reports the login user.
+* `environment_check` marks the QEMU-only checks as applying to QEMU targets, optional when `QNX_MCP_SSH_HOSTS` is set and no QEMU target exists, and adds `ssh_hosts` and `tool:ssh-keygen`.
+* `scripts/live-tests.sh` accepts an SSH-only machine (`QNX_MCP_E2E_SSH_HOST` and `QNX_MCP_E2E_SSH_FINGERPRINT`) and runs the QEMU suites only when their variables are set.
 * In qcc mode `build` also checks the files that `-lNAME` finds in a `-L` directory (`libNAME.so`, `libNAME.a`) by content and by real path, because ld reads a text file found there as a linker script.
 * An ssh key path (`QNX_MCP_SSH_KEY`) with `%` or `$` is refused before ssh runs and reported by `environment_check`, because ssh expands these in the `-i` file name and would open another file.
 * An upload whose scp fails or is cancelled removes its `.part-` file on the target.

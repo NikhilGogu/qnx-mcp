@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .abilities import describe_program_identity, privileges
+from .abilities import LOGIN_USER, describe_program_identity, privileges
 from .parsers import SEVERITY_NAMES, elf_info, parse_pidin, parse_slog2
 from .sdk import runner_binary, sdk_env
 from .target import SSH_KEY_FIX, STATE_DIR_FIX, Target, ssh_key_problem, ssh_path_problem
@@ -226,7 +226,7 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     r = t.ssh_script(" ".join(parts), timeout=60, what="deploy check", ip=ip, check=False)
     if r.returncode == 4:
         raise QnxMcpError("remote_failed", f"qnx-mcp's directory on {t.name} is not private: {tail(r.err.strip(), 300)}",
-                          hint=f"Another user created it, or it is a link. Remove {REMOTE_ROOT} on the target as root and retry.")
+                          hint=f"Another user created it, or it is a link. Remove {REMOTE_ROOT} on the target as its owner or root and retry.")
     if r.returncode != 0:
         raise QnxMcpError("remote_failed", f"deploy check on {t.name} exited with status {r.returncode}", stdout=tail(r.out, 800), stderr=tail(r.err, 800))
     lines = [line for line in r.out.split("\n") if line.strip()]
@@ -278,11 +278,17 @@ def _check_args(args: list[Any] | None, env: dict[str, str] | None) -> list[str]
     return out
 
 
-def _run_as_argv(cfg: Config) -> list[str]:
-    """Runner option for non-root runs. A bad QNX_MCP_RUN_AS refuses the run rather than running it as root."""
+def _run_as_argv(cfg: Config, t: Target | None = None) -> list[str]:
+    """Runner option for non-root runs. A bad QNX_MCP_RUN_AS refuses the run rather than running it as root.
+    The runner can only drop to another uid when it is root itself, so a target with a non-root login refuses
+    QNX_MCP_RUN_AS instead of ignoring it: its programs already run as that login user (qnxuser on QNX's AMI)."""
     if cfg.run_as_error:
         raise QnxMcpError("config_error", f"{cfg.run_as_error}, so this server refuses to start programs",
                           hint="Ask the person running qnx-mcp to fix QNX_MCP_RUN_AS (numeric uid:gid, not 0) or unset it; environment_check shows it.")
+    if cfg.run_as and t is not None and t.login_user != LOGIN_USER:
+        raise QnxMcpError("config_error", f"QNX_MCP_RUN_AS is set, but target {t.name} logs in as {t.login_user}, not root, so the runner cannot switch to uid "
+                          f"{cfg.run_as[0]}; this server refuses to start programs there rather than run them as another user than asked",
+                          hint=f"Unset QNX_MCP_RUN_AS to run programs as {t.login_user} on this target, or register the target with a root login.")
     return ["-u", f"{cfg.run_as[0]}:{cfg.run_as[1]}"] if cfg.run_as else []
 
 
@@ -444,7 +450,7 @@ def deploy_and_run(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = _check_args(args, env)
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096) + _run_as_argv(cfg)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 3600, 4096) + _run_as_argv(cfg, t)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -511,7 +517,7 @@ def run_start(
 ) -> dict[str, Any]:
     t = Target(cfg, target)
     args = _check_args(args, env)
-    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536) + _run_as_argv(cfg)
+    opts = _run_options(timeout_s, core_wait_s, max_output_kb, env, cwd, 86400, 65536) + _run_as_argv(cfg, t)
     rid = new_run_id()
     prog = _program(cfg, t, binary, remote_binary, rid)
     with _discard_unrecorded(t, rid), t.lock(exclusive=False):
@@ -987,6 +993,33 @@ def stop_result(target: str, pid: int, proc: dict[str, Any], text: str, grace_s:
     return result
 
 
+# ---------------------------------------------------------------- SSH-only targets
+
+
+def unregister_target(cfg: Config, target: str) -> dict[str, Any]:
+    """Forget an SSH-only target. A run still in flight would be left on a machine this server can no longer
+    reach, so it is refused until the runs are stopped or have ended."""
+    t = Target(cfg, target)
+    if t.kind == "ssh":
+        live = _in_flight(t)
+        if live:
+            raise QnxMcpError("target_busy", f"{len(live)} run(s) are still in flight on {target}: {', '.join(r['run_id'] for r in live[:5])}",
+                              hint="Stop them with run_stop (or wait for them to end), then call target_unregister again.")
+    return t.unregister()
+
+
+def build_arch(cfg: Config, target: str | None, arch: str | None) -> str:
+    """The architecture to build for: the target's own when a target is named (an explicit arch must agree with it),
+    else the given one, else x86_64."""
+    if target is None:
+        return arch or "x86_64"
+    t = Target(cfg, target)
+    if arch is not None and arch != t.arch:
+        raise QnxMcpError("arch_mismatch", f"build was asked for {arch} but target {target} is {t.arch}",
+                          hint=f"Omit arch to build for {target}, or omit target to build for {arch}.")
+    return t.arch
+
+
 # ---------------------------------------------------------------- processes and logs
 
 _PROC_FMT = "%a|%e|%U|%c|%d|%N|%n|%A"
@@ -1085,6 +1118,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
         add("tool:cmake", bool(shutil.which("cmake")), shutil.which("cmake") or "not found (only needed for CMake projects)", "apt install cmake")
     except QnxMcpError as e:
         add("qnx_sdp", False, e.message, e.hint)
+    # QEMU-only checks do not decide ok on a host that serves SSH-only machines and has no QEMU target
+    qemu_needed = not cfg.ssh_hosts or any((d / "local" / "options").is_file() for d in (cfg.targets_dir.iterdir() if cfg.targets_dir.is_dir() else []))
+    qemu_only = {"kvm", "tool:qemu-system-x86_64", "tool:mkqnximage", "dhcp_leases"}
     if not os.path.exists("/dev/kvm"):
         add("kvm", False, "no /dev/kvm on this host: QEMU targets need a Linux x86_64 host with KVM",
             "Run qnx-mcp on a Linux host with KVM and the QNX SDP, and connect your agent to it through ssh -T "
@@ -1100,6 +1136,9 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     add("ssh_key", key.is_file() and key_why is None, key_why or str(key),
         SSH_KEY_FIX if key_why else "ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519")
     add("dhcp_leases", cfg.leases.is_file(), str(cfg.leases), "Not fatal: IP lookup falls back to mkqnximage --getip (arp).")
+    add("ssh_hosts", True, (f"QNX_MCP_SSH_HOSTS={','.join(cfg.ssh_hosts)}" if cfg.ssh_hosts else "QNX_MCP_SSH_HOSTS is not set: target_register refuses every machine (QEMU targets are unaffected)")
+        + ("; first use pinning is on (QNX_MCP_TRUST_FIRST_USE=1)" if cfg.trust_first_use else "; target_register needs host_key_fingerprint"))
+    add("tool:ssh-keygen", bool(shutil.which("ssh-keygen")), shutil.which("ssh-keygen") or "not found (target_register checks a host key fingerprint with it)", "Install openssh-client.")
     add("allowlist", bool(cfg.allow), f"QNX_MCP_ALLOW_TARGETS={','.join(cfg.allow)}" if cfg.allow else "QNX_MCP_ALLOW_TARGETS is not set: every target is refused",
         "Set QNX_MCP_ALLOW_TARGETS (e.g. 'dev*', or '*' for every target in the targets dir).")
     add("targets_dir", True, str(cfg.targets_dir))
@@ -1120,4 +1159,8 @@ def environment_check(cfg: Config) -> dict[str, Any]:
     for c in checks:
         if c["check"] in ("tool:cmake", "dhcp_leases", "tool:ntoaarch64-gdb"):
             c["optional"] = True
+        if c["check"] in qemu_only:
+            c["applies_to"] = "qemu targets"
+            if not qemu_needed:
+                c["optional"] = True
     return {"ok": all(c["ok"] for c in checks if not c.get("optional")), "checks": checks, "privileges": privileges(cfg)}

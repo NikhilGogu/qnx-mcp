@@ -1,6 +1,6 @@
 ---
 name: qnx-mcp
-description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background, including programs already installed on the target; copy files and list target directories; stop processes qnx-mcp did not start; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available, and especially when you have no shell on the target. Written for qnx-mcp v0.4.0.dev0 (19 tools)."
+description: "Which qnx-mcp tool (mcp__qnx__*) to use for QNX OS 8.0 work on QEMU targets and on QNX 8.0 machines registered over SSH: create, start, stop and destroy targets; build with the QNX SDP; run programs once or in the background, including programs already installed on the target; copy files and list target directories; stop processes qnx-mcp did not start; turn a crash into a source-level backtrace; diagnose hangs from thread states; read slog2 logs. Read this before building or running anything when the qnx MCP tools are available, and especially when you have no shell on the target. Written for qnx-mcp v0.4.0.dev0 (21 tools)."
 license: Apache-2.0
 ---
 
@@ -21,14 +21,16 @@ In Claude Code the tools are called `mcp__qnx__<tool>` and may be deferred; load
 | Boot an existing target again (no rebuild) | `target_start(name, boot_timeout_s)` |
 | Power a target off (files on its disk stay; background runs are lost) | `target_stop(name)` |
 | Delete a target for good (`confirm` repeats the name) | `target_destroy(name, confirm)` |
+| Add an existing QNX 8.0 machine that is reachable only over SSH (for example QNX's QNX OS 8.0 AMI); the operator must have allowed its host | `target_register(name, host, arch, user, port, key, host_key_fingerprint)` |
+| Forget such a machine (it is not touched; `confirm` repeats the name) | `target_unregister(name, confirm)` |
 
-Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `target_start(name)` if it is stopped.
+Call `target_status(name)` after `target_down` or `ssh_failed` errors, and `target_start(name)` if it is stopped. `target_list` and `target_status` show each target's `kind`: `qemu`, or `ssh` for a registered machine. For an `ssh` target, `target_start`, `target_stop` and `target_destroy` fail with `target_kind_unsupported`: you cannot power the machine, only use it. Ask the person running the server to start it. If `target_register` fails with `ssh_host_not_allowed`, that host is not in the server's `QNX_MCP_SSH_HOSTS`; do not try another address, ask the person. A registered machine logs in as a normal user, so programs run as that user.
 
 ## Build, run, debug
 
 | You want to | Use |
 |---|---|
-| Compile with the SDP (make, cmake or one qcc call); errors come back as `diagnostics[]` with file, line, column, severity, message | `build(path, system, arch, sources, output, cflags, ldflags, make_args)` |
+| Compile with the SDP (make, cmake or one qcc call); errors come back as `diagnostics[]` with file, line, column, severity, message | `build(path, system, arch, target, sources, output, cflags, ldflags, make_args)`; pass `target` to build for that target's architecture (an `ssh` target may be aarch64le) |
 | Run a program once with a deadline; get `outcome`, `exit_code` or `signal_name`, stdout, stderr | `deploy_and_run(target, binary, args, timeout_s, env, cwd)` |
 | Turn a crash (SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT) into a backtrace with file, line, locals, source lines and every thread's stack | `get_crash(target, run_id)` |
 | Analyse a core that qnx-mcp did not produce | `get_crash(target, core_path, binary)` with the exact unstripped binary that crashed |

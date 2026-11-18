@@ -25,4 +25,4 @@ qnx_mcp = ["runner/*.c"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["target: needs a running QNX target (QNX_MCP_E2E_TARGET)", "sdk: needs the QNX SDP on this host"]
+markers = ["target: needs a running QNX target (QNX_MCP_E2E_TARGET, or QNX_MCP_E2E_SSH_HOST for an SSH-only one)", "sdk: needs the QNX SDP on this host"]

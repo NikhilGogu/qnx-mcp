@@ -15,7 +15,7 @@ from helpers import mcp_client, run_async, write_elf
 
 EXPECTED = {"target_list", "target_create", "target_start", "target_stop", "target_destroy", "target_status", "build", "deploy_and_run",
             "run_start", "run_poll", "run_stop", "get_crash", "file_put", "file_get", "file_list", "processes", "process_stop", "logs",
-            "environment_check"}
+            "environment_check", "target_register", "target_unregister"}
 
 
 def _env(tmp: Path, allow: str = "tb*") -> dict[str, str]:
@@ -53,7 +53,7 @@ def test_tools_have_descriptions_schemas_and_annotations(tmp_path: Path):
             assert _hint(a["build"], "idempotent_hint") is False and _hint(a["build"], "destructive_hint") is True
             for n in ("target_list", "target_status", "get_crash", "processes", "logs", "run_poll", "environment_check", "file_list"):
                 assert _hint(a[n], "read_only_hint") is True, n
-            for n in ("target_stop", "target_destroy", "deploy_and_run", "run_start", "run_stop", "file_put", "process_stop"):
+            for n in ("target_stop", "target_destroy", "target_unregister", "deploy_and_run", "run_start", "run_stop", "file_put", "process_stop"):
                 assert _hint(a[n], "destructive_hint") is True and _hint(a[n], "read_only_hint") is False, n
     run_async(go())
 
@@ -115,6 +115,19 @@ def test_error_results_match_declared_schemas(tmp_path: Path):
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/proc/boot/ksh"}, "path_not_allowed"),
                 ("run_start", {"target": "tb9", "remote_binary": "/data/home/sh"}, "path_not_allowed"),
                 ("deploy_and_run", {"target": "tb9", "remote_binary": "/opt/tool"}, "path_not_allowed"),
+                # SSH-only targets: no QNX_MCP_SSH_HOSTS is set here, so the server logs in to nothing
+                ("target_register", {"name": "tb7", "host": "qnx.example.com", "arch": "aarch64le", "host_key_fingerprint": "SHA256:" + "A" * 43}, "ssh_host_not_allowed"),
+                ("target_register", {"name": "tb7", "host": "169.254.1.1", "arch": "x86_64"}, "invalid_argument"),
+                ("target_register", {"name": "tb7", "host": "qnx.example.com", "arch": "x86_64", "host_key_fingerprint": "SHA256:short"}, "invalid_argument"),
+                ("target_register", {"name": "tb7", "host": "qnx.example.com", "arch": "arm"}, "invalid_argument"),  # the input schema itself
+                ("target_register", {"name": "tb7", "host": "qnx.example.com", "arch": "x86_64", "port": 70000}, "invalid_argument"),
+                ("target_register", {"name": "t0", "host": "qnx.example.com", "arch": "x86_64"}, "target_not_allowed"),
+                ("target_unregister", {"name": "tb9", "confirm": "tb8"}, "invalid_argument"),
+                ("target_unregister", {"name": "tb9", "confirm": "tb9"}, "target_kind_unsupported"),  # a QEMU target is destroyed, not unregistered
+                ("target_unregister", {"name": "tb1", "confirm": "tb1"}, "target_not_found"),
+                ("build", {"path": str(tmp_path), "target": "tb1"}, "target_not_found"),
+                ("build", {"path": str(tmp_path), "target": "t0"}, "target_not_allowed"),
+                ("build", {"path": str(tmp_path), "target": "tb9", "arch": "aarch64le"}, "arch_mismatch"),  # tb9 is x86_64
             ]
             for tool, args, code in cases:
                 err, data = await c.call(tool, **args)
