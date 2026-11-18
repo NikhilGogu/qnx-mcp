@@ -1,10 +1,11 @@
 # Copyright 2026 The qnx-mcp authors
 # SPDX-License-Identifier: Apache-2.0
-"""QEMU targets built with mkqnximage, one directory per target, plus SSH access."""
+"""Targets, one directory each: QEMU guests built with mkqnximage, and existing QNX machines reachable only over SSH."""
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import ipaddress
 import json
 import os
@@ -13,6 +14,7 @@ import select
 import shlex
 import shutil
 import signal
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -23,6 +25,17 @@ from .util import (
     Config, ProcResult, QnxMcpError, check_cancelled, check_remote_path, check_target_name, file_lock, private_dir,
     quote_argv, run, tail, wait_until, write_private,
 )
+
+# ---- SSH-only targets (kind "ssh"): a machine qnx-mcp did not build and cannot power on or off.
+# The registration is one file in the target's directory; the directory has no local/options.
+SSH_TARGET_FILE = "ssh-target.json"
+KIND_QEMU, KIND_SSH = "qemu", "ssh"
+SSH_DEFAULT_USER = "qnxuser"  # the login of QNX's official QNX OS 8.0 AMI
+_SSH_USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+_HOSTNAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?){0,10}")
+_NUMERIC_LABEL_RE = re.compile(r"0[xX][0-9A-Fa-f]*")
+# ssh-keygen -l output for SHA-256: 32 bytes in unpadded base64
+FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 
 # mkqnximage options an agent may pass through target_create, with value patterns.
 # Values end up inside mkqnximage's own sourced option files, so they are kept to
@@ -129,9 +142,109 @@ def parse_leases(text: str, mac: str, now: float) -> list[str]:
     return [ip for _, ip in sorted(out, reverse=True)]
 
 
+def check_ssh_host(host: Any) -> str:
+    """A host name or IP literal that ssh will read as exactly that machine. Link-local, unspecified, multicast
+    and reserved addresses are refused (the cloud metadata services live there), and so are names that the
+    resolver would read as a number ('2852039166', '0xa9fea9fe', '1.2.3'), which could name the same places."""
+    bad = QnxMcpError("invalid_argument", f"invalid ssh host {host!r}",
+                      hint="Use a DNS name or an IPv4/IPv6 address (no scheme, port, user or zone id).")
+    if not isinstance(host, str) or not 1 <= len(host) <= 253:
+        raise bad
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        if (not _HOSTNAME_RE.fullmatch(host) or not re.search(r"[A-Za-z]", labels[-1])
+                or any(_NUMERIC_LABEL_RE.fullmatch(lab) for lab in labels)):
+            raise bad from None
+        return host.lower()
+    mapped = getattr(ip, "ipv4_mapped", None)
+    for a in (ip, mapped) if mapped else (ip,):
+        if a.is_link_local or a.is_unspecified or a.is_multicast or a.is_reserved:
+            raise QnxMcpError("invalid_argument", f"ssh host {host} is a link-local, unspecified, multicast or reserved address",
+                              hint="That range holds the cloud metadata services; qnx-mcp never contacts it.")
+    return str(ip)
+
+
+@dataclasses.dataclass(frozen=True)
+class SshConfig:
+    """What the registration file of an SSH-only target holds. Validated again every time it is read."""
+    host: str
+    port: int
+    user: str
+    arch: str
+    key: str | None  # absolute path; None: QNX_MCP_SSH_KEY
+    fingerprint: str | None  # SHA256:... the host key had to have at registration; None: pinned at first contact
+
+    def to_json(self) -> bytes:
+        return (json.dumps({"kind": KIND_SSH, **dataclasses.asdict(self)}, indent=1) + "\n").encode()
+
+
+def validate_ssh_config(host: Any, port: Any, user: Any, arch: Any, key: Any, fingerprint: Any) -> SshConfig:
+    host = check_ssh_host(host)
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+        raise QnxMcpError("invalid_argument", f"invalid ssh port {port!r}", hint="Use 1-65535.")
+    if not isinstance(user, str) or not _SSH_USER_RE.fullmatch(user):
+        raise QnxMcpError("invalid_argument", f"invalid login user {user!r}", hint="Use a lowercase user name, e.g. qnxuser.")
+    check_arch(arch)
+    if key is not None:
+        if not isinstance(key, str) or not key.startswith("/") or "\0" in key or "\n" in key:
+            raise QnxMcpError("invalid_argument", f"ssh key {key!r} must be an absolute path", hint="Or omit it to use QNX_MCP_SSH_KEY.")
+        why = ssh_key_problem(Path(key))
+        if why:
+            raise QnxMcpError("invalid_argument", f"the ssh key cannot be passed to ssh: {why}", hint="Use a key path without '%' or '$'.")
+    if fingerprint is not None and (not isinstance(fingerprint, str) or not FINGERPRINT_RE.fullmatch(fingerprint)):
+        raise QnxMcpError("invalid_argument", f"invalid host key fingerprint {fingerprint!r}",
+                          hint="Use the SHA256 form that ssh-keygen -l prints, e.g. SHA256:abc... (43 base64 characters).")
+    return SshConfig(host, port, user, arch, key, fingerprint)
+
+
+def load_ssh_config(path: Path) -> SshConfig:
+    """Read a registration file: a small regular file (never a link) that validates. Anything else fails closed."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+            raise ValueError("not a small regular file")
+        d = json.loads(path.read_text())
+        if not isinstance(d, dict) or d.get("kind") != KIND_SSH:
+            raise ValueError("kind is not ssh")
+        return validate_ssh_config(d.get("host"), d.get("port"), d.get("user"), d.get("arch"), d.get("key"), d.get("fingerprint"))
+    except (OSError, ValueError, QnxMcpError) as e:
+        raise QnxMcpError("config_error", f"the SSH-only registration {path} is not valid: {e}",
+                          hint="Remove the target with target_unregister (or delete its directory) and register it again.") from None
+
+
+def pinned_fingerprints(known_hosts: Path) -> list[str]:
+    """SHA256 fingerprints of the host keys in a known_hosts file, as ssh-keygen -l prints them."""
+    if shutil.which("ssh-keygen") is None:
+        raise QnxMcpError("tool_missing", "ssh-keygen not found on this host", hint="Install openssh-client.")
+    r = run(["ssh-keygen", "-l", "-f", str(known_hosts)], timeout=15)
+    out = []
+    for line in r.out.splitlines():
+        fields = line.split()
+        if r.returncode == 0 and len(fields) >= 2 and FINGERPRINT_RE.fullmatch(fields[1]):
+            out.append(fields[1])
+    return out
+
+
+def machine_matches_arch(machine: str, arch: str) -> bool:
+    """False only on a clear contradiction between the target's own `uname -m` and the registered arch
+    (aarch64le registered on an x86 machine or the reverse); anything else is left to the ELF check at deploy time."""
+    m = machine.lower()
+    if arch == "aarch64le":
+        return "x86" not in m
+    return "aarch64" not in m and "arm" not in m
+
+
+def _is_target_dir(d: Path) -> bool:
+    return (d / "local" / "options").is_file() or os.path.lexists(d / SSH_TARGET_FILE)
+
+
 class Target:
     def __init__(self, cfg: Config, name: str, *, must_exist: bool = True):
         self._moved: dict[str, str] = {}  # stale address -> address that answered after rediscovery
+        self._ssh: SshConfig | None = None  # set for SSH-only targets
+        self._registering = False  # first contact of target_register: the one time a host key may be accepted
         self.cfg = cfg
         self.name = check_target_name(cfg, name)
         self.dir = cfg.targets_dir / name
@@ -146,14 +259,43 @@ class Target:
                     f"{self.dir} is a symlink or resolves outside {cfg.targets_dir}",
                     hint="qnx-mcp only manages real directories directly inside the targets dir.",
                 )
-        if must_exist and not (self.dir / "local" / "options").is_file():
+        qemu_dir = (self.dir / "local" / "options").is_file()
+        if os.path.lexists(self.dir / SSH_TARGET_FILE):
+            if qemu_dir:
+                raise QnxMcpError("target_not_allowed", f"{self.dir} holds both an mkqnximage image and an SSH-only registration",
+                                  hint="Remove one of them; qnx-mcp will not guess which machine is meant.")
+            self._ssh = load_ssh_config(self.dir / SSH_TARGET_FILE)
+        if must_exist and not qemu_dir and self._ssh is None:
             raise QnxMcpError(
                 "target_not_found",
                 f"no target named {name!r} in {cfg.targets_dir}",
-                hint="Call target_list to see targets, or target_create to build one.",
+                hint="Call target_list to see targets, target_create to build a QEMU one or target_register for a machine reachable over SSH.",
             )
 
     # ------------------------------------------------------------ metadata
+
+    @property
+    def kind(self) -> str:
+        """qemu: an mkqnximage guest this server builds, boots and stops. ssh: an existing machine reached over SSH only."""
+        return KIND_SSH if self._ssh is not None else KIND_QEMU
+
+    @property
+    def login_user(self) -> str:
+        return self._ssh.user if self._ssh is not None else LOGIN_USER
+
+    @property
+    def ssh_key(self) -> Path:
+        return Path(self._ssh.key) if self._ssh is not None and self._ssh.key else self.cfg.ssh_key
+
+    def require_qemu(self, tool: str, hint: str) -> None:
+        """Refuse a VM lifecycle tool on an SSH-only target: qnx-mcp did not build the machine and cannot power it."""
+        if self._ssh is not None:
+            raise QnxMcpError(
+                "target_kind_unsupported",
+                f"{tool} manages a QEMU guest built by mkqnximage, but {self.name} is an SSH-only target "
+                f"({self._ssh.user}@{self._ssh.host}:{self._ssh.port}), which qnx-mcp cannot power on, power off or delete",
+                hint=hint,
+            )
 
     @property
     def options(self) -> dict[str, str]:
@@ -161,6 +303,8 @@ class Target:
 
     @property
     def arch(self) -> str:
+        if self._ssh is not None:
+            return self._ssh.arch
         return self.options.get("OPT_ARCH", "x86_64")
 
     @property
@@ -189,6 +333,8 @@ class Target:
     def qemu_pidfd(self) -> tuple[int, int] | None:
         """(pid, pidfd) of this target's QEMU. The pidfd is opened first and the process verified
         afterwards, so later signals reach exactly the process that was verified."""
+        if self._ssh is not None:
+            return None
         try:
             pid = int((self.dir / "output" / "qemu.pid").read_text().strip())
             fd = os.pidfd_open(pid)
@@ -224,7 +370,7 @@ class Target:
         (arp). No port is probed: sshd on the QNX 8.0 images (OpenSSH 10) penalises connections that never
         authenticate and then drops every connection from the host for a while."""
         mac = self.mac or ""
-        if not mac:
+        if not mac or self._ssh is not None:  # an SSH-only machine has one fixed address: nothing to rediscover
             return []
         try:
             text = self.cfg.leases.read_text()
@@ -241,6 +387,8 @@ class Target:
         """Current IPv4 address: the newest live lease, else mkqnximage --getip. A stale lease shows up as an ssh
         connection failure, after which the address is rediscovered and the command retried once (_run_ssh).
         Identity is not taken from the address: the pinned host key is what proves which machine answered."""
+        if self._ssh is not None:
+            return self._ssh.host
         if not self.mac:
             return None
         ips = self.candidates(getip=False)
@@ -270,7 +418,9 @@ class Target:
 
     def image_host_keys(self) -> list[str]:
         """Host public keys that mkqnximage generated on this host (--sshd-pregen=yes, its default)."""
-        keys = []
+        keys: list[str] = []
+        if self._ssh is not None:
+            return keys
         for kind in ("ed25519", "rsa"):
             with contextlib.suppress(OSError):
                 fields = (self.dir / "local" / "misc_files" / f"ssh_host_{kind}_key.pub").read_text().split()
@@ -279,6 +429,8 @@ class Target:
         return keys
 
     def host_key_policy(self) -> str:
+        if self._ssh is not None:
+            return "fingerprint" if self._ssh.fingerprint else "first_use"
         if self.image_host_keys():
             return "image"
         return "first_use" if self.cfg.trust_first_use else "unverifiable"
@@ -286,6 +438,8 @@ class Target:
     def pin_host_keys(self) -> str:
         """Pin the image's own host keys under this target's HostKeyAlias. Images without
         pre-generated keys are pinned on first contact and kept until target_create/destroy."""
+        if self._ssh is not None:
+            return self.host_key_policy()  # pinned by target_register, never rewritten from here
         keys = self.image_host_keys()
         if keys:
             write_private(self.known_hosts, "".join(f"{self.alias} {k}\n" for k in keys).encode())
@@ -296,7 +450,7 @@ class Target:
         why = ssh_path_problem(self.known_hosts)
         if why:
             raise QnxMcpError("internal_error", f"the host-key pin file cannot be passed to ssh: {why}", hint=STATE_DIR_FIX)
-        why = ssh_key_problem(self.cfg.ssh_key)
+        why = ssh_key_problem(self.ssh_key)
         if why:
             raise QnxMcpError("internal_error", f"the ssh key cannot be passed to ssh: {why}", hint=SSH_KEY_FIX)
         private_dir(self.state)
@@ -305,7 +459,25 @@ class Target:
             have = self.known_hosts.read_text()
         except OSError:
             have = ""
-        if keys:
+        extra: list[str] = []
+        if self._ssh is not None:
+            if not self.ssh_key.is_file():
+                raise QnxMcpError("ssh_key_missing", f"ssh key {self.ssh_key} of target {self.name} not found",
+                                  hint="Restore the key file, or target_unregister and target_register again with another key.")
+            pinned = any(line.startswith(self.alias + " ") for line in have.splitlines())
+            if pinned:
+                strict = "yes"
+            elif self._registering or (self._ssh.fingerprint is None and self.cfg.trust_first_use):
+                strict = "accept-new"  # target_register's first contact (its fingerprint is checked right after), or first-use policy
+            else:
+                raise QnxMcpError(
+                    "host_key_missing",
+                    f"the pinned host key of target {self.name} is missing, so the machine's identity cannot be verified",
+                    hint="target_unregister and target_register it again (give host_key_fingerprint); qnx-mcp does not re-pin a fingerprint target silently.",
+                )
+            extra = ["-o", f"Port={self._ssh.port}", "-o", "HashKnownHosts=no", "-o", "PreferredAuthentications=publickey",
+                     "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
+        elif keys:
             # The image's key files on this host are the source of truth; re-pin if the file drifted.
             want = "".join(f"{self.alias} {k}\n" for k in keys)
             if have != want:
@@ -321,7 +493,7 @@ class Target:
             strict = "yes" if any(line.startswith(self.alias + " ") for line in have.splitlines()) else "accept-new"
         return [
             "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=5",
+            "-o", f"ConnectTimeout={10 if self._ssh is not None else 5}",
             "-o", "ServerAliveInterval=5",
             "-o", "ServerAliveCountMax=3",
             "-o", f"UserKnownHostsFile={self.known_hosts}",
@@ -332,10 +504,13 @@ class Target:
             "-o", f"StrictHostKeyChecking={strict}",
             "-o", "LogLevel=ERROR",
             "-o", "IdentitiesOnly=yes",
-            "-i", str(self.cfg.ssh_key),
+            "-i", str(self.ssh_key),
+            *extra,
         ]
 
     def require_ip(self) -> str:
+        if self._ssh is not None:
+            return self._ssh.host
         if self.qemu_pid() is None:
             raise QnxMcpError("target_down", f"target {self.name} is not running", hint=f"Call target_start with name={self.name!r}.")
         ip = self.lookup_ip()
@@ -372,20 +547,20 @@ class Target:
     def ssh(self, argv: Sequence[str], *, timeout: float, what: str = "remote command", ip: str | None = None,
             check: bool = True, hold_stdin: bool = False, max_output: int = 8 << 20) -> ProcResult:
         """Run argv on the target; every element is quoted for the remote shell."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{self.login_user}@{a}", "--", quote_argv(argv)], ip, timeout=timeout, hold_stdin=hold_stdin,
                           max_output=max_output)
         self._classify(r, what, timeout, check)
         return r
 
     def ssh_script(self, script: str, *, timeout: float, what: str, ip: str | None = None, check: bool = True) -> ProcResult:
         """Run a fixed shell script. Callers build `script` only from constants and quote_argv()."""
-        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", script], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{self.login_user}@{a}", "--", script], ip, timeout=timeout)
         self._classify(r, what, timeout, check)
         return r
 
     def put(self, local: Path, remote: str, *, timeout: float, ip: str | None = None) -> None:
         check_remote_path(remote)
-        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"{LOGIN_USER}@{a}:{remote}"], ip, timeout=timeout)
+        r = self._run_ssh(lambda a: ["scp", "-q", "-p", *self._ssh_opts(), str(local), f"{self.login_user}@{_scp_host(a)}:{remote}"], ip, timeout=timeout)
         self._classify(r, f"copy to {remote}", timeout, check=False)
         if r.returncode != 0:
             raise QnxMcpError("deploy_failed", f"scp to {self.name}:{remote} failed", stderr=tail(r.err, 800))
@@ -398,7 +573,7 @@ class Target:
             def restart() -> None:
                 f.seek(0)
                 f.truncate()
-            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
+            r = self._run_ssh(lambda a: ["ssh", *self._ssh_opts(), f"{self.login_user}@{a}", "--", quote_argv([runner, "-X", remote, "-L", str(max(1, size))])],
                               ip, before_retry=restart, timeout=timeout, max_output=size, stdout_file=f)
         self._classify(r, f"copy from {remote}", timeout, check=False)
         if r.returncode != 0 or r.streamed_over(size):
@@ -407,6 +582,7 @@ class Target:
     # ------------------------------------------------------------ lifecycle
 
     def wait_ssh(self, timeout: float) -> str:
+        self.require_qemu("wait_ssh", _SSH_ONLY_HINT)
         deadline = time.monotonic() + timeout
         last = "no IP yet"
         next_getip = time.monotonic() + 8  # the lease file usually wins; arp fallback every 10 s after that
@@ -424,7 +600,7 @@ class Target:
             if use_getip:
                 next_getip = time.monotonic() + 10
             for ip in self.candidates(getip=use_getip, getip_timeout=8):  # authenticated attempts only, no port probes
-                r = run(["ssh", *self._ssh_opts(), f"{LOGIN_USER}@{ip}", "--", "true"], timeout=10)
+                r = run(["ssh", *self._ssh_opts(), f"{self.login_user}@{ip}", "--", "true"], timeout=10)
                 if r.returncode == 0:
                     return ip
                 if "Host key verification failed" in r.err or "REMOTE HOST IDENTIFICATION" in r.err:
@@ -459,6 +635,8 @@ class Target:
         return r
 
     def create(self, *, arch: str, ram: str, cpus: int, options: list[str], boot_timeout: float) -> dict[str, Any]:
+        if self._ssh is not None:
+            raise QnxMcpError("target_exists", f"target {self.name} already exists (an SSH-only target)", hint="Pick a new name.")
         check_arch(arch)
         if not isinstance(ram, str) or not _RAM_RE.fullmatch(ram):
             raise QnxMcpError("invalid_argument", f"bad ram {ram!r}", hint="Use e.g. 1G or 2048M.")
@@ -541,12 +719,80 @@ class Target:
         return f"{'stopped QEMU, ' if stopped else ''}removed {self.dir}"
 
     def destroy(self) -> dict[str, Any]:
+        self.require_qemu("target_destroy", _SSH_ONLY_HINT + " To drop the registration, call target_unregister.")
         with self.lock(exclusive=True):
             was_running = self.qemu_pid() is not None
             done = self._remove(created_dir=False)
         return {"name": self.name, "destroyed": True, "was_running": was_running, "detail": done}
 
+    def register(self, *, host: str, port: int, user: str, arch: str, key: str | None, fingerprint: str | None) -> dict[str, Any]:
+        """Register an existing machine reachable over SSH as an SSH-only target. Nothing is installed on it.
+
+        The host must be in the operator's QNX_MCP_SSH_HOSTS. Host key: with a fingerprint, the key the machine
+        presents on first contact is pinned and must hash to it (else nothing is kept); without one, the first key is
+        pinned as for QEMU images without pre-generated keys, which needs QNX_MCP_TRUST_FIRST_USE=1. After this
+        the pin is checked strictly (StrictHostKeyChecking=yes) on every call."""
+        conf = validate_ssh_config(host, port, user, arch, key, fingerprint)
+        if not self.cfg.ssh_hosts:
+            raise QnxMcpError("ssh_host_not_allowed", "this server has no SSH host allowlist, so it refuses to register machines",
+                              hint="Set QNX_MCP_SSH_HOSTS in the server's environment (comma-separated host globs such as 'qnx-ami.example.com'; '*' must be explicit).")
+        if not self.cfg.ssh_host_allowed(conf.host):
+            raise QnxMcpError("ssh_host_not_allowed", f"host {conf.host!r} is outside this server's SSH host allowlist {list(self.cfg.ssh_hosts)}",
+                              hint="The person running qnx-mcp decides which machines it may log in to (QNX_MCP_SSH_HOSTS).")
+        if conf.fingerprint is None and not self.cfg.trust_first_use:
+            raise QnxMcpError("host_key_missing", "no host key fingerprint was given, so the machine's identity could not be verified",
+                              hint="Pass host_key_fingerprint (SHA256:..., from ssh-keygen -l on the machine's key or the instance console output), "
+                                   "or set QNX_MCP_TRUST_FIRST_USE=1 to pin whatever key answers first (weaker).")
+        key_path = Path(conf.key) if conf.key else self.cfg.ssh_key
+        if not key_path.is_file():
+            raise QnxMcpError("ssh_key_missing", f"ssh key {key_path} not found", hint="Pass key (an absolute path) or set QNX_MCP_SSH_KEY; the machine must accept its public key.")
+        with self.lock(exclusive=True):
+            if os.path.lexists(self.dir):
+                raise QnxMcpError("target_exists", f"target directory {self.dir} already exists", hint="Pick a new name, or target_unregister an SSH-only target first.")
+            self.dir.mkdir(parents=True)
+            with contextlib.suppress(FileNotFoundError):
+                self.known_hosts.unlink()
+            try:
+                self._ssh = conf
+                self._registering = True
+                self.ssh_script("true", timeout=30, what="first contact")  # the only connection that may accept a new host key
+                self._registering = False
+                if conf.fingerprint is not None:
+                    got = pinned_fingerprints(self.known_hosts)
+                    if not got or any(g != conf.fingerprint for g in got):
+                        raise QnxMcpError(
+                            "host_key_mismatch",
+                            f"the machine at {conf.host}:{conf.port} presented a host key that is not the one registered ({conf.fingerprint})",
+                            hint="Check the address and the fingerprint; nothing was registered.", presented=got,
+                        )
+                write_private(self.dir / SSH_TARGET_FILE, conf.to_json())
+                st = self.status(probe=True, _locked=True)
+                if st.get("ssh") != "ok":
+                    raise QnxMcpError("ssh_failed", f"target {self.name} registered but the status probe failed", probe=st.get("ssh"))
+                if not machine_matches_arch(str(st.get("machine") or ""), conf.arch):
+                    raise QnxMcpError("arch_mismatch", f"{conf.host} reports machine {st.get('machine')!r}, which is not {conf.arch}",
+                                      hint="Register it with the other arch (x86_64 or aarch64le).")
+            except BaseException as e:
+                self._registering = False
+                cleanup = self._remove(True)
+                if isinstance(e, QnxMcpError):
+                    e.details["cleanup"] = cleanup
+                raise
+        st["registered"] = True
+        return st
+
+    def unregister(self) -> dict[str, Any]:
+        """Forget an SSH-only target: its registration, pinned key and run records on this host. The machine is not touched."""
+        if self._ssh is None:
+            raise QnxMcpError("target_kind_unsupported", f"{self.name} is a QEMU target; target_unregister only removes SSH-only registrations",
+                              hint="Use target_destroy to delete a QEMU target.")
+        with self.lock(exclusive=True):
+            detail = self._remove(created_dir=True)
+        return {"name": self.name, "unregistered": True, "detail": detail,
+                "note": f"{self._ssh.user}@{self._ssh.host} was not touched; programs and files qnx-mcp put on it (/tmp/qnx-mcp) stay there"}
+
     def start(self, boot_timeout: float) -> dict[str, Any]:
+        self.require_qemu("target_start", _SSH_ONLY_HINT + " Check it with target_status.")
         with self.lock(exclusive=True):
             if self.qemu_pid() is None:
                 self._mkqnximage(["--noprompt", "--run=-h"], timeout=600)
@@ -555,6 +801,7 @@ class Target:
         return self.status(probe=True)
 
     def stop(self, timeout: float = 30) -> dict[str, Any]:
+        self.require_qemu("target_stop", _SSH_ONLY_HINT)
         with self.lock(exclusive=True):
             was_running = self._stop_qemu(timeout)
             if was_running and not wait_until(lambda: self.qemu_pid() is None, 5):
@@ -563,25 +810,29 @@ class Target:
         st["was_running"] = was_running
         return st
 
-    def status(self, probe: bool = True) -> dict[str, Any]:
+    def status(self, probe: bool = True, _locked: bool = False) -> dict[str, Any]:
         opts = self.options
         pid = self.qemu_pid()
+        ssh_only = self._ssh is not None
         st: dict[str, Any] = {
             "name": self.name,
-            "state": "stopped" if pid is None else "running",
+            "kind": self.kind,
+            "state": ("registered" if ssh_only else "stopped") if pid is None else "running",
             "qemu_pid": pid,
-            "arch": opts.get("OPT_ARCH", "x86_64"),
+            "arch": self.arch,
             "ram": opts.get("OPT_RAM"),
             "cpus": int(opts["OPT_CPU"]) if opts.get("OPT_CPU", "").isdigit() else None,
             "mac": opts.get("OPT_MACADDR"),
             "directory": str(self.dir),
             "host_key_policy": self.host_key_policy(),
             "ip": None,
-            "privileges": {k: v for k, v in privileges(self.cfg).items() if k != "tools"},
+            "privileges": {k: v for k, v in privileges(self.cfg, self.login_user).items() if k != "tools"},
         }
-        if pid is None or not probe:
+        if self._ssh is not None:
+            st.update({"host": self._ssh.host, "port": self._ssh.port, "login_user": self._ssh.user})
+        if (pid is None and not ssh_only) or not probe:
             return st
-        with self.lock(exclusive=False):
+        with (contextlib.nullcontext() if _locked else self.lock(exclusive=False)):
             ip = self.lookup_ip()
             st["ip"] = ip
             if not ip:
@@ -596,7 +847,10 @@ class Target:
                 if len(lines) < 3 or not lines[1].strip().isdigit() or lines[2] not in ("dumper=yes", "dumper=no"):
                     raise QnxMcpError("remote_failed", "status probe output was not recognised", stdout=tail(r.out, 400))
                 st["ssh"] = "ok"
+                if ssh_only:
+                    st["state"] = "running"  # an SSH-only machine's power state is not ours; it answered
                 st["uname"] = lines[0]
+                st["machine"] = lines[0].split()[-1] if lines[0].split() else None
                 st["target_time"] = int(lines[1])
                 st["dumper_running"] = lines[2] == "dumper=yes"
                 dumper = lines[3].strip() if len(lines) > 3 else ""
@@ -608,10 +862,20 @@ class Target:
                 # fails the call with the same error every other tool returns.
                 if e.code not in PROBE_ERRORS:
                     raise
-                st["state"] = "booting" if e.code in ("ssh_failed", "timeout") else st["state"]
+                if ssh_only:
+                    st["state"] = "unreachable"
+                else:
+                    st["state"] = "booting" if e.code in ("ssh_failed", "timeout") else st["state"]
                 st["ssh"] = e.to_dict()
         return st
 
+
+def _scp_host(host: str) -> str:
+    """scp reads user@host:path, so an IPv6 literal needs brackets."""
+    return f"[{host}]" if ":" in host else host
+
+
+_SSH_ONLY_HINT = "Start and stop the machine with its own tooling (for example the AWS console or CLI); qnx-mcp only logs in to it."
 
 PROBE_ERRORS = ("ssh_failed", "timeout", "host_key_mismatch", "remote_failed")
 
@@ -621,7 +885,7 @@ def list_targets(cfg: Config) -> list[dict[str, Any]]:
     if not cfg.targets_dir.is_dir():
         return out
     for d in sorted(cfg.targets_dir.iterdir()):
-        if d.is_symlink() or not (d / "local" / "options").is_file() or not cfg.allowed(d.name):
+        if d.is_symlink() or not _is_target_dir(d) or not cfg.allowed(d.name):
             continue
         try:
             out.append(Target(cfg, d.name).status(probe=False))

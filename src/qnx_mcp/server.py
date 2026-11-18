@@ -26,11 +26,14 @@ log = logging.getLogger("qnx_mcp")
 
 INSTRUCTIONS = """\
 qnx-mcp gives you structured, bounded access to QNX OS 8.0 targets (QEMU virtual machines
-built with mkqnximage, reachable over SSH) and to the QNX SDP 8.0 toolchain on the build host.
+built with mkqnximage, or existing machines reachable only over SSH, such as QNX's QNX OS 8.0 AMI) and to the
+QNX SDP 8.0 toolchain on the build host.
 
 Typical loop:
-  1. target_list -> target_start (or target_create for a new VM) -> target_status.
-  2. build (qcc/make/cmake) -> read diagnostics[] (file, line, column, severity, message), fix, rebuild.
+  1. target_list -> target_start (or target_create for a new VM) -> target_status. target_list and target_status show each
+     target's kind: qemu (this server builds, boots and stops it) or ssh (an existing machine; target_register adds one
+     the server's operator allowed, target_unregister forgets it; start, stop and destroy are refused for it).
+  2. build (qcc/make/cmake; pass target= to build for that target's architecture) -> read diagnostics[] (file, line, column, severity, message), fix, rebuild.
   3. deploy_and_run with args and a timeout -> outcome is exited | crashed | killed | timeout | stopped | exec_failed.
   4. outcome == crashed -> get_crash(run_id) -> source-level backtrace of every thread, with locals and source lines.
   5. Services and long programs: run_start -> run_poll (pass back stdout_next/stderr_next) -> run_stop.
@@ -78,7 +81,7 @@ class _M(BaseModel):
 
 class ErrorInfo(_M):
     code: str = Field(description="Stable code: invalid_argument, path_not_allowed, target_not_found, target_not_allowed, target_exists, target_down, "
-                      "target_busy, ssh_failed, host_key_mismatch, host_key_missing, timeout, cancelled, sdk_missing, tool_missing, ssh_key_missing, mkqnximage_failed, "
+                      "target_busy, target_kind_unsupported, ssh_host_not_allowed, ssh_failed, host_key_mismatch, host_key_missing, timeout, cancelled, sdk_missing, tool_missing, ssh_key_missing, mkqnximage_failed, "
                       "build_failed, arch_mismatch, not_a_qnx_binary, deploy_failed, copy_failed, runner_failed, remote_failed, core_not_found, "
                       "core_too_large, core_mismatch, gdb_failed, file_exists, file_not_found, file_too_large, process_not_found, process_not_allowed, config_error, internal_error")
     message: str
@@ -94,15 +97,24 @@ class ToolErrorResult(_M):
 class TargetInfo(_M):
     ok: bool = True
     name: str
-    state: Literal["running", "stopped", "booting"]
+    kind: Literal["qemu", "ssh"] = Field("qemu", description="qemu: a guest this server builds with mkqnximage and powers on and off; "
+                                         "ssh: an existing machine reached over SSH only (target_register), whose power state is not ours")
+    state: Literal["running", "stopped", "booting", "registered", "unreachable"] = Field(
+        description="running/stopped/booting: QEMU targets (and running for an SSH-only target that answered the probe); "
+        "registered: an SSH-only target in a listing (no SSH made); unreachable: the SSH probe of an SSH-only target failed")
     qemu_pid: int | None = None
+    host: str | None = Field(None, description="SSH-only targets: the machine's address")
+    port: int | None = Field(None, description="SSH-only targets: the SSH port")
+    login_user: str | None = Field(None, description="SSH-only targets: the SSH login (for example qnxuser); QEMU targets log in as root")
+    machine: str | None = Field(None, description="The machine type uname reports (aarch64le, x86pc, ...)")
+    registered: bool | None = Field(None, description="target_register: true once the machine is registered")
     arch: str
     ram: str | None = None
     cpus: int | None = None
     mac: str | None = None
     ip: str | None = None
     directory: str
-    host_key_policy: Literal["image", "first_use", "unverifiable"] = Field(description="image: keys mkqnximage generated on the host are pinned; first_use: pinned at first contact (only with QNX_MCP_TRUST_FIRST_USE=1); unverifiable: refused")
+    host_key_policy: Literal["image", "first_use", "unverifiable", "fingerprint"] = Field(description="image: keys mkqnximage generated on the host are pinned; first_use: pinned at first contact (only with QNX_MCP_TRUST_FIRST_USE=1); fingerprint: SSH-only target whose pinned key had to match the fingerprint given at registration; unverifiable: refused")
     ssh: Any = Field(None, description="'ok' or an error object from the SSH probe")
     uname: str | None = None
     target_time: int | None = Field(None, description="Target clock, Unix seconds")
@@ -119,6 +131,14 @@ class TargetList(_M):
     targets_dir: str
     allowlist: list[str]
     targets: list[TargetInfo]
+
+
+class UnregisterResult(_M):
+    ok: bool
+    name: str
+    unregistered: bool
+    detail: str
+    note: str
 
 
 class DestroyResult(_M):
@@ -214,7 +234,7 @@ class RunResult(RunFields):
     remote_path: str = Field(description="Path of the program on the target")
     remote_binary: bool = Field(False, description="True when the program was already on the target (get_crash then needs binary=<host build>)")
     args: list[str]
-    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root)")
+    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root on QEMU targets, the SSH login on SSH-only targets)")
     stdout: str
     stderr: str
     next_step: str | None = None
@@ -232,7 +252,7 @@ class RunStartResult(_M):
     remote_path: str
     remote_binary: bool = False
     args: list[str]
-    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root)")
+    run_as: dict[str, int] | None = Field(None, description="{uid, gid} the program ran as (QNX_MCP_RUN_AS); null: as the target login user (root on QEMU targets, the SSH login on SSH-only targets)")
     deadline_s: float
     next_step: str
 
@@ -513,8 +533,9 @@ EnvVars = Annotated[dict[str, str] | None, Field(description="Extra environment 
 
 @mcp.tool(
     title="List QNX targets",
-    description="List the QEMU QNX targets this server may manage (directories under the targets dir that match the allowlist), "
-    "with state running/stopped from the QEMU pid. Cheap, no SSH. Call first to discover target names.",
+    description="List the QNX targets this server may manage (directories under the targets dir that match the allowlist) with their kind: "
+    "qemu (state running/stopped from the QEMU pid) or ssh (an existing machine, state registered; see host, port, login_user). "
+    "Cheap, no SSH. Call first to discover target names.",
     annotations=RO,
 )
 async def target_list() -> Annotated[CallToolResult, TargetList]:
@@ -542,9 +563,52 @@ async def target_create(
 
 
 @mcp.tool(
+    title="Register an SSH-only QNX target",
+    description="Register an existing QNX OS 8.0 machine that is reachable only over SSH (for example QNX's official QNX OS 8.0 AMI on AWS Graviton, "
+    "aarch64le, user qnxuser) as a target, so build, deploy_and_run, run_start, get_crash, file_*, processes and logs work against real, non-QEMU QNX. "
+    "The host must be allowed by the server's operator (QNX_MCP_SSH_HOSTS): you cannot point qnx-mcp at a machine the operator did not name. "
+    "Authentication is key-only. Host key: give host_key_fingerprint (SHA256:..., from ssh-keygen -l on the machine's host key); the key the machine presents "
+    "on first contact is pinned only if it hashes to that fingerprint, and every later call checks the pin strictly. Without a fingerprint the first key is "
+    "pinned only if the operator set QNX_MCP_TRUST_FIRST_USE=1 (weaker). Nothing is installed on the machine at registration; later runs put qnx-mcp's helper "
+    "and programs under /tmp/qnx-mcp. Fails with target_exists if the name is taken; a failed registration leaves nothing behind. "
+    "Starting, stopping and destroying the machine are not possible here (target_start, target_stop and target_destroy refuse with target_kind_unsupported).",
+    annotations=_ann(False, False, False),
+)
+async def target_register(
+    name: TargetName,
+    host: Annotated[str, Field(description="DNS name or IP address of the machine (link-local addresses are refused)")],
+    arch: Annotated[Literal["x86_64", "aarch64le"], Field(description="The machine's CPU architecture (aarch64le for the QNX AMI on Graviton)")],
+    user: Annotated[str, Field(description="SSH login; a non-root user such as qnxuser is expected on the AMI")] = "qnxuser",
+    port: Annotated[int, Field(ge=1, le=65535, description="SSH port")] = 22,
+    key: Annotated[str | None, Field(description="Absolute path of the SSH private key on this host (default: the server's QNX_MCP_SSH_KEY)")] = None,
+    host_key_fingerprint: Annotated[str | None, Field(description="Expected host key fingerprint, SHA256:<43 base64 characters>")] = None,
+) -> Annotated[CallToolResult, TargetInfo]:
+    return await _acall(lambda: {"ok": True, **Target(CFG, name, must_exist=False).register(
+        host=host, port=port, user=user, arch=arch, key=key, fingerprint=host_key_fingerprint)})
+
+
+@mcp.tool(
+    title="Unregister an SSH-only QNX target",
+    description="Forget an SSH-only target: delete its registration, pinned host key and run records on this host. The machine itself is not contacted "
+    "or changed; /tmp/qnx-mcp on it stays. Refused for QEMU targets (use target_destroy) and while runs are in flight on the target (target_busy). "
+    "confirm must repeat the target name.",
+    annotations=_ann(False, True, True),
+)
+async def target_unregister(
+    name: TargetName,
+    confirm: Annotated[str, Field(description="Must equal name")],
+) -> Annotated[CallToolResult, UnregisterResult]:
+    def go() -> dict[str, Any]:
+        if confirm != name:
+            raise QnxMcpError("invalid_argument", "confirm does not match name", hint="Pass confirm equal to the target name.")
+        return {"ok": True, **ops.unregister_target(CFG, name)}
+    return await _acall(go)
+
+
+@mcp.tool(
     title="Start a QNX target",
-    description="Boot an existing target (no rebuild) and wait until root SSH answers with the target's pinned host key. "
-    "Idempotent: if it is already running it only waits for SSH.",
+    description="Boot an existing QEMU target (no rebuild) and wait until root SSH answers with the target's pinned host key. "
+    "Idempotent: if it is already running it only waits for SSH. Refused for SSH-only targets (target_kind_unsupported).",
     annotations=_ann(False, False, True),
 )
 async def target_start(
@@ -557,7 +621,8 @@ async def target_start(
 @mcp.tool(
     title="Stop a QNX target",
     description="Power off the target's QEMU with SIGTERM, then SIGKILL, sent only through a pidfd of the verified QEMU process. "
-    "Waits for runs in progress (they hold a shared lock). Background runs are lost; files on the target disk persist.",
+    "Waits for runs in progress (they hold a shared lock). Background runs are lost; files on the target disk persist. "
+    "Refused for SSH-only targets (target_kind_unsupported): qnx-mcp cannot power them off.",
     annotations=_ann(False, True, True),
 )
 async def target_stop(name: TargetName) -> Annotated[CallToolResult, TargetInfo]:
@@ -568,7 +633,7 @@ async def target_stop(name: TargetName) -> Annotated[CallToolResult, TargetInfo]
     title="Destroy a QNX target",
     description="Stop and permanently delete a target this server manages: its mkqnximage directory under the targets dir and its server state. "
     "Refuses names outside the allowlist, symlinks and anything that is not an mkqnximage directory directly inside the targets dir. "
-    "confirm must repeat the target name.",
+    "confirm must repeat the target name. Refused for SSH-only targets (target_kind_unsupported; target_unregister forgets one).",
     annotations=_ann(False, True, True),
 )
 async def target_destroy(
@@ -584,8 +649,9 @@ async def target_destroy(
 
 @mcp.tool(
     title="QNX target status",
-    description="State of one target: running/stopped/booting, IP, arch, RAM, CPUs, host key policy and, when running, an SSH probe with uname, "
-    "the target clock, whether dumper is running and with which core naming. Use it before deploy_and_run and after target_down or ssh_failed errors.",
+    description="State of one target: its kind (qemu or ssh), running/stopped/booting (SSH-only: running or unreachable), IP, arch, RAM, CPUs, host key policy and, "
+    "when running or reachable, an SSH probe with uname, the target clock, whether dumper is running and with which core naming. "
+    "Use it before deploy_and_run and after target_down or ssh_failed errors.",
     annotations=RO,
 )
 async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInfo]:
@@ -619,7 +685,9 @@ async def target_status(name: TargetName) -> Annotated[CallToolResult, TargetInf
 async def build(
     path: Annotated[str, Field(description="Host path: project directory or a single source file")],
     system: Annotated[Literal["auto", "qcc", "make", "cmake"], Field(description="Build driver")] = "auto",
-    arch: Annotated[Literal["x86_64", "aarch64le"], Field(description="Target architecture; must match the target you deploy to")] = "x86_64",
+    arch: Annotated[Literal["x86_64", "aarch64le"] | None, Field(description="Target architecture (qcc variant gcc_ntox86_64 or gcc_ntoaarch64le); must match the target you deploy to. "
+                                                                           "Default: the architecture of target when given, else x86_64")] = None,
+    target: Annotated[str | None, Field(description="Build for this target's architecture (x86_64 or aarch64le). An explicit arch that differs from it is refused (arch_mismatch)")] = None,
     sources: Annotated[list[str] | None, Field(description="qcc mode: source files (relative to path or absolute)")] = None,
     output: Annotated[str | None, Field(description="qcc mode: output executable path (default: first source's stem inside path)")] = None,
     cflags: Annotated[list[str] | None, Field(description="Compiler flags (allow-listed) for qcc and cmake (C and C++); refused for make. qcc default is ['-g','-O0','-Wall']")] = None,
@@ -627,7 +695,7 @@ async def build(
     make_args: Annotated[list[str] | None, Field(description="Extra make or cmake --build arguments (allow-listed, see the description)")] = None,
     timeout_s: Annotated[float, Field(gt=0, le=3600)] = 300,
 ) -> Annotated[CallToolResult, BuildResult]:
-    return await _acall(lambda: sdk.build(CFG, path, system, arch, sources, output, cflags, ldflags, make_args, timeout_s))
+    return await _acall(lambda: sdk.build(CFG, path, system, ops.build_arch(CFG, target, arch), sources, output, cflags, ldflags, make_args, timeout_s))
 
 
 @mcp.tool(

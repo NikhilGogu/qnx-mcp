@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/NikhilGogu/qnx-mcp/actions/workflows/test.yml)
 
-qnx-mcp is a Model Context Protocol (MCP) server for QNX developers who want a coding agent to build, run and debug programs on a QNX OS 8.0 target. It gives the agent 19 typed tools in place of a raw SSH shell. Every run has a deadline and capped output. A crash comes back as a source-level backtrace, checked against the build ID of the binary that was deployed. It works with Claude Code and Codex, on QNX OS 8.0 targets under QEMU. In our study, agents fixed the same seeded bugs with qnx-mcp and with a root shell; see [What the study shows](#what-the-study-shows).
+qnx-mcp is a Model Context Protocol (MCP) server for QNX developers who want a coding agent to build, run and debug programs on a QNX OS 8.0 target. It gives the agent 21 typed tools in place of a raw SSH shell. Every run has a deadline and capped output. A crash comes back as a source-level backtrace, checked against the build ID of the binary that was deployed. It works with Claude Code and Codex, on QNX OS 8.0 targets under QEMU. In our study, agents fixed the same seeded bugs with qnx-mcp and with a root shell; see [What the study shows](#what-the-study-shows).
 
 ![The agent talks MCP to qnx-mcp on the build host, which builds with the QNX SDP and reaches the QNX OS 8.0 QEMU target over ssh](codelab/img/overview.png)
 
@@ -27,7 +27,7 @@ The package is installed from the clone; it is not on PyPI. Start `claude` and t
 What qnx tools do you have? Run environment_check and tell me if anything needs fixing.
 ```
 
-The agent should list the 19 tools and report that every required check passes. Then ask it to create a target (the allowlist above accepts names that start with `dev`):
+The agent should list the 21 tools and report that every required check passes. Then ask it to create a target (the allowlist above accepts names that start with `dev`):
 
 ```text
 Create a QNX target named dev1 and show me its status.
@@ -80,9 +80,10 @@ Configuration is by environment variable:
 | `QNX_MCP_SDP_ENV` | `~/qnx800/qnxsdp-env.sh` | The SDP environment script |
 | `QNX_MCP_SSH_KEY` | `~/.ssh/id_ed25519` | Key installed into images by `target_create`; no `%` or `$` in the path |
 | `QNX_MCP_DHCP_LEASES` | `/var/lib/libvirt/dnsmasq/virbr0.status` | Lease file used to find target addresses |
-| `QNX_MCP_TRUST_FIRST_USE` | not set | `1` accepts targets without pre-generated host keys by pinning the first key seen (weaker) |
+| `QNX_MCP_TRUST_FIRST_USE` | not set | `1` accepts targets without pre-generated host keys, and SSH-only targets registered without a fingerprint, by pinning the first key seen (weaker) |
+| `QNX_MCP_SSH_HOSTS` | none (refuses every `target_register`) | Comma-separated globs of hosts that SSH-only targets may be registered for, e.g. `qnx-ami.example.com`; `*` must be explicit. Only the operator sets it, so an agent cannot choose which machine the server's key is used on |
 | `QNX_MCP_REMOTE_BINARY_ROOTS` | `/tmp:/data` | Colon-separated target directories below which `remote_binary` may start programs; set but empty refuses every `remote_binary`. Shells and `/proc/boot`, `/bin`, `/sbin`, `/usr`, `/system` are refused whatever it says |
-| `QNX_MCP_RUN_AS` | not set (programs run as root) | Numeric `uid:gid`, not 0: `deploy_and_run` and `run_start` start the agent's program as this user and group. The runner stays root. A value that is not numeric, or is 0, refuses every run (`config_error`) instead of running as root. Not yet tested on a target, see Security model |
+| `QNX_MCP_RUN_AS` | not set (programs run as root) | Numeric `uid:gid`, not 0: `deploy_and_run` and `run_start` start the agent's program as this user and group. The runner stays root. SSH-only targets log in as a normal user, where the runner cannot drop privileges, so every run there is refused with `config_error` while this is set. A value that is not numeric, or is 0, refuses every run (`config_error`) instead of running as root. Not yet tested on a target, see Security model |
 
 Target creation takes about 20 s with KVM (22 s in the last lifecycle test run, `target_start` 15 s), so raise client tool timeouts where a client has them.
 
@@ -196,7 +197,7 @@ Tested on (commands and output in [docs/evidence/versions.txt](docs/evidence/ver
 | OpenSSH client | 8.9p1 |
 | Clients | Claude Code 2.1.312, Codex CLI 0.160.0 |
 
-aarch64 builds work (`build(arch="aarch64le")` is tested); aarch64 targets are not.
+aarch64 builds work (`build(arch="aarch64le")` is tested). aarch64 QEMU targets are not supported, but an existing aarch64le QNX 8.0 machine reachable over SSH (for example QNX's QNX OS 8.0 AMI on AWS Graviton) can be registered with `target_register`; that path is covered by offline tests and is not yet run against a real machine (see "SSH-only targets").
 
 ## Tools
 
@@ -205,12 +206,13 @@ Every tool returns JSON as MCP `structuredContent` (and as text). Success has `o
 | Tool | What it does |
 |---|---|
 | `environment_check` | SDP, qcc, mkqnximage, gdb, KVM, QEMU, ssh, key, lease file, allowlist and workspace checks, each with a fix |
-| `target_list` | Allowed targets under the targets dir with state (no SSH) |
+| `target_list` | Allowed targets under the targets dir with kind (`qemu` or `ssh`) and state (no SSH) |
 | `target_create` | mkqnximage build and headless boot, waits for SSH; pins the image's host keys; failed creates are removed |
-| `target_start` / `target_stop` | Boot without rebuild / stop QEMU only through a pidfd of the verified QEMU process |
-| `target_destroy` | Stop and delete a managed target (`confirm` must repeat the name) |
-| `target_status` | State, IP, SSH probe, target clock, dumper arguments and core naming, host key policy. `ssh` holds what the target answered; a refusal on the host before ssh runs fails the call like other tools |
-| `build` | qcc, make or cmake with the SDP; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
+| `target_register` / `target_unregister` | Add or forget an existing QNX 8.0 machine that is reachable only over SSH (the QNX OS 8.0 AMI): host from the operator's `QNX_MCP_SSH_HOSTS`, key-only login, host key pinned against a given fingerprint. Nothing is installed or changed on the machine |
+| `target_start` / `target_stop` | Boot without rebuild / stop QEMU only through a pidfd of the verified QEMU process. Refused for SSH-only targets (`target_kind_unsupported`) |
+| `target_destroy` | Stop and delete a managed target (`confirm` must repeat the name). Refused for SSH-only targets (use `target_unregister`) |
+| `target_status` | Kind, state, IP, SSH probe, target clock, dumper arguments and core naming, host key policy. `ssh` holds what the target answered; a refusal on the host before ssh runs fails the call like other tools |
+| `build` | qcc, make or cmake with the SDP, for `arch` or for the architecture of `target`; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
 | `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`. With `remote_binary` (and no `binary`): a program already on the target, below `/tmp` or `/data`, never a shell or a system program |
 | `run_start` / `run_poll` / `run_stop` | Background runs with output cursors (`max_kb` up to 1024), lifetime limit, per-server ownership of run ids; stop goes through the owning runner's control FIFO. `run_start` also takes `remote_binary` |
 | `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack. For a `remote_binary` run, `run_id` plus the host build as `binary`; a binary whose build ID differs from the one the core records is refused with `core_mismatch` |
@@ -305,6 +307,27 @@ Services started with a relative path, the way the evaluation's field services a
 
 A program that execs `/system/bin/sleep` when it gets SIGTERM, stopped with `grace_s=1, kill_after_grace=true`, returns an error with `details.signal_sent: true`: "SIGTERM was sent to process 169095190 and it did not exit; SIGKILL was not sent because its start time differs (the pid was reused, or the program called exec)".
 
+## SSH-only targets (QNX OS 8.0 AMI)
+
+A target does not have to be a QEMU image that qnx-mcp built. Any QNX 8.0 machine you can log in to over SSH works as a second kind of target, for example QNX's official QNX OS 8.0 AMI on an AWS Graviton instance (aarch64le, user `qnxuser`, several cores). `target_list` and `target_status` show `kind`: `qemu` or `ssh`.
+
+Set up, once:
+
+1. Start the machine with its own tooling (AWS console or CLI), with your public key authorised for `qnxuser`.
+2. Add the machine to the server's environment: `QNX_MCP_SSH_HOSTS=<its address>`, and a name that `QNX_MCP_ALLOW_TARGETS` accepts (for example `ami*`). Set `QNX_MCP_SSH_KEY` to the private key (no `%` or `$` in the path).
+3. Get the machine's host key fingerprint from a source other than the machine's first answer, for example the instance's console output or `ssh-keygen -l -f` on a copy of its host key. It looks like `SHA256:` followed by 43 characters.
+4. Ask the agent to register it: `target_register(name="ami1", host="<address>", arch="aarch64le", user="qnxuser", host_key_fingerprint="SHA256:...")`. The first connection pins the key it presents, and only if it hashes to the fingerprint; every later connection checks the pin strictly (`StrictHostKeyChecking=yes`). Without a fingerprint the registration is refused unless the operator set `QNX_MCP_TRUST_FIRST_USE=1`, which pins whatever key answers first.
+5. `build(path=..., target="ami1")` cross-compiles for the machine's architecture (`qcc -Vgcc_ntoaarch64le`), then `deploy_and_run`, `run_start`/`run_poll`/`run_stop`, `get_crash`, `file_put`/`file_get`/`file_list`, `processes` and `logs` work as on a QEMU target. `target_unregister` removes the registration, the pin and the run records on the host and does not touch the machine.
+
+What differs from a QEMU target:
+
+* `target_start`, `target_stop` and `target_destroy` refuse with `target_kind_unsupported` and say what to do instead. qnx-mcp did not build the machine and cannot power it.
+* The login user is not root. `QNX_MCP_RUN_AS` cannot be used there (every run is refused with `config_error` while it is set), `target_status` shows `privileges.login_user`, and `process_stop` can stop only processes that user may signal.
+* qnx-mcp puts the runner and the agent's programs under `/tmp/qnx-mcp` on the machine and nothing else. `dumper` must be running there and able to write the core of a program run by that user; if its core directory is on another filesystem than `/tmp/qnx-mcp`, the runner cannot move the core and `deploy_and_run` reports `core_move_error` with `dumper_core_path`.
+* `environment_check` treats `kvm`, `qemu-system-x86_64`, `mkqnximage` and `dhcp_leases` as optional when `QNX_MCP_SSH_HOSTS` is set and no QEMU target exists. It adds `ssh_hosts` and `tool:ssh-keygen`. Building still needs the QNX SDP on the build host.
+
+Status: the registration, host key, refusal and architecture logic is covered by `tests/test_ssh_target.py` with a fake ssh that follows OpenSSH's host-key rules. `tests/test_ssh_target_e2e.py` is the live counterpart; it has not yet been run against a QNX OS 8.0 AMI. Run it as described under Tests.
+
 ## What the study shows
 
 Agents fixed the same bugs with and without a shell on the target. In both arms every fix passed its oracle. The cost was more turns for the agent with qnx-mcp and no shell. The study did not measure what qnx-mcp adds beyond that: typed and bounded calls, crash evidence tied to one build, and no shell on the target. The study used qnx-mcp 0.2.1; 0.3.0 fixed the two gaps it found (listed below).
@@ -358,6 +381,10 @@ The rules on `process_stop`, `file_list` and `remote_binary` guard against mista
 ### Targets
 
 Names must match `[a-z][a-z0-9_-]{0,31}` and the allowlist; an unset or empty allowlist refuses everything. A target directory that is a symlink, or resolves outside the targets dir, is refused. `target_destroy` only deletes mkqnximage directories directly inside the targets dir.
+
+### SSH-only targets
+
+`target_register` makes the server log in to a machine with the operator's key, so the operator decides which machines: `QNX_MCP_SSH_HOSTS` (unset refuses every registration). The host must be a DNS name or IP address; link-local, unspecified, multicast and reserved addresses (cloud metadata services) and names a resolver could read as a number are refused. Port, user and architecture are validated, the key path has no `%` or `$`, the registration file is a small regular file that is validated again on every read, and a directory that holds both a QEMU image and a registration is refused. Host-key checking is never turned off: the first key is pinned only if it matches the given fingerprint (or only with `QNX_MCP_TRUST_FIRST_USE=1`), later connections use `StrictHostKeyChecking=yes`, and a pin that goes missing is not replaced for a fingerprint target. The login is key-only with agent and X11 forwarding off. The VM lifecycle tools refuse. All argument bounds, allow-lists and the checks of `/tmp/qnx-mcp` apply as for QEMU targets. The server's key opens every machine the allowlist names, so list only machines you mean it to use. One address range is not refused by the host check: the IPv6 unique-local range (fc00::/7), where one cloud metadata service has its IPv6 address; the allowlist is what keeps the server away from it.
 
 ### Target identity
 
@@ -413,7 +440,7 @@ Cores, logs, run records and binary snapshots stay in the state directory (mode 
 
 ```sh
 cd tests
-python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py test_nonroot.py  # no QNX needed
+python -m pytest -q -p no:asyncio test_units.py test_mcp_offline.py test_skill.py test_nonroot.py test_ssh_target.py  # no QNX needed
 python -m pytest -q -p no:asyncio test_build_sdk.py                                # needs the QNX SDP
 QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb \
   python -m pytest -q -s -p no:asyncio test_slice_e2e.py test_shellfree_e2e.py     # needs a running target
@@ -421,9 +448,11 @@ QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_CREATE=tb2
   python -m pytest -q -s -p no:asyncio test_lifecycle_e2e.py                       # builds, boots and destroys tb2
 QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*' QNX_MCP_E2E_TARGET=tb QNX_MCP_E2E_RUN_AS=1000:1000 \
   python -m pytest -q -s -p no:asyncio test_nonroot_e2e.py                         # non-root runs
+QNX_MCP_ALLOW_TARGETS='ami*' QNX_MCP_E2E_SSH_HOST=<address> QNX_MCP_E2E_SSH_FINGERPRINT=SHA256:... QNX_MCP_SSH_KEY=~/.ssh/qnx-ami \
+  python -m pytest -q -s -p no:asyncio test_ssh_target_e2e.py                      # an SSH-only machine (QNX OS 8.0 AMI)
 ```
 
-On a Linux host with the SDP and a running target, `scripts/live-tests.sh` runs all of these in order and writes one log to `docs/evidence/test-run-<version>.log` (its header lists the variables it needs). With `QNX_MCP_RUN_AS=uid:gid` set as well, every suite's server runs programs as that user.
+On a Linux host with the SDP and a running target, `scripts/live-tests.sh` runs all of these in order and writes one log to `docs/evidence/test-run-<version>.log` (its header lists the variables it needs). With `QNX_MCP_RUN_AS=uid:gid` set as well, every suite's server runs programs as that user. The script also takes an SSH-only machine: set `QNX_MCP_E2E_SSH_HOST` and `QNX_MCP_E2E_SSH_FINGERPRINT` (or `QNX_MCP_TRUST_FIRST_USE=1`) and it adds `test_ssh_target_e2e.py`; the QEMU suites then run only if their own variables are set, and `QNX_MCP_RUN_AS` must be unset. The QEMU end-to-end tests (`test_slice_e2e.py`, `test_shellfree_e2e.py`, `test_lifecycle_e2e.py`, `test_nonroot_e2e.py`) assume an x86_64 QEMU image and are not run against an SSH-only machine; `test_ssh_target_e2e.py` covers the same tools with the machine's own architecture.
 
 This branch was run with `scripts/live-tests.sh` on an Ubuntu 22.04 host with QNX SDP 8.0 against a QNX 8.0 x86_64 QEMU target, as root and with `QNX_MCP_E2E_RUN_AS=1000:1000`. Every test passed except `test_cmake_project`, which skips because cmake is not installed there. The end-to-end tests drive the server through an MCP `ClientSession` over stdio.
 
@@ -432,7 +461,7 @@ This branch was run with `scripts/live-tests.sh` on an Ubuntu 22.04 host with QN
 * Builds run trusted code: `build` runs the project's own make or cmake files with your user's rights on the build host; there is no sandbox. Only build trees you trust. Build arguments from the agent are allow-listed, but an agent that can write files in the workspace can write a build file that runs commands, or a source file that includes any host file the compiler can read and so shows it in diagnostics.
 * Allow-list limits: Flags outside the list are refused even when harmless, for example `-D` values with spaces, quoted `-D` values under make or cmake, `-Wl,-rpath`, `-Wl,--wrap`, linker scripts, `-fprofile-use=path` and make variables such as `CROSS_COMPILE=`. Put such settings in the project's Makefile or CMakeLists.txt.
 * Linker input checks: inputs, and the libraries that `-l` finds in workspace `-L` directories, are checked when `build` starts, so a file can still change before the link. That needs write access to the workspace, which already allows a build file that runs commands.
-* Root on the target: qnx-mcp logs in as root, and programs run as root unless `QNX_MCP_RUN_AS` is set. All non-root runs share one uid, so one run's program can reach another run's `work` directory and processes (seen on the target). Use disposable development targets.
+* Root on the target: qnx-mcp logs in to QEMU targets as root (on an SSH-only target it logs in as that target's user, see "SSH-only targets"), and programs run as root unless `QNX_MCP_RUN_AS` is set. All non-root runs share one uid, so one run's program can reach another run's `work` directory and processes (seen on the target). Use disposable development targets.
 * Uploaded programs: `apps/<hash>/<name>` is mode 0755 below 0711 directories, so any local user who knows the content hash can run or read an uploaded program. They cannot list the directories to find it.
 * Core of a non-root run: the runner takes the core (root, 0600) where dumper wrote it and then moves it, so after that the program's user cannot open it (seen on the target). Before that, the user can reach it on images made by `target_create`: dumper writes the core of a user with a home directory into that home's `cores` directory, which the user owns (`/data/home/qnxuser/cores` for uid 1000), and the core of a uid without a home into `/tmp`. A process of that user that is still running could change or replace the core in that window. The runner checks the directories on the core's path and reports this in the run's `core_exposed`; `get_crash` copies it into `provenance.core_exposed` and its evidence. Only a core written to a directory the user cannot reach (dumper's own `-d` directory, `/data/var/dumper`, 0700) is free of it. If the runner cannot take the core, it leaves it where dumper wrote it and says why in `core_move_error`.
 * Not verified: cmake builds (cmake is not installed on the test host), aarch64 targets (only aarch64 cross builds ran), images built with `--secpol`, and real hardware.

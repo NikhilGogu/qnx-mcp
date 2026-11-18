@@ -57,6 +57,9 @@ class Config:
     workspace: tuple[Path, ...] = ()  # empty refuses every host path; from_env never leaves it empty
     workspace_from_cwd: bool = False
     trust_first_use: bool = False
+    # Machines that target_register may point an SSH-only target at (QNX_MCP_SSH_HOSTS, globs on the host string).
+    # Empty refuses every registration: an agent never chooses on its own which machine the server logs in to.
+    ssh_hosts: tuple[str, ...] = ()
     remote_binary_roots: tuple[str, ...] = ("/tmp", "/data")
     # Agent programs run as this uid:gid on the target (QNX_MCP_RUN_AS); None keeps the login user (root).
     run_as: tuple[int, int] | None = None
@@ -94,6 +97,7 @@ class Config:
             workspace=workspace,
             workspace_from_cwd=from_cwd,
             trust_first_use=env.get("QNX_MCP_TRUST_FIRST_USE", "") == "1",
+            ssh_hosts=tuple(p.strip() for p in env.get("QNX_MCP_SSH_HOSTS", "").split(",") if p.strip()),
             remote_binary_roots=rb_roots,
             run_as=run_as,
             run_as_error=run_as_error,
@@ -102,6 +106,9 @@ class Config:
     def allowed(self, name: str) -> bool:
         # fnmatchcase matches the whole name (the translated pattern is anchored with \Z).
         return any(fnmatch.fnmatchcase(name, pat) for pat in self.allow)
+
+    def ssh_host_allowed(self, host: str) -> bool:
+        return any(fnmatch.fnmatchcase(host.lower(), pat.lower()) for pat in self.ssh_hosts)
 
 
 RUN_AS_RE = re.compile(r"([0-9]{1,10}):([0-9]{1,10})")
