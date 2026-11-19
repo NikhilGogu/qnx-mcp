@@ -454,6 +454,8 @@ QNX_MCP_ALLOW_TARGETS='ami*' QNX_MCP_E2E_SSH_HOST=<address> QNX_MCP_E2E_SSH_FING
 
 On a Linux host with the SDP and a running target, `scripts/live-tests.sh` runs all of these in order and writes one log to `docs/evidence/test-run-<version>.log` (its header lists the variables it needs). With `QNX_MCP_RUN_AS=uid:gid` set as well, every suite's server runs programs as that user. The script also takes an SSH-only machine: set `QNX_MCP_E2E_SSH_HOST` and `QNX_MCP_E2E_SSH_FINGERPRINT` (or `QNX_MCP_TRUST_FIRST_USE=1`) and it adds `test_ssh_target_e2e.py`; the QEMU suites then run only if their own variables are set, and `QNX_MCP_RUN_AS` must be unset. The QEMU end-to-end tests (`test_slice_e2e.py`, `test_shellfree_e2e.py`, `test_lifecycle_e2e.py`, `test_nonroot_e2e.py`) assume an x86_64 QEMU image and are not run against an SSH-only machine; `test_ssh_target_e2e.py` covers the same tools with the machine's own architecture.
 
+Two more live tests set a plain baseline next to qnx-mcp and count the result on a target: leftover processes after timed-out runs, and what is printed when a core and a binary do not match. They skip without `QNX_MCP_E2E_TARGET`; see [docs/PROOF_TESTS.md](docs/PROOF_TESTS.md).
+
 This branch was run with `scripts/live-tests.sh` on an Ubuntu 22.04 host with QNX SDP 8.0 against a QNX 8.0 x86_64 QEMU target, as root and with `QNX_MCP_E2E_RUN_AS=1000:1000`. Every test passed except `test_cmake_project`, which skips because cmake is not installed there. The end-to-end tests drive the server through an MCP `ClientSession` over stdio.
 
 ## Limitations
