@@ -216,7 +216,7 @@ Ask the agent:
 Create a QNX target named cl1 and show me its status.
 ```
 
-The agent calls `target_create`. qnx-mcp runs `mkqnximage`, QNX's script for building development images, in `$CODELAB/targets/cl1`, boots the image headless in QEMU with KVM, and waits until root SSH works. With KVM the whole step took 25 seconds in our run:
+The agent calls `target_create`. qnx-mcp runs `mkqnximage`, QNX's script for building development images, in `$CODELAB/targets/cl1`, boots the image headless in QEMU with KVM, and waits until root SSH works. The step ends with the target running:
 
 `target_create(name="cl1")`
 
@@ -379,16 +379,16 @@ First, `file_put` copies the file and verifies its size and SHA-256 on the targe
  "outcome": "crashed",
  "signal_name": "SIGSEGV",
  "pid": 1269782,
- "duration_ms": 60,
  "stdout": "",
  "dumper": "notified",
- "core_ready_ms": 0,
  "dumper_core_path": "/data/var/dumper/sensor.1.core",
  "core_path": "/tmp/qnx-mcp/runs/r-40b15d6dfd50/sensor.1.core",
  "group_clean": true,
  "next_step": "call get_crash with target='cl1' and run_id='r-40b15d6dfd50' for a source-level backtrace"
 }
 ```
+
+Target timings omitted. Run the example locally for full output.
 
 Finally, `get_crash` with that `run_id` downloads the core file, checks that it belongs to exactly the binary that was deployed (`provenance`), and opens it with the SDP's `ntox86_64-gdb`:
 
@@ -454,7 +454,7 @@ Check: the agent names the unsorted table and `bsearch()` as the root cause, and
 >
 > **QNX message passing in practice: how qnx-mcp knows the core is ready.** dumper is an ordinary process on the target; it registers the path `/proc/dumper`, like any QNX resource manager. Before qnx-mcp starts your program, its small helper on the target (`qnx-mcp-run`, compiled with `qcc` on first use) creates a channel with `ChannelCreate()` and a connection to it with `ConnectAttach()`, describes a pulse to that connection with `SIGEV_PULSE_INIT()`, registers it with `MsgRegisterEvent()`, and hands it to dumper with `devctl(fd, DCMD_DUMPER_NOTIFYEVENT, ...)`. A `devctl()` is itself a QNX message: the C library sends dumper an `_IO_DEVCTL` message, and the helper stays REPLY-blocked until dumper replies.
 >
-> When your program dies from SIGSEGV, dumper writes the core and delivers the pulse, a small non-blocking message that carries a code and a value. The event is updateable (`SIGEV_MAKE_UPDATEABLE()`), so dumper puts the pid of the dumped process in the value. The helper waits in `MsgReceivePulse()` (bounded with `TimerTimeout()`), checks that the pid is your program's, asks dumper for the file name with `DCMD_DUMPER_GETPATH`, and moves the core into the run's own directory. `core_ready_ms` is the time from the program's exit to that pulse; `0` means the pulse was already waiting.
+> When your program dies from SIGSEGV, dumper writes the core and delivers the pulse, a small non-blocking message that carries a code and a value. The event is updateable (`SIGEV_MAKE_UPDATEABLE()`), so dumper puts the pid of the dumped process in the value. The helper waits in `MsgReceivePulse()` (bounded with `TimerTimeout()`), checks that the pid is your program's, asks dumper for the file name with `DCMD_DUMPER_GETPATH`, and moves the core into the run's own directory. The result also carries `core_ready_ms`, the time from the program's exit to that pulse.
 
 ---
 
@@ -478,11 +478,12 @@ The agent edits `sensor.c`, calls `build` and `deploy_and_run` again:
  "run_id": "r-554bb066334a",
  "outcome": "exited",
  "exit_code": 0,
- "duration_ms": 25,
  "stdout": "channel  readings   average  unit\naccel_x         4      0.01  m/s2\naccel_y         4      0.00  m/s2\naccel_z         4      9.81  m/s2\nbaro            4   1013.23  hPa\ngyro_z          4      2.69  rad/s\n20 readings from 23 lines\n",
  "stderr": ""
 }
 ```
+
+Target timings omitted. Run the example locally for full output.
 
 Check:
 
@@ -606,17 +607,18 @@ The agent calls `logs` with a process name, a minimum severity and a time window
  "result": {
   "signal_name": "SIGKILL",
   "runner_stopped_by": "SIGTERM",
-  "duration_ms": 15792,
   "group_clean": true
  }
 }
 ```
 
+Target timings omitted. Run the example locally for full output.
+
 Check: the warnings say `line 12: gyro_z reading 10.71 rad/s is outside +/-8.70`, one per pass through the file, and `run_stop` returns `outcome: "stopped"`.
 
 > aside negative
 >
-> When a program ends, slogger2 puts its buffer set on a delete queue that holds 16 buffer sets by default (the `-Q` option of [slogger2](https://www.qnx.com/developers/docs/8.0/com.qnx.doc.neutrino.utilities/topic/s/slogger2.html)) and deletes the oldest when a 17th arrives. Every SSH login on these images adds buffer sets of its own (sshd, sshd_session), and qnx-mcp logs in for each tool call. In our runs, the log of a program that had ended was gone after a few tool calls, and still there after two minutes on an idle target. Read the log of a program while it runs, or right after it ends.
+> When a program ends, slogger2 puts its buffer set on a delete queue that holds 16 buffer sets by default (the `-Q` option of [slogger2](https://www.qnx.com/developers/docs/8.0/com.qnx.doc.neutrino.utilities/topic/s/slogger2.html)) and deletes the oldest when a 17th arrives. Every SSH login on these images adds buffer sets of its own (sshd, sshd_session), and qnx-mcp logs in for each tool call. In our runs, the log of a program that had ended was gone after a few tool calls, and still there on an idle target a while later. Read the log of a program while it runs, or right after it ends.
 
 ---
 

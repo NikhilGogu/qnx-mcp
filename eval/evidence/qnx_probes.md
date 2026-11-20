@@ -12,5 +12,5 @@ Small programs of our own (built with `qcc -Vgcc_ntox86_64`, run on a copy of th
 | devctl handler doing `errno = EINVAL; return -1;` | client devctl() returns 0 (EOK) |
 | devctl for a command the handler does not know (handler returns ENOSYS) | client devctl() returns 25 (ENOTTY) |
 | `MsgSend` with `TimerTimeout(_NTO_TIMEOUT_SEND|_NTO_TIMEOUT_REPLY, 1.5 s)` to a `name_attach` server that never replies | client stays REPLY-blocked (server receives pulse code -32, unblock); no timeout |
-| `MsgReceivePulse` with `TimerTimeout(_NTO_TIMEOUT_RECEIVE, 1.5 s)` | returns -1, ETIMEDOUT after 1.50 s |
+| `MsgReceivePulse` with `TimerTimeout(_NTO_TIMEOUT_RECEIVE, 1.5 s)` | returns -1, ETIMEDOUT at the timeout |
 | `slog2f` from our program, then `slog2info` | entry shown with buffer set name and pid |

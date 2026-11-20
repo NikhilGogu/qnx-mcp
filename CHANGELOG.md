@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-* SSH-only targets: `target_register` and `target_unregister` (21 tools) add an existing QNX 8.0 machine that is reachable only over SSH, such as QNX's QNX OS 8.0 AMI on AWS Graviton (aarch64le, user `qnxuser`), as a second target kind. `target_list` and `target_status` show `kind`. Offline tests only so far; no QNX OS 8.0 AMI run yet (`tests/test_ssh_target_e2e.py` is the live suite).
+* SSH-only targets: `target_register` and `target_unregister` (21 tools) add an existing QNX 8.0 machine that is reachable only over SSH, such as QNX's QNX OS 8.0 AMI on AWS Graviton (aarch64le, user `qnxuser`), as a second target kind. `target_list` and `target_status` show `kind`. Offline tests only; no live AMI result is claimed (`tests/test_ssh_target_e2e.py` is the live suite).
 * `QNX_MCP_SSH_HOSTS` (operator allowlist of hosts) decides which machines may be registered; unset refuses all. The host key is pinned on first contact only if it hashes to the given `host_key_fingerprint` (or with `QNX_MCP_TRUST_FIRST_USE=1`), then checked with `StrictHostKeyChecking=yes`. Host-key checking is never disabled.
 * `target_start`, `target_stop` and `target_destroy` refuse SSH-only targets with the new error code `target_kind_unsupported`; `target_register` outside the allowlist fails with the new code `ssh_host_not_allowed`.
 * `build` takes `target` and builds for that target's architecture; an explicit `arch` that differs is refused with `arch_mismatch`. `arch` now defaults to the target's, else x86_64.

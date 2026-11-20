@@ -19,7 +19,7 @@ Completeness. Sonnet 5.5: 28 of 32 scheduled trials ran; the last two pairs in t
 | v2-08-fd-leak | 2/2 | 2/2 | 2/2 | 2/2 | 40.95 | 51.65 | 0.1 | 0.11 | 0, 0 |
 | all | 14/14 | 14/14 | 14/14 | 14/14 | 39.95 | 45.95 | 0.11 | 0.14 | 28 |
 
-per trial: cost mean 0.126 USD (max 0.177), total 3.52 USD; agent time mean 47 s (max 166 s); wall cap hits 0; transcript flags 10; guard refusals 0
+per trial: cost mean 0.126 USD (max 0.177), total 3.52 USD; wall cap hits 0; transcript flags 10; guard refusals 0
 
 ### pilot-v2-haiku (haiku, 6 scored trials)
 
@@ -30,7 +30,7 @@ per trial: cost mean 0.126 USD (max 0.177), total 3.52 USD; agent time mean 47 s
 | v2-08-fd-leak | 1/1 | 1/1 | 1/1 | 1/1 | 57.8 | 89.0 | 0.01 | 0.02 | 0 |
 | all | 3/3 | 3/3 | 3/3 | 3/3 | 60.3 | 89.0 | 0.01 | 0.02 | 0 |
 
-per trial: cost mean 0.017 USD (max 0.025), total 0.10 USD; agent time mean 126 s (max 366 s); wall cap hits 0; transcript flags 1; guard refusals 0
+per trial: cost mean 0.017 USD (max 0.025), total 0.10 USD; wall cap hits 0; transcript flags 1; guard refusals 0
 
 Root cause (blind judge): 28/28 and 6/6; location 28/28 and 6/6; the deterministic `fix_location_hit` 23/28 (Sonnet) and 6/6 (Haiku). No trial hit a cap.
 
@@ -38,4 +38,4 @@ How arm B used qnx-mcp. Sonnet called qnx-mcp tools in 7 of 14 arm B trials, all
 
 Transcript flags, reviewed by hand (11 in total). Three "host-destructive" flags (e7ab497, edc85e8, e772a50) are `pkill` inside the quoted command that ssh ran on the trial's own target, which the scan cannot tell apart from a command on the build host. Eight "another target stopped or started" flags are other projects' QEMU targets (a qnx-codelab target `cl1` starting or stopping, and two QEMU processes that exited between `pgrep` and `ps`). The ssh guard logged 276 (Sonnet) and 50 (Haiku) calls and refused none.
 
-What this shows: with a root shell over SSH, both models fixed every v2 task that ran in both arms; adding qnx-mcp did not change the pass rate, and Sonnet's arm B was slightly slower and more expensive (median 46 s and 0.14 USD against 40 s and 0.11 USD). The Haiku sample is three pairs, and the Sonnet sample has one or two pairs per task, so no difference between arms can be read from it.
+What this shows: with a root shell over SSH, both models fixed every v2 task that ran in both arms; adding qnx-mcp did not change the pass rate, and Sonnet's arm B was slightly more expensive (median 0.14 USD against 0.11 USD). The Haiku sample is three pairs, and the Sonnet sample has one or two pairs per task, so no difference between arms can be read from it.

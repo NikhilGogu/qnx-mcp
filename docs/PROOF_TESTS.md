@@ -14,6 +14,18 @@ QNX_MCP_PROOF_ROUNDS=5 python -m pytest -q -s -p no:asyncio test_proof_stale_cor
 
 `QNX_MCP_PROOF_OUT` is optional. When set, each test writes its numbers there as JSON. Run the two tests one after the other on one target, or on two targets, never at the same time on the same target: the stale core test clears dumper's core directory.
 
+## Results
+
+One run of each test on a QNX 8.0.0 x86_64 QEMU target made by `target_create` (login `root`), with the default of 50 runs for `orphan_count` and `QNX_MCP_PROOF_ROUNDS=5` for `stale_core_backtrace`. Counts only.
+
+| Test | Plain way | qnx-mcp |
+|---|---|---|
+| `orphan_count`, 50 timed-out runs of `hang` | plain `ssh` left 50 copies | `deploy_and_run` left 0 |
+| `orphan_count`, 50 runs of the `setsid` program | plain `ssh` left 100 processes | `deploy_and_run` left 50 (one escaped child per run) |
+| `stale_core_backtrace`, 40 cases | gdb warned in all 40 and gave the correct stack in 0: 30 with no function named, 10 with a named but wrong stack | `get_crash` refused all 40 with `core_mismatch`; it printed no wrong or unverified stack |
+
+With `ssh -tt`, the 50 `hang` runs left 24 copies and the 50 `setsid` runs left 74 processes. The raw output of the run is not stored in this repository.
+
 ## orphan_count (`tests/test_proof_orphan_count_e2e.py`)
 
 Question: after N runs of a program that hangs and is stopped by a timeout, how many copies are still running on the target?
