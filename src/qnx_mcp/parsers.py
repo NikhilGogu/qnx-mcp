@@ -405,15 +405,18 @@ def elf_info(path: str) -> dict[str, Any] | None:
         e_phoff, e_shoff = struct.unpack_from(end + "II", data, 28)
         e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx = struct.unpack_from(end + "HHHHH", data, 42)
     interp = None
-    for i in range(e_phnum):
-        off = e_phoff + i * e_phentsize
-        p_type = struct.unpack_from(end + "I", data, off)[0]
-        if p_type == 3:  # PT_INTERP
-            if is64:
-                p_offset, _, _, p_filesz = struct.unpack_from(end + "QQQQ", data, off + 8)
-            else:
-                p_offset, _, _, p_filesz = struct.unpack_from(end + "IIII", data, off + 4)
-            interp = data[p_offset : p_offset + p_filesz].rstrip(b"\0").decode("ascii", "replace")
+    try:
+        for i in range(e_phnum):
+            off = e_phoff + i * e_phentsize
+            p_type = struct.unpack_from(end + "I", data, off)[0]
+            if p_type == 3:  # PT_INTERP
+                if is64:
+                    p_offset, _, _, p_filesz = struct.unpack_from(end + "QQQQ", data, off + 8)
+                else:
+                    p_offset, _, _, p_filesz = struct.unpack_from(end + "IIII", data, off + 4)
+                interp = data[p_offset : p_offset + p_filesz].rstrip(b"\0").decode("ascii", "replace")
+    except struct.error:  # the program header table runs past the end of a truncated file
+        pass
     names: list[str] = []
     build_id = None
     try:

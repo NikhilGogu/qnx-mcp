@@ -1623,3 +1623,17 @@ def test_destroy_does_not_report_removal_when_the_image_directory_cannot_be_dele
         assert (locked / "disk").is_file()
     finally:
         locked.chmod(0o700)
+
+
+def test_elf_info_survives_a_truncated_program_header_table(tmp_path: Path):
+    """A core cut short by a full disk can end before its program headers: that is not an internal error."""
+    hdr = bytearray(64)
+    hdr[:4] = b"\x7fELF"
+    hdr[4], hdr[5] = 2, 1  # 64-bit, little-endian
+    struct.pack_into("<HH", hdr, 16, 4, 62)  # core, x86_64
+    struct.pack_into("<Q", hdr, 32, 1 << 20)  # e_phoff far beyond the end of the file
+    struct.pack_into("<HHHHH", hdr, 54, 56, 3, 64, 0, 0)  # e_phentsize, e_phnum, ...
+    core = tmp_path / "core.cut"
+    core.write_bytes(bytes(hdr))
+    info = elf_info(str(core))
+    assert info is not None and info["type"] == "core" and info["arch"] == "x86_64" and info["interpreter"] is None, info
