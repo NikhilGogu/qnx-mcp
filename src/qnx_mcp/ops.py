@@ -227,9 +227,10 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     states = []
     for line in lines:
         try:
-            states.append(json.loads(line))
+            state = json.loads(line)
         except ValueError:
-            states.append({})
+            state = None
+        states.append(state if isinstance(state, dict) else {})
     if states[0].get("sha256") != runner_sha or states[0].get("mode") != "0755":
         _upload(t, ip, runner_local, runner_remote, runner_sha, runner_size, "0755", None)
     for (local, remote, sha, size, mode), st in zip(files, states[1:]):

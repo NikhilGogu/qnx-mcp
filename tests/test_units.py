@@ -1775,3 +1775,17 @@ def test_lease_with_a_null_expiry_is_skipped_not_fatal():
                        {"mac-address": mac, "ip-address": "10.0.0.6", "expiry-time": 0},
                        {"mac-address": mac, "ip-address": "10.0.0.7", "expiry-time": [1]}])
     assert parse_leases(text, mac, 1000.0) == ["10.0.0.6"]
+
+
+@pytest.mark.parametrize("lines", ["null\n[1]\n", "3\n\"x\"\n"], ids=["null-and-list", "number-and-string"])
+def test_prepare_treats_a_state_line_that_is_not_an_object_as_a_mismatch(fake_target, lines):
+    """Valid JSON that is not an object must lead to an upload like any other bad state line, not to an AttributeError."""
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    rsha, rsize = _sha(runner), runner.stat().st_size
+    fake = FakeRemote(t, [_reply(lines),
+                          _reply(), _reply(_runner_json(sha256=rsha, size=rsize, mode="0755")), _reply(),
+                          _reply(), _reply(_runner_json(sha256=entry[2], size=entry[3], mode="0755")), _reply()])
+    prepare(t, "10.0.0.1", [entry], [])
+    assert [c[1][0] for c in fake.calls if c[0] == "put"] == [str(runner), str(app)]
