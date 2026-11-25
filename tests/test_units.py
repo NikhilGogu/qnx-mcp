@@ -1851,3 +1851,9 @@ def test_a_source_directory_that_shares_a_prefix_with_the_sdk_is_still_user_code
     for sdk_target in (str(sdk), str(sdk) + "/"):
         assert _frame({"fullname": str(inside), "level": "0"}, sdk_target)["user_code"] is False
         assert _frame({"fullname": str(sibling), "level": "0"}, sdk_target)["user_code"] is True, sdk_target
+
+
+@pytest.mark.parametrize("line", ['6^done,a="1",', '6^done,a="1",b=[],', '6^done,a="1",,b="2"'])
+def test_mi_result_body_with_a_dangling_comma_is_malformed(line):
+    rec = parse_mi_output(line + "\n")["results"]["6"]
+    assert rec.get("malformed") is True, rec

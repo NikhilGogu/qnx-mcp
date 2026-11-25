@@ -241,6 +241,8 @@ def parse_mi_results(body: str) -> dict[str, Any]:
                 if body[i] != ",":
                     raise MIParseError(f"expected ',' at {i}")
                 i += 1
+                if i >= len(body):
+                    raise MIParseError("dangling ',' at the end of the record")
     except IndexError:
         raise MIParseError("record ends in the middle of a value") from None
     return res
