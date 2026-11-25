@@ -651,6 +651,7 @@ class Target:
             if os.path.lexists(self.dir) and (self.dir.is_symlink() or not self.dir.is_dir() or any(self.dir.iterdir())):
                 raise QnxMcpError("target_exists", f"target directory {self.dir} already exists and is not empty", hint="Use target_start, or pick a new name.")
             created = not os.path.lexists(self.dir)
+            old_mode = None if created else stat.S_IMODE(os.stat(self.dir).st_mode)
             self.dir.mkdir(parents=True, exist_ok=True)
             with contextlib.suppress(FileNotFoundError):
                 self.known_hosts.unlink()
@@ -678,6 +679,11 @@ class Target:
                     cleanup = self._remove(created)
                 except QnxMcpError as ce:
                     cleanup = f"cleanup failed: {ce.message}"
+                if old_mode is not None and not os.path.lexists(self.dir):
+                    # The caller made this empty directory; the rollback removed it with the image, so give it back.
+                    with contextlib.suppress(OSError):
+                        self.dir.mkdir(mode=old_mode)
+                        os.chmod(self.dir, old_mode)
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise

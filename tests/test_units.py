@@ -1818,3 +1818,23 @@ def test_a_bare_jobs_option_that_means_unlimited_parallelism_is_refused(tmp_path
         build(cfg, str(ws / "proj"), system="make", make_args=make_args)
     assert e.value.code == "invalid_argument" and "make_args" in e.value.message, e.value.to_dict()
     assert _recorded(log) == [], "nothing may run when an argument is refused"
+
+
+def test_failed_create_in_a_pre_existing_empty_directory_gives_the_directory_back(tmp_path: Path, monkeypatch):
+    targets = tmp_path / "targets"
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(targets), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_SSH_KEY": str(tmp_path / "id"), "QNX_MCP_WORKSPACE": str(tmp_path)})
+    (tmp_path / "id.pub").write_text("ssh-ed25519 AAAA test\n")
+    mine = targets / "tb9"
+    mine.mkdir(parents=True)
+    mine.chmod(0o750)
+
+    def fail(self, args, timeout):
+        raise QnxMcpError("mkqnximage_failed", "mkqnximage exited with 1")
+
+    monkeypatch.setattr(Target, "_mkqnximage", fail)
+    with pytest.raises(QnxMcpError) as e:
+        Target(cfg, "tb9", must_exist=False).create(arch="x86_64", ram="1G", cpus=1, options=[], boot_timeout=30)
+    assert e.value.code == "mkqnximage_failed"
+    assert mine.is_dir(), "the empty directory that the caller made was deleted"
+    assert stat.S_IMODE(mine.stat().st_mode) == 0o750 and list(mine.iterdir()) == []
