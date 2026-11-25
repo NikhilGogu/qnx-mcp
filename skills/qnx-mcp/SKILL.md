@@ -16,7 +16,7 @@ In Claude Code the tools are called `mcp__qnx__<tool>` and may be deferred; load
 |---|---|
 | Check the host before anything else (SDP, qcc, KVM, QEMU, SSH key, allowlist) | `environment_check()` |
 | See which targets exist and whether they run (cheap, no SSH) | `target_list()` |
-| Make a new QNX 8.0 QEMU target (mkqnximage build and boot, 20 s to 3 minutes) | `target_create(name, arch, ram, cpus, options, boot_timeout_s)` |
+| Make a new QNX 8.0 QEMU target (mkqnximage build and boot) | `target_create(name, arch, ram, cpus, options, boot_timeout_s)` |
 | Check one target: state, IP, uname, clock, dumper running and its arguments | `target_status(name)` |
 | Boot an existing target again (no rebuild) | `target_start(name, boot_timeout_s)` |
 | Power a target off (files on its disk stay; background runs are lost) | `target_stop(name)` |
