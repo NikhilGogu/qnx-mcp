@@ -781,12 +781,15 @@ class Target:
         st["registered"] = True
         return st
 
-    def unregister(self) -> dict[str, Any]:
-        """Forget an SSH-only target: its registration, pinned key and run records on this host. The machine is not touched."""
+    def unregister(self, before: Callable[[], None] | None = None) -> dict[str, Any]:
+        """Forget an SSH-only target: its registration, pinned key and run records on this host. The machine is not touched.
+        before runs once the exclusive lock is held (no run_start can be between its check and its record), and may refuse."""
         if self._ssh is None:
             raise QnxMcpError("target_kind_unsupported", f"{self.name} is a QEMU target; target_unregister only removes SSH-only registrations",
                               hint="Use target_destroy to delete a QEMU target.")
         with self.lock(exclusive=True):
+            if before is not None:
+                before()
             detail = self._remove(created_dir=True)
         return {"name": self.name, "unregistered": True, "detail": detail,
                 "note": f"{self._ssh.user}@{self._ssh.host} was not touched; programs and files qnx-mcp put on it (/tmp/qnx-mcp) stay there"}

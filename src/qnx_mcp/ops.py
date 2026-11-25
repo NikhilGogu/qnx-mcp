@@ -1003,12 +1003,14 @@ def unregister_target(cfg: Config, target: str) -> dict[str, Any]:
     """Forget an SSH-only target. A run still in flight would be left on a machine this server can no longer
     reach, so it is refused until the runs are stopped or have ended."""
     t = Target(cfg, target)
-    if t.kind == "ssh":
+
+    def refuse_if_busy() -> None:  # called with the exclusive lock held, so no run_start can still be recording a run
         live = _in_flight(t)
         if live:
             raise QnxMcpError("target_busy", f"{len(live)} run(s) are still in flight on {target}: {', '.join(r['run_id'] for r in live[:5])}",
                               hint="Stop them with run_stop (or wait for them to end), then call target_unregister again.")
-    return t.unregister()
+
+    return t.unregister(before=refuse_if_busy)
 
 
 def build_arch(cfg: Config, target: str | None, arch: str | None) -> str:
