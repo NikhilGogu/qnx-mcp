@@ -12,7 +12,6 @@ import posixpath
 import re
 import shutil
 import stat
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -43,22 +42,15 @@ SYSTEM_DIRS = ("/proc/boot", "/bin", "/sbin", "/usr", "/system")
 STOP_SIGNALS = ("TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "KILL")
 # remote_binary never starts these, wherever they are (QNX's own small shells included)
 SHELL_NAMES = ("sh", "ksh", "mksh", "pdksh", "bash", "dash", "ash", "zsh", "csh", "tcsh", "fish", "esh", "fesh", "uesh", "toybox", "busybox", "toysh")
-_sha_cache: dict[tuple[str, int, int], str] = {}
-_sha_lock = threading.Lock()
 
 
 def _sha256_file(p: Path) -> str:
-    st = p.stat()
-    key = (str(p), st.st_size, st.st_mtime_ns)
-    with _sha_lock:
-        if key in _sha_cache:
-            return _sha_cache[key]
+    """SHA-256 of the bytes on disk now. Not cached: a digest remembered for the same path, size and mtime says nothing
+    about a file that was changed with its mtime put back, and the cache would grow with every download."""
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
-    with _sha_lock:
-        _sha_cache[key] = h.hexdigest()
     return h.hexdigest()
 
 

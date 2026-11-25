@@ -1660,3 +1660,16 @@ def test_elf_info_never_blocks_on_a_fifo(tmp_path: Path):
             th.join(2)
     assert not stuck, "opening a FIFO blocked"
     assert out == {"info": None, "arts": []}, out
+
+
+def test_sha256_file_reads_the_current_bytes_even_when_size_and_mtime_are_unchanged(tmp_path: Path):
+    """The snapshot check before gdb must hash what is on disk now, not a digest remembered for the same path, size and mtime."""
+    from qnx_mcp.ops import _sha256_file
+    p = tmp_path / "snap"
+    p.write_bytes(b"AAAA")
+    before = p.stat()
+    first = _sha256_file(p)
+    p.write_bytes(b"BBBB")
+    os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert p.stat().st_size == before.st_size and p.stat().st_mtime_ns == before.st_mtime_ns
+    assert _sha256_file(p) != first
