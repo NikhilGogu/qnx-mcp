@@ -650,7 +650,7 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
             result["next_step"] = _crash_step(target, run_id, rec)
     elif state == "finished":
         result["outcome"] = rec.get("outcome")
-        result["note"] = "this run finished earlier; its status and output are no longer on the target (rebooted or the run directory was removed)"
+        result["note"] = "this run finished earlier; its final status is no longer available on the target (rebooted or the run directory was removed)"
     elif state == "lost":
         result["note"] = "the runner is gone without a final status (target rebooted or the run directory was removed)"
     more = out.get("next", 0) < (out.get("size") or 0) or err.get("next", 0) < (err.get("size") or 0)

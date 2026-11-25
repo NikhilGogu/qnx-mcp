@@ -1750,7 +1750,7 @@ def test_a_finished_run_stays_finished_when_its_remote_directory_is_gone(fake_ta
     monkeypatch.setattr(ops, "_poll_once", lambda *a, **k: {"alive": False, "status": None})
     monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
     r = ops.run_poll(t.cfg, "tb1", rec["run_id"])
-    assert r["state"] == "finished" and r["outcome"] == "crashed" and "no longer" in r["note"], r
+    assert r["state"] == "finished" and r["outcome"] == "crashed" and "no longer" in r["note"] and "output" not in r["note"], r
     assert ops.load_record(t, rec["run_id"])["state"] == "finished"
 
 
