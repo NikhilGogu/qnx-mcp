@@ -1606,3 +1606,20 @@ def test_destroy_keeps_the_image_and_pid_file_when_qemu_survives_sigkill(fake_ta
     finally:
         os.close(w)
         os.close(r)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_destroy_does_not_report_removal_when_the_image_directory_cannot_be_deleted(fake_target):
+    """rmtree used to ignore errors: destroy said "removed" while part of the target was still there."""
+    t, _, _ = fake_target
+    locked = t.dir / "output" / "sub"
+    locked.mkdir(parents=True)
+    (locked / "disk").write_bytes(b"x")
+    locked.chmod(0o500)  # its entries cannot be unlinked
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert e.value.code == "internal_error" and str(t.dir) in e.value.message, e.value.to_dict()
+        assert (locked / "disk").is_file()
+    finally:
+        locked.chmod(0o700)

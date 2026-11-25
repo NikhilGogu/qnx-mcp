@@ -674,7 +674,10 @@ class Target:
                     self.wait_ssh(boot_timeout)
                     break
             except BaseException as e:
-                cleanup = self._remove(created)
+                try:
+                    cleanup = self._remove(created)
+                except QnxMcpError as ce:
+                    cleanup = f"cleanup failed: {ce.message}"
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise
@@ -708,18 +711,31 @@ class Target:
         return True
 
     def _remove(self, created_dir: bool) -> str:
-        """Failed create or destroy: stop QEMU, delete the image directory and the server state (not the lock)."""
+        """Failed create or destroy: stop QEMU, delete the image directory and the server state (not the lock).
+        Raises if something could not be deleted, so that nobody reports a removal that did not happen."""
         stopped = self._stop_qemu()
+        left: list[str] = []
+
+        def rmtree(path: Path) -> None:
+            try:
+                shutil.rmtree(path)  # fd-based on Linux: does not follow symlinks inside
+            except OSError as e:
+                if os.path.lexists(path):
+                    left.append(f"{path} ({e.strerror or type(e).__name__})")
+
         if created_dir or (self.dir / "local" / "options").is_file() or (self.dir / "local" / "snippets").is_dir():
-            shutil.rmtree(self.dir, ignore_errors=True)  # fd-based on Linux: does not follow symlinks inside
+            rmtree(self.dir)
         for p in self.state.iterdir() if self.state.is_dir() else []:
             if p.name in ("lock", "records.lock", "mkqnximage.log"):
                 continue
             if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p, ignore_errors=True)
+                rmtree(p)
             else:
                 with contextlib.suppress(OSError):
                     p.unlink()
+        if left:
+            raise QnxMcpError("internal_error", f"could not delete everything of {self.name}: {'; '.join(left[:3])}",
+                              hint="Fix the permissions of that path on the build host, then call the tool again.")
         return f"{'stopped QEMU, ' if stopped else ''}removed {self.dir}"
 
     def destroy(self) -> dict[str, Any]:
@@ -778,7 +794,10 @@ class Target:
                                       hint="Register it with the other arch (x86_64 or aarch64le).")
             except BaseException as e:
                 self._registering = False
-                cleanup = self._remove(True)
+                try:
+                    cleanup = self._remove(True)
+                except QnxMcpError as ce:
+                    cleanup = f"cleanup failed: {ce.message}"
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise
