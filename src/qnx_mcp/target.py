@@ -689,14 +689,18 @@ class Target:
         if got is None:
             return False
         pid, fd = got
+        exited = False
         try:
             for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
                 with contextlib.suppress(ProcessLookupError):
                     signal.pidfd_send_signal(fd, sig)
                 if select.select([fd], [], [], wait)[0]:  # a pidfd becomes readable when the process exits
+                    exited = True
                     break
         finally:
             os.close(fd)
+        if not exited:  # keep the PID file: it is the only way to find the process again, and the image must stay
+            raise QnxMcpError("internal_error", f"QEMU for {self.name} (pid {pid}) survived SIGKILL", hint="Check the process on the build host, then retry.")
         with contextlib.suppress(OSError, ValueError):
             pidfile = self.dir / "output" / "qemu.pid"
             if int(pidfile.read_text().strip()) == pid:

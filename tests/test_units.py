@@ -1584,3 +1584,25 @@ def test_file_get_text_comes_from_the_verified_download_not_the_published_path(f
     out.mkdir()
     r = ops.file_get(t.cfg, "tb1", "/tmp/x.txt", local_path=str(out / "x.txt"))
     assert r["size"] == len(b"downloaded\n") and r["text"] == "downloaded\n", r
+
+
+def test_destroy_keeps_the_image_and_pid_file_when_qemu_survives_sigkill(fake_target, monkeypatch):
+    """If the verified pidfd never becomes readable after SIGTERM and SIGKILL, the process is alive: the PID file must
+    stay (it is the only way to find it again) and the image must not be deleted under it."""
+    from qnx_mcp import target as target_mod
+    t, _, _ = fake_target
+    (t.dir / "output").mkdir()
+    pidfile = t.dir / "output" / "qemu.pid"
+    pidfile.write_text("4242\n")
+    r, w = os.pipe()  # never readable: stands in for a pidfd of a process that does not exit
+    monkeypatch.setattr(Target, "qemu_pidfd", lambda self: (4242, os.dup(r)))  # each caller closes the descriptor it gets
+    monkeypatch.setattr(target_mod.signal, "pidfd_send_signal", lambda fd, sig: None, raising=False)  # absent off Linux
+    monkeypatch.setattr(target_mod.select, "select", lambda rl, wl, xl, timeout=None: ([], [], []))
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert "survived SIGKILL" in e.value.message, e.value.to_dict()
+        assert pidfile.read_text().strip() == "4242" and (t.dir / "local" / "options").is_file()
+    finally:
+        os.close(w)
+        os.close(r)
