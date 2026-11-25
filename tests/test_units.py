@@ -1637,3 +1637,26 @@ def test_elf_info_survives_a_truncated_program_header_table(tmp_path: Path):
     core.write_bytes(bytes(hdr))
     info = elf_info(str(core))
     assert info is not None and info["type"] == "core" and info["arch"] == "x86_64" and info["interpreter"] is None, info
+
+
+def test_elf_info_never_blocks_on_a_fifo(tmp_path: Path):
+    """A build tree can hold a FIFO; opening one with no writer blocks forever, and that happens after the build ended."""
+    from qnx_mcp.sdk import _artifacts
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    out: dict[str, Any] = {}
+
+    def look():
+        out["info"] = elf_info(str(fifo))
+        out["arts"] = _artifacts([fifo], 0.0)
+
+    th = threading.Thread(target=look, daemon=True)
+    th.start()
+    th.join(5)
+    stuck = th.is_alive()
+    for _ in range(3):  # let a stuck open finish, so that no thread is left behind
+        if th.is_alive():
+            os.close(os.open(fifo, os.O_WRONLY))
+            th.join(2)
+    assert not stuck, "opening a FIFO blocked"
+    assert out == {"info": None, "arts": []}, out

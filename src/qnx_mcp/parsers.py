@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import struct
 from typing import Any
 
@@ -389,7 +390,10 @@ _MACHINES = {62: "x86_64", 183: "aarch64le", 3: "x86", 40: "arm"}
 def elf_info(path: str) -> dict[str, Any] | None:
     """Minimal ELF reader: architecture, type, interpreter and debug info presence."""
     try:
-        with open(path, "rb") as f:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO with no writer must not block the open
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
             data = f.read()
     except OSError:
         return None
