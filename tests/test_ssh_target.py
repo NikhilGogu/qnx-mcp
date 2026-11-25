@@ -373,6 +373,21 @@ def test_unregister_checks_for_runs_only_after_it_holds_the_exclusive_lock(tmp_p
     assert (cfg.targets_dir / "ami1" / SSH_TARGET_FILE).is_file()
 
 
+@needs_keygen
+def test_stale_unregister_never_removes_a_replacement_registration(tmp_path, fake, host_key):
+    """A call that built its Target (and so cached the registration) and then waited for the lock must not remove a
+    registration that was replaced under the same name while it waited."""
+    cfg = _cfg(tmp_path, QNX_MCP_SSH_HOSTS=HOST)
+    _register(cfg, fingerprint=host_key.fp)
+    stale = Target(cfg, "ami1")  # what a waiting unregister holds
+    Target(cfg, "ami1").unregister()
+    _register(cfg, fingerprint=host_key.fp, port=2222)  # another call registers a new machine under the name
+    assert _code(stale.unregister) == "target_busy"
+    assert Target(cfg, "ami1").kind == "ssh" and (cfg.targets_dir / "ami1" / SSH_TARGET_FILE).is_file()
+    Target(cfg, "ami1").unregister()
+    assert _code(Target, cfg, "ami1") == "target_not_found"
+
+
 # ---------------------------------------------------------------- ssh command lines, privileges, non-root login
 
 @needs_keygen

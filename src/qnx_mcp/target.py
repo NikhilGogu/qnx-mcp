@@ -788,6 +788,13 @@ class Target:
             raise QnxMcpError("target_kind_unsupported", f"{self.name} is a QEMU target; target_unregister only removes SSH-only registrations",
                               hint="Use target_destroy to delete a QEMU target.")
         with self.lock(exclusive=True):
+            # this call may have waited for the lock while the name was unregistered and registered again
+            path = self.dir / SSH_TARGET_FILE
+            if not os.path.lexists(path):
+                raise QnxMcpError("target_not_found", f"{self.name} was unregistered while this call waited", hint="Call target_list to see what is registered.")
+            if load_ssh_config(path) != self._ssh:
+                raise QnxMcpError("target_busy", f"the registration of {self.name} changed while this call waited for the target lock",
+                                  hint="Call target_list, then call target_unregister again if you still mean to remove it.")
             if before is not None:
                 before()
             detail = self._remove(created_dir=True)
