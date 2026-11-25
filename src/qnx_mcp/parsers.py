@@ -83,7 +83,10 @@ def parse_diagnostics(output: str, base_dir: str | None = None) -> list[dict[str
             except ValueError:
                 items = None
             if isinstance(items, list):
-                diags.extend(_from_gcc_json(items, base_dir))
+                try:
+                    diags.extend(_from_gcc_json(items, base_dir))
+                except (AttributeError, TypeError, KeyError, IndexError):
+                    pass  # a JSON list from the build's own output, not gcc's diagnostics
                 continue
         m = _IN_FUNCTION.match(line)
         if m:

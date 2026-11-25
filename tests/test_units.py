@@ -1752,3 +1752,11 @@ def test_a_finished_run_stays_finished_when_its_remote_directory_is_gone(fake_ta
     r = ops.run_poll(t.cfg, "tb1", rec["run_id"])
     assert r["state"] == "finished" and r["outcome"] == "crashed" and "no longer" in r["note"], r
     assert ops.load_record(t, rec["run_id"])["state"] == "finished"
+
+
+def test_json_looking_log_lines_do_not_break_diagnostics():
+    """A build that prints a JSON list which is not gcc's diagnostics must not turn a good build into an internal error."""
+    out = "\n".join(['[{"locations":[null]}]', '[{"children":[1]}]', '[{"fixits":["x"]}]', "[1, 2]",
+                     "main.c:9:12: error: expected ';' before '}' token"])
+    d = parse_diagnostics(out, "/w")
+    assert [x["line"] for x in d if x["source"] == "gcc-text"] == [9]
