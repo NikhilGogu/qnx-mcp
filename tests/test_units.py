@@ -1806,3 +1806,15 @@ def test_truncated_gzip_core_is_a_clean_error_and_leaves_no_partial_file(tmp_pat
     good = tmp_path / "good.core.gz"
     good.write_bytes(blob)
     assert _gunzip(good, 1 << 30).read_bytes() == raw
+
+
+@pytest.mark.parametrize("make_args", [["-j"], ["all", "-j"], ["-j", "all"], ["--jobs"], ["--jobs", "-k"]])
+def test_a_bare_jobs_option_that_means_unlimited_parallelism_is_refused(tmp_path: Path, make_args):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    (ws / "proj").mkdir(exist_ok=True)
+    (ws / "proj" / "Makefile").write_text("all:\n")
+    with pytest.raises(QnxMcpError) as e:
+        build(cfg, str(ws / "proj"), system="make", make_args=make_args)
+    assert e.value.code == "invalid_argument" and "make_args" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == [], "nothing may run when an argument is refused"

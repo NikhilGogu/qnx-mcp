@@ -263,14 +263,19 @@ def _check_cc_flags(cfg: Config, root: Path, field: str, flags: list[str], *, fi
 def _check_make_args(cfg: Config, root: Path, args: list[str]) -> None:
     field = "make_args"
     prev = None
-    for a in args:
+    for i, a in enumerate(args):
         if not isinstance(a, str) or not a:
             raise _refuse(field, str(a), "empty")
         if prev in ("-j", "--jobs") and _JOBS_RE.fullmatch(a):
             prev = None
             continue
         prev = a
-        if a in _MAKE_OPTS or a in ("-j", "--jobs") or re.fullmatch(r"-j[1-9][0-9]{0,3}|--jobs=[1-9][0-9]{0,3}", a):
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if a in ("-j", "--jobs"):  # a bare -j means unlimited parallelism, so a job count must follow
+            if isinstance(nxt, str) and _JOBS_RE.fullmatch(nxt):
+                continue
+            raise _refuse(field, a, "-j needs a job count, for example -j 4")
+        if a in _MAKE_OPTS or re.fullmatch(r"-j[1-9][0-9]{0,3}|--jobs=[1-9][0-9]{0,3}", a):
             continue
         name, eq, value = a.partition("=")
         if eq and re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.]*", name):
