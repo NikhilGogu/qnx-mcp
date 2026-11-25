@@ -134,7 +134,7 @@ def parse_leases(text: str, mac: str, now: float) -> list[str]:
         try:
             expiry = int(lease.get("expiry-time", 0))
             ip = str(ipaddress.IPv4Address(str(lease.get("ip-address", ""))))
-        except ValueError:
+        except (ValueError, TypeError):
             continue
         if expiry != 0 and expiry <= now:
             continue

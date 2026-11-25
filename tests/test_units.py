@@ -1767,3 +1767,11 @@ def test_mi_backslash_digit_that_is_not_octal_is_not_a_crash(line):
     """gdb output with a backslash followed by 8 or 9 must come back as a record or as unparsed text, never as a ValueError."""
     mi = parse_mi_output(line + "\n")
     assert isinstance(mi["console"], list) and isinstance(mi["unparsed"], list)
+
+
+def test_lease_with_a_null_expiry_is_skipped_not_fatal():
+    mac = "52:54:00:00:00:01"
+    text = json.dumps([{"mac-address": mac, "ip-address": "10.0.0.5", "expiry-time": None},
+                       {"mac-address": mac, "ip-address": "10.0.0.6", "expiry-time": 0},
+                       {"mac-address": mac, "ip-address": "10.0.0.7", "expiry-time": [1]}])
+    assert parse_leases(text, mac, 1000.0) == ["10.0.0.6"]
