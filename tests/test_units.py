@@ -1838,3 +1838,16 @@ def test_failed_create_in_a_pre_existing_empty_directory_gives_the_directory_bac
     assert e.value.code == "mkqnximage_failed"
     assert mine.is_dir(), "the empty directory that the caller made was deleted"
     assert stat.S_IMODE(mine.stat().st_mode) == 0o750 and list(mine.iterdir()) == []
+
+
+def test_a_source_directory_that_shares_a_prefix_with_the_sdk_is_still_user_code(tmp_path: Path):
+    from qnx_mcp.crash import _frame
+    sdk = tmp_path / "qnx800" / "target" / "qnx"
+    inside = sdk / "usr" / "include" / "stdio.h"
+    sibling = tmp_path / "qnx800" / "target" / "qnx-app" / "main.c"
+    for p in (inside, sibling):
+        p.parent.mkdir(parents=True)
+        p.write_text("x\n")
+    for sdk_target in (str(sdk), str(sdk) + "/"):
+        assert _frame({"fullname": str(inside), "level": "0"}, sdk_target)["user_code"] is False
+        assert _frame({"fullname": str(sibling), "level": "0"}, sdk_target)["user_code"] is True, sdk_target

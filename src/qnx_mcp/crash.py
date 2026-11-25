@@ -42,6 +42,12 @@ def _source_context(cfg: Config, path: str | None, line: int | None, radius: int
     return [{"line": n, "text": lines[n - 1], "current": n == line} for n in range(lo, hi + 1)]
 
 
+def _under(path: str, base: str) -> bool:
+    """True when path is base or lies inside it; a sibling such as base + '-app' does not count."""
+    base = base.rstrip("/") or "/"
+    return path == base or path.startswith(base if base == "/" else base + "/")
+
+
 def _frame(f: dict[str, Any], sdk_target: str) -> dict[str, Any]:
     if not isinstance(f, dict):
         raise QnxMcpError("gdb_failed", "malformed frame record from gdb")
@@ -54,7 +60,7 @@ def _frame(f: dict[str, Any], sdk_target: str) -> dict[str, Any]:
         "line": int(f["line"]) if str(f.get("line", "")).isdigit() else None,
         "address": f.get("addr"),
         "library": f.get("from"),
-        "user_code": bool(fullname and os.path.isfile(fullname) and not fullname.startswith(sdk_target)),
+        "user_code": bool(fullname and os.path.isfile(fullname) and not _under(fullname, sdk_target)),
     }
 
 
