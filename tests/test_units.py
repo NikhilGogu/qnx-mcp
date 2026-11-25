@@ -1939,3 +1939,37 @@ def test_elf_info_does_not_leak_a_descriptor_when_given_a_directory(tmp_path: Pa
     for _ in range(50):
         assert elf_info(str(d)) is None
     assert open_fds() == before, "elf_info left descriptors open"
+
+
+def test_failed_image_removal_keeps_the_state_needed_to_retry(fake_target):
+    t, _, _ = fake_target
+    locked = t.dir / "output" / "sub"
+    locked.mkdir(parents=True)
+    (locked / "disk").write_bytes(b"x")
+    t.state.mkdir(parents=True, exist_ok=True)
+    (t.state / "known_hosts").write_text("pinned\n")
+    (t.state / "runs").mkdir()
+    (t.state / "runs" / "r1.json").write_text("{}")
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert e.value.code == "internal_error"
+        assert (t.state / "known_hosts").is_file() and (t.state / "runs" / "r1.json").is_file(), "state was erased before the image was gone"
+    finally:
+        locked.chmod(0o700)
+
+
+def test_state_file_that_cannot_be_unlinked_is_reported_not_ignored(fake_target):
+    t, _, _ = fake_target
+    t.state.mkdir(parents=True, exist_ok=True)
+    (t.state / "lock").touch()
+    (t.state / "known_hosts").write_text("pinned\n")
+    t.state.chmod(0o500)  # entries cannot be unlinked
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t._remove(created_dir=False)
+        assert e.value.code == "internal_error" and "known_hosts" in e.value.message, e.value.to_dict()
+        assert (t.state / "known_hosts").is_file()
+    finally:
+        t.state.chmod(0o700)

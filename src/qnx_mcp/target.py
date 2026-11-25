@@ -729,19 +729,27 @@ class Target:
                 if os.path.lexists(path):
                     left.append(f"{path} ({e.strerror or type(e).__name__})")
 
+        def fail() -> QnxMcpError:
+            return QnxMcpError("internal_error", f"could not delete everything of {self.name}: {'; '.join(left[:3])}",
+                               hint="Fix the permissions of that path on the build host, then call the tool again.")
+
         if created_dir or (self.dir / "local" / "options").is_file() or (self.dir / "local" / "snippets").is_dir():
             rmtree(self.dir)
+            if left:  # keep the state (pinned host key, run records) while the image is still there
+                raise fail()
         for p in self.state.iterdir() if self.state.is_dir() else []:
             if p.name in ("lock", "records.lock", "mkqnximage.log"):
                 continue
             if p.is_dir() and not p.is_symlink():
                 rmtree(p)
             else:
-                with contextlib.suppress(OSError):
+                try:
                     p.unlink()
+                except OSError as e:
+                    if os.path.lexists(p):
+                        left.append(f"{p} ({e.strerror or type(e).__name__})")
         if left:
-            raise QnxMcpError("internal_error", f"could not delete everything of {self.name}: {'; '.join(left[:3])}",
-                              hint="Fix the permissions of that path on the build host, then call the tool again.")
+            raise fail()
         return f"{'stopped QEMU, ' if stopped else ''}removed {self.dir}"
 
     def destroy(self) -> dict[str, Any]:
