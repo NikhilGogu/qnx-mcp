@@ -516,13 +516,13 @@ def run_start(
         ip = t.require_ip()
         remote_run = f"{REMOTE_ROOT}/runs/{rid}"
         runner = _install_program(t, ip, prog, remote_run)
+        _reconcile_starts(t, ip, exclude=rid)  # before this call's record exists: its age and deadline start at the launch
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "background", "state": "starting", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
             "deadline": time.time() + timeout_s, "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)  # ownership is on disk before anything is launched
-        _reconcile_starts(t, ip, exclude=rid)
         try:
             r = t.ssh([runner, "-B", remote_run, *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args],
                       timeout=30, what="run_start", ip=ip, check=False)

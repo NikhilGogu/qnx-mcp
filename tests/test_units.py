@@ -1710,3 +1710,29 @@ def test_a_start_whose_stop_was_confirmed_is_failed_and_not_in_flight(fake_targe
     t, ops = _start_that_loses_its_acknowledgement(fake_target, monkeypatch, _runner_json(acknowledged=True, was_running=True))
     [rec] = ops.all_records(t)
     assert rec["state"] == "failed" and rec["cleanup"] == "stopped" and ops._in_flight(t) == []
+
+
+def test_run_start_reconciles_old_starts_before_it_publishes_its_own_record(fake_target, monkeypatch):
+    """While the stops of old starts run (each can take seconds), the new call's own record must not be on disk yet:
+    a concurrent run_start would see it age and reclaim it, and its deadline would be spent before the launch."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    old = {"run_id": "r-000000000030", "kind": "background", "state": "starting", "runner": "/tmp/qnx-mcp/bin/r", "started_at": time.time() - 300,
+           "remote_run_dir": "/tmp/qnx-mcp/runs/r-000000000030"}
+    ops.save_record(t, old)
+    prog = {"binary": "/w/app", "binary_snapshot": None, "binary_sha256": "a" * 64, "build_id": None, "remote_path": "/tmp/qnx-mcp/apps/x/app",
+            "remote_binary": None, "remote_real_path": None}
+    monkeypatch.setattr(ops, "_program", lambda *a, **k: dict(prog))
+    monkeypatch.setattr(ops, "_install_program", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    seen: list[list[str]] = []
+
+    def stop(t_, ip, runner, d):
+        seen.append([r["run_id"] for r in ops.all_records(t_) if r["run_id"] != old["run_id"]])
+        return "stopped"
+
+    monkeypatch.setattr(ops, "_stop_quietly", stop)
+    monkeypatch.setattr(Target, "ssh", lambda self, argv, **kw: _reply(_runner_json(started=True, pid=7, runner_pid=6)))
+    r = ops.run_start(t.cfg, "tb1", binary="/w/app")
+    assert seen == [[]], seen
+    assert ops.load_record(t, r["run_id"])["state"] == "running"
