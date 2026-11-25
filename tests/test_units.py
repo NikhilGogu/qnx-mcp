@@ -1760,3 +1760,10 @@ def test_json_looking_log_lines_do_not_break_diagnostics():
                      "main.c:9:12: error: expected ';' before '}' token"])
     d = parse_diagnostics(out, "/w")
     assert [x["line"] for x in d if x["source"] == "gcc-text"] == [9]
+
+
+@pytest.mark.parametrize("line", ['~"a\\8b"', '~"a\\9"', '^done,x="a\\8"'])
+def test_mi_backslash_digit_that_is_not_octal_is_not_a_crash(line):
+    """gdb output with a backslash followed by 8 or 9 must come back as a record or as unparsed text, never as a ValueError."""
+    mi = parse_mi_output(line + "\n")
+    assert isinstance(mi["console"], list) and isinstance(mi["unparsed"], list)

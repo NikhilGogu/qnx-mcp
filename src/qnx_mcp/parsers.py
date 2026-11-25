@@ -163,7 +163,7 @@ def _mi_cstring(s: str, i: int) -> tuple[str, int]:
                 buf.append(esc[nxt])
                 i += 2
                 continue
-            if nxt.isdigit():  # octal escape
+            if nxt in "01234567":  # octal escape
                 j = i + 1
                 while j < len(s) and j < i + 4 and s[j] in "01234567":
                     j += 1
