@@ -471,13 +471,19 @@ def build(
     env = sdk_env(cfg)
 
     started = time.time()
+    deadline = time.monotonic() + timeout_s  # one budget for all steps, immune to wall-clock changes
     steps: list[dict[str, Any]] = []
     candidates: list[Path] = []
 
     def step(argv: list[str], extra_env: dict[str, str] | None = None) -> bool:
         e = dict(env)
         e.update(extra_env or {})
-        r = run(argv, timeout=max(5.0, timeout_s - (time.time() - started)), env=e, cwd=root)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            steps.append({"argv": argv, "exit_code": None, "timed_out": True, "duration_s": 0.0,
+                          "output": f"not started: the {timeout_s:g} s build budget was used up by the earlier steps"})
+            return False
+        r = run(argv, timeout=remaining, env=e, cwd=root)
         combined = r.out + ("\n" if r.out and r.err else "") + r.err
         steps.append({"argv": argv, "exit_code": r.returncode, "timed_out": r.timed_out, "duration_s": round(r.duration_s, 3), "output": combined})
         return r.returncode == 0 and not r.timed_out

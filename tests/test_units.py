@@ -1857,3 +1857,25 @@ def test_a_source_directory_that_shares_a_prefix_with_the_sdk_is_still_user_code
 def test_mi_result_body_with_a_dangling_comma_is_malformed(line):
     rec = parse_mi_output(line + "\n")["results"]["6"]
     assert rec.get("malformed") is True, rec
+
+
+def test_build_steps_share_one_deadline_and_no_step_starts_after_it(tmp_path: Path, monkeypatch):
+    import types
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    seen: list[float] = []
+    sdk.sdk_env(cfg)  # sourcing the SDP script uses the real run; only build steps are faked below
+    real = sdk.run
+
+    def slow_run(argv, timeout, **kw):
+        if "cmake" not in os.path.basename(str(argv[0])):
+            return real(argv, timeout=timeout, **kw)
+        seen.append(timeout)
+        time.sleep(0.3)
+        return types.SimpleNamespace(returncode=0, timed_out=False, out="", err="", duration_s=0.3, truncated=False)
+
+    monkeypatch.setattr(sdk, "run", slow_run)
+    r = sdk.build(cfg, str(ws / "proj"), system="cmake", timeout_s=0.2)
+    assert seen and seen[0] <= 0.2, f"the first step was given {seen[0]} s for a 0.2 s budget"
+    assert len(seen) == 1, "a second step started after the budget was used up"
+    assert r["ok"] is False and r["error"]["code"] == "timeout", r.get("error")
