@@ -8,6 +8,7 @@ import contextlib
 import gzip
 import os
 import re
+import tempfile
 import uuid
 import zlib
 from pathlib import Path
@@ -72,25 +73,31 @@ def _frames(rec: dict[str, Any], sdk_target: str) -> list[dict[str, Any]]:
 
 
 def _gunzip(src: Path, limit: int) -> Path:
+    """Decompress next to src into a private temporary file and rename it on success, so that a failure
+    never touches a file this call did not create. Only gzip format and truncation errors become core_not_found."""
     dst = src.with_suffix("")
+    tmp: Path | None = None
     total = 0
     try:
-        with gzip.open(src, "rb") as f, open(dst, "wb") as out:
-            while True:
-                chunk = f.read(1 << 20)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > limit:
-                    raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
-                out.write(chunk)
-    except (EOFError, OSError, zlib.error) as e:  # a truncated or damaged gzip file (BadGzipFile is an OSError)
-        with contextlib.suppress(OSError):
-            dst.unlink()
-        raise QnxMcpError("core_not_found", f"{src.name} is not a complete gzip file ({type(e).__name__})", hint="Rerun the program to get a fresh core.") from None
-    except BaseException:
-        with contextlib.suppress(OSError):
-            dst.unlink()
+        with gzip.open(src, "rb") as f:
+            fd, tmp_name = tempfile.mkstemp(dir=src.parent, prefix=".gunzip-")
+            tmp = Path(tmp_name)
+            with open(fd, "wb") as out:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > limit:
+                        raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
+                    out.write(chunk)
+        os.replace(tmp, dst)
+    except BaseException as e:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+        if isinstance(e, (EOFError, gzip.BadGzipFile, zlib.error)):
+            raise QnxMcpError("core_not_found", f"{src.name} is not a complete gzip file ({type(e).__name__})", hint="Rerun the program to get a fresh core.") from None
         raise
     return dst
 

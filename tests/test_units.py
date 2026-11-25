@@ -1879,3 +1879,51 @@ def test_build_steps_share_one_deadline_and_no_step_starts_after_it(tmp_path: Pa
     assert seen and seen[0] <= 0.2, f"the first step was given {seen[0]} s for a 0.2 s budget"
     assert len(seen) == 1, "a second step started after the budget was used up"
     assert r["ok"] is False and r["error"]["code"] == "timeout", r.get("error")
+
+
+def test_gunzip_never_deletes_a_file_it_did_not_create(tmp_path: Path):
+    from qnx_mcp.crash import _gunzip
+    keep = tmp_path / "x.core"
+    keep.write_bytes(b"someone else's file")
+    with pytest.raises(OSError):  # the compressed file is missing: a host error, not a gzip format error
+        _gunzip(tmp_path / "x.core.gz", 1 << 30)
+    assert keep.read_bytes() == b"someone else's file"
+    bad = tmp_path / "y.core.gz"
+    bad.write_bytes(b"not gzip at all")
+    (tmp_path / "y.core").write_bytes(b"previous good core")
+    with pytest.raises(QnxMcpError) as e:
+        _gunzip(bad, 1 << 30)
+    assert e.value.code == "core_not_found"
+    assert (tmp_path / "y.core").read_bytes() == b"previous good core", "a failed decompression replaced or removed an existing file"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["x.core", "y.core", "y.core.gz"], "a temporary file was left behind"
+
+
+def test_gunzip_host_write_error_is_not_reported_as_a_bad_core(tmp_path: Path, monkeypatch):
+    import errno
+    import gzip
+    from qnx_mcp.crash import _gunzip
+    src = tmp_path / "z.core.gz"
+    src.write_bytes(gzip.compress(b"core bytes" * 1000))
+    import builtins
+    from qnx_mcp import crash
+    real = builtins.open
+
+    class Full:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+        def write(self, b):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(crash, "open", lambda f, mode="r", *a, **k: Full(real(f, mode, *a, **k)), raising=False)
+    with pytest.raises(OSError) as e:
+        _gunzip(src, 1 << 30)
+    assert not isinstance(e.value, QnxMcpError) and e.value.errno == errno.ENOSPC
+    monkeypatch.undo()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["z.core.gz"], "a temporary file was left behind"
