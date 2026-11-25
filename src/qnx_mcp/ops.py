@@ -828,6 +828,10 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
             t.fetch(runner, remote, staged, info["size"], timeout=300, ip=ip)
             if staged.stat().st_size != info["size"] or _sha256_file(staged) != info["sha256"]:
                 raise QnxMcpError("copy_failed", f"downloaded copy of {remote} does not match the target's file (it changed during the copy)")
+        text = None
+        if info["size"] <= INLINE_TEXT:  # read from the verified copy, never from the published path
+            with contextlib.suppress(UnicodeDecodeError, OSError):
+                text = staged.read_bytes().decode("utf-8")
         if parent is None:
             final = private_dir(cfg.state_dir / "files" / target / uuid.uuid4().hex[:12]) / os.path.basename(remote)
             os.replace(staged, final)
@@ -839,9 +843,8 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
             staged.unlink()
     result: dict[str, Any] = {"ok": True, "target": target, "remote_path": remote, "local_path": str(final), "size": info["size"],
                               "sha256": info["sha256"], "mode": info.get("mode")}
-    if info["size"] <= INLINE_TEXT:
-        with contextlib.suppress(UnicodeDecodeError, OSError):
-            result["text"] = final.read_bytes().decode("utf-8")
+    if text is not None:
+        result["text"] = text
     return result
 
 

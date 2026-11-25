@@ -1554,3 +1554,33 @@ def test_provenance_says_when_the_run_user_could_reach_the_core():
     assert ev["verified"] is True and ev["core_exposed"] == rec["core_exposed"], ev
     assert ev["evidence"].startswith("executable path and pid match; the run's user could reach the core") and "/data/home/qnxuser" in ev["evidence"]
     assert crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, _RUN_REC, _mi(), _CORE_INFO)["core_exposed"] is None
+
+
+def _stub_file_get_transfer(monkeypatch, t, payload: bytes):
+    """file_get against a fake target whose file holds payload: the runner reports its hash, fetch writes the bytes."""
+    import hashlib
+    from qnx_mcp import ops
+    info = {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "mode": "0644"}
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    monkeypatch.setattr(ops, "prepare", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(ops, "_remote_hash", lambda *a, **k: dict(info))
+    monkeypatch.setattr(Target, "fetch", lambda self, runner, remote, local, size, **kw: Path(local).write_bytes(payload))
+    return info
+
+
+def test_file_get_text_comes_from_the_verified_download_not_the_published_path(fake_target, monkeypatch, tmp_path: Path):
+    """A file that replaces the output after the install must not change the "text" next to the size and sha256 of the download."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    _stub_file_get_transfer(monkeypatch, t, b"downloaded\n")
+    real_install = ops._install
+
+    def install_then_replace(src, parent, name, overwrite):
+        real_install(src, parent, name, overwrite)
+        (parent / name).write_bytes(b"replaced by another build\n" * 100)
+
+    monkeypatch.setattr(ops, "_install", install_then_replace)
+    out = tmp_path / "out"
+    out.mkdir()
+    r = ops.file_get(t.cfg, "tb1", "/tmp/x.txt", local_path=str(out / "x.txt"))
+    assert r["size"] == len(b"downloaded\n") and r["text"] == "downloaded\n", r
