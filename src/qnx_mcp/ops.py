@@ -537,7 +537,7 @@ def run_start(
             # Lost acknowledgement, timeout or cancellation: the daemon may be running. Stop it
             # through its control FIFO (bounded, independent of the cancelled call) and record the outcome.
             stopped = _stop_quietly(t, ip, runner, remote_run)
-            rec.update(state="failed", error=getattr(e, "code", type(e).__name__), cleanup=stopped)
+            rec.update(state=_state_after_stop(stopped), error=getattr(e, "code", type(e).__name__), cleanup=stopped)
             save_record(t, rec)
             raise
         rec.update(state="running", pid=res.get("pid"), runner_pid=res.get("runner_pid"))
@@ -560,11 +560,18 @@ def _stop_quietly(t: Target, ip: str, runner: str, remote_run: str) -> str:
             return f"stop failed: {e.code}"
 
 
+def _state_after_stop(cleanup: str) -> str:
+    """A start is failed only once the stop is confirmed (or nothing was running). Otherwise the daemon may be alive: the
+    record stays "starting", so that target_unregister keeps refusing and the next run_start tries the stop again."""
+    return "failed" if cleanup in ("stopped", "not running") else "starting"
+
+
 def _reconcile_starts(t: Target, ip: str, exclude: str) -> None:
     """A start whose outcome was never recorded (server killed mid-call) is stopped and marked failed."""
     for rec in all_records(t):
         if rec.get("state") == "starting" and rec["run_id"] != exclude and time.time() - rec.get("started_at", 0) > 60:
-            rec.update(state="failed", error="start not acknowledged", cleanup=_stop_quietly(t, ip, rec["runner"], rec["remote_run_dir"]))
+            stopped = _stop_quietly(t, ip, rec["runner"], rec["remote_run_dir"])
+            rec.update(state=_state_after_stop(stopped), error="start not acknowledged", cleanup=stopped)
             save_record(t, rec)
 
 

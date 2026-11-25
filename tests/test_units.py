@@ -1673,3 +1673,40 @@ def test_sha256_file_reads_the_current_bytes_even_when_size_and_mtime_are_unchan
     os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert p.stat().st_size == before.st_size and p.stat().st_mtime_ns == before.st_mtime_ns
     assert _sha256_file(p) != first
+
+
+def _start_that_loses_its_acknowledgement(fake_target, monkeypatch, stop_reply: str):
+    """run_start whose ssh call fails after the daemon may have started; the quiet stop gets stop_reply."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    prog = {"binary": "/w/app", "binary_snapshot": None, "binary_sha256": "a" * 64, "build_id": None, "remote_path": "/tmp/qnx-mcp/apps/x/app",
+            "remote_binary": None, "remote_real_path": None}
+    monkeypatch.setattr(ops, "_program", lambda *a, **k: dict(prog))
+    monkeypatch.setattr(ops, "_install_program", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    answers: list[Any] = [QnxMcpError("ssh_failed", "connection lost"), _reply(stop_reply)]
+
+    def ssh(self, argv, **kw):  # run_start builds its own Target, so the fake goes on the class
+        a = answers.pop(0)
+        if isinstance(a, QnxMcpError):
+            raise a
+        return a
+
+    monkeypatch.setattr(Target, "ssh", ssh)
+    with pytest.raises(QnxMcpError):
+        ops.run_start(t.cfg, "tb1", binary="/w/app")
+    return t, ops
+
+
+def test_a_start_whose_stop_was_not_acknowledged_still_counts_as_in_flight(fake_target, monkeypatch):
+    """The daemon may be alive: target_unregister must keep refusing until a stop is confirmed or the deadline has long passed."""
+    t, ops = _start_that_loses_its_acknowledgement(fake_target, monkeypatch, _runner_json(acknowledged=False, was_running=True))
+    [rec] = ops.all_records(t)
+    assert rec["cleanup"] == "stop not acknowledged"
+    assert [r["run_id"] for r in ops._in_flight(t)] == [rec["run_id"]], rec
+
+
+def test_a_start_whose_stop_was_confirmed_is_failed_and_not_in_flight(fake_target, monkeypatch):
+    t, ops = _start_that_loses_its_acknowledgement(fake_target, monkeypatch, _runner_json(acknowledged=True, was_running=True))
+    [rec] = ops.all_records(t)
+    assert rec["state"] == "failed" and rec["cleanup"] == "stopped" and ops._in_flight(t) == []
