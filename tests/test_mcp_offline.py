@@ -49,6 +49,7 @@ def test_tools_have_descriptions_schemas_and_annotations(tmp_path: Path):
                 s = t.output_schema
                 assert s and s.get("type") == "object" and len(s.get("anyOf", [])) == 2, t.name
                 assert t.annotations is not None and _hint(t.annotations, "open_world_hint") is False, t.name
+                assert "Takes " not in t.description, f"{t.name} publishes a duration estimate"  # project rule: no timing figures
             a = {n: t.annotations for n, t in tools.items()}
             assert _hint(a["build"], "idempotent_hint") is False and _hint(a["build"], "destructive_hint") is True
             for n in ("target_list", "target_status", "get_crash", "processes", "logs", "run_poll", "environment_check", "file_list"):
