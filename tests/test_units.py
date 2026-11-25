@@ -1736,3 +1736,19 @@ def test_run_start_reconciles_old_starts_before_it_publishes_its_own_record(fake
     r = ops.run_start(t.cfg, "tb1", binary="/w/app")
     assert seen == [[]], seen
     assert ops.load_record(t, r["run_id"])["state"] == "running"
+
+
+def test_a_finished_run_stays_finished_when_its_remote_directory_is_gone(fake_target, monkeypatch):
+    """The first poll saw the end of the run and recorded it. If the target later loses the run directory (pruned,
+    rebooted), poll must still say finished, with the recorded outcome, and not report the result as unknown."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    rec = {"run_id": "r-000000000040", "kind": "background", "state": "finished", "outcome": "crashed", "pid": 7, "started_at": time.time(),
+           "runner": "/tmp/qnx-mcp/bin/r", "remote_run_dir": "/tmp/qnx-mcp/runs/r-000000000040", "target": "tb1"}
+    ops.save_record(t, rec)
+    assert ops._apply_poll(t, dict(rec), {"alive": False, "status": None}) == "finished"
+    monkeypatch.setattr(ops, "_poll_once", lambda *a, **k: {"alive": False, "status": None})
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    r = ops.run_poll(t.cfg, "tb1", rec["run_id"])
+    assert r["state"] == "finished" and r["outcome"] == "crashed" and "no longer" in r["note"], r
+    assert ops.load_record(t, rec["run_id"])["state"] == "finished"

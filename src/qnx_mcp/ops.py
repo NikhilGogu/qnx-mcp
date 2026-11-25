@@ -605,6 +605,8 @@ def _apply_poll(t: Target, rec: dict[str, Any], p: dict[str, Any]) -> str:
         return "finished"
     if p.get("alive"):
         return "running"
+    if rec.get("state") == "finished":  # seen to finish by an earlier poll; the target has since lost its copy of the status
+        return "finished"
     if rec.get("state") == "running":
         rec.update(state="lost", finished_at=time.time())
         save_record(t, rec)
@@ -645,6 +647,9 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
         result["result"] = {k: v for k, v in status.items() if k not in ("runner", "version")}
         if status.get("core_path"):
             result["next_step"] = _crash_step(target, run_id, rec)
+    elif state == "finished":
+        result["outcome"] = rec.get("outcome")
+        result["note"] = "this run finished earlier; its status and output are no longer on the target (rebooted or the run directory was removed)"
     elif state == "lost":
         result["note"] = "the runner is gone without a final status (target rebooted or the run directory was removed)"
     more = out.get("next", 0) < (out.get("size") or 0) or err.get("next", 0) < (err.get("size") or 0)
