@@ -1789,3 +1789,20 @@ def test_prepare_treats_a_state_line_that_is_not_an_object_as_a_mismatch(fake_ta
                           _reply(), _reply(_runner_json(sha256=entry[2], size=entry[3], mode="0755")), _reply()])
     prepare(t, "10.0.0.1", [entry], [])
     assert [c[1][0] for c in fake.calls if c[0] == "put"] == [str(runner), str(app)]
+
+
+def test_truncated_gzip_core_is_a_clean_error_and_leaves_no_partial_file(tmp_path: Path):
+    import gzip
+    from qnx_mcp.crash import _gunzip
+    raw = os.urandom(300_000)
+    blob = gzip.compress(raw)
+    for name, data in (("cut.core.gz", blob[: len(blob) // 2]), ("notgzip.core.gz", b"plain bytes, not gzip")):
+        src = tmp_path / name
+        src.write_bytes(data)
+        with pytest.raises(QnxMcpError) as e:
+            _gunzip(src, 1 << 30)
+        assert e.value.code == "core_not_found" and "gzip" in e.value.message, e.value.to_dict()
+        assert not src.with_suffix("").exists(), name
+    good = tmp_path / "good.core.gz"
+    good.write_bytes(blob)
+    assert _gunzip(good, 1 << 30).read_bytes() == raw

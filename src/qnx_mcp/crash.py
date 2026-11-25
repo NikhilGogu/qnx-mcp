@@ -9,6 +9,7 @@ import gzip
 import os
 import re
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -67,17 +68,24 @@ def _frames(rec: dict[str, Any], sdk_target: str) -> list[dict[str, Any]]:
 def _gunzip(src: Path, limit: int) -> Path:
     dst = src.with_suffix("")
     total = 0
-    with gzip.open(src, "rb") as f, open(dst, "wb") as out:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > limit:
-                out.close()
-                dst.unlink()
-                raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
-            out.write(chunk)
+    try:
+        with gzip.open(src, "rb") as f, open(dst, "wb") as out:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
+                out.write(chunk)
+    except (EOFError, OSError, zlib.error) as e:  # a truncated or damaged gzip file (BadGzipFile is an OSError)
+        with contextlib.suppress(OSError):
+            dst.unlink()
+        raise QnxMcpError("core_not_found", f"{src.name} is not a complete gzip file ({type(e).__name__})", hint="Rerun the program to get a fresh core.") from None
+    except BaseException:
+        with contextlib.suppress(OSError):
+            dst.unlink()
+        raise
     return dst
 
 
