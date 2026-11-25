@@ -1927,3 +1927,15 @@ def test_gunzip_host_write_error_is_not_reported_as_a_bad_core(tmp_path: Path, m
     assert not isinstance(e.value, QnxMcpError) and e.value.errno == errno.ENOSPC
     monkeypatch.undo()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["z.core.gz"], "a temporary file was left behind"
+
+
+def test_elf_info_does_not_leak_a_descriptor_when_given_a_directory(tmp_path: Path):
+    def open_fds() -> int:
+        return len(os.listdir("/dev/fd"))
+    d = tmp_path / "adir"
+    d.mkdir()
+    assert elf_info(str(d)) is None
+    before = open_fds()
+    for _ in range(50):
+        assert elf_info(str(d)) is None
+    assert open_fds() == before, "elf_info left descriptors open"

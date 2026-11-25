@@ -396,10 +396,13 @@ def elf_info(path: str) -> dict[str, Any] | None:
     """Minimal ELF reader: architecture, type, interpreter and debug info presence."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO with no writer must not block the open
-        with os.fdopen(fd, "rb") as f:
-            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return None
-            data = f.read()
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                data = f.read()
+        finally:
+            os.close(fd)
     except OSError:
         return None
     if len(data) < 64 or data[:4] != b"\x7fELF":
