@@ -30,7 +30,7 @@ signal 15: No error
 $ ssh -V        (on the target)
 OpenSSH_10.4p1, OpenSSL 3.0.20 7 Apr 2026
 $ slog2info -t | grep -i -E "penalt|drop"   (after a burst of tool calls, each with a port-22 probe)
-sshd[249871-1]: srclimit_penalise: 192.168.122.1/32: activating ipv4 penalty of 15.383 seconds for penalty: connections without attempting authentication
+sshd[249871-1]: srclimit_penalise: 192.168.122.1/32: activating ipv4 penalty: connections without attempting authentication
 sshd[249871-1]: drop connection #0 from [192.168.122.1]:37472 on [192.168.122.130]:22 penalty: connections without attempting authentication
 (the tool call saw: ssh_failed, "kex_exchange_identification: Connection closed by remote host")
 

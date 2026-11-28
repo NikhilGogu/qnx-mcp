@@ -4,6 +4,8 @@
 
 Build, run and debug on QNX 8.0 through 21 typed tools. The coding agent gets no target shell tool. On managed QEMU guests, programs still run as root by default. Set `QNX_MCP_RUN_AS` for non-root program runs. This is not a sandbox.
 
+QNX OS 8.0 | target: x86_64 QEMU image (QNX OS 8.0.0, built by mkqnximage) | toolchain: QNX SDP 8.0 (qcc with gcc 12.2.0, `ntox86_64-gdb` 14.2)
+
 In 50 timed-out runs of a hanging program, plain SSH left 50 processes and qnx-mcp left none. In 40 stale-core cases, gdb warned each time, then printed 30 unreadable stacks and 10 with the wrong function names. qnx-mcp refused all 40. Both arms of the agent study fixed 80 of 80 seeded bugs. The no-shell arm needed more turns ([What the study shows](#what-the-study-shows)).
 
 [Quickstart](#quickstart) | [Run the proof tests](docs/PROOF_TESTS.md) | [Security model](#security-model)
@@ -17,6 +19,16 @@ The reported live runs used QNX 8.0 x86_64 in QEMU, as root and with non-root pr
 * Demo video: [qnx-mcp: a QNX 8.0 target for AI coding agents](https://youtu.be/D49Cq9S1k0Y)
 * Step-by-step codelab: [Give your AI coding agent a QNX target](https://nikhil-qnx-codelabs.pages.dev/qnx-mcp-agent-target/)
 * Design notes: [docs/DESIGN.md](docs/DESIGN.md). Test logs and target observations: [docs/evidence](docs/evidence).
+
+## Where QNX shows
+
+Each item names the file and function that touches QNX, and the output that shows it. The hosted CI runs only the offline tests, so the output from the QNX target is in `docs/evidence`.
+
+* QNX toolchain calls: `build` in [src/qnx_mcp/sdk.py](src/qnx_mcp/sdk.py) runs `qcc` (and make or cmake with the SDP). `runner_binary` compiles the target-side helper with `qcc -V<variant>`. `target_create` runs `mkqnximage` (see `_mkqnximage` in [src/qnx_mcp/target.py](src/qnx_mcp/target.py)). Output: the `build` calls in [docs/evidence/test-run.log](docs/evidence/test-run.log) and the toolchain versions in [docs/evidence/versions.txt](docs/evidence/versions.txt).
+* procfs and `DCMD_PROC_*`: the helper [src/qnx_mcp/runner/qnx-mcp-run.c](src/qnx_mcp/runner/qnx-mcp-run.c) opens `/proc/<pid>/ctl` and uses `DCMD_PROC_INFO` in `proc_state`, `DCMD_PROC_SIGNAL` in `proc_signal`, and `/proc/<pid>/exefile` in `read_exefile`. `process_stop` in [src/qnx_mcp/ops.py](src/qnx_mcp/ops.py) drives it. Output: [docs/evidence/v0.2-target-observations.txt](docs/evidence/v0.2-target-observations.txt) and `test_process_stop` in [tests/test_shellfree_e2e.py](tests/test_shellfree_e2e.py).
+* pidin and slog2: `processes` in [src/qnx_mcp/ops.py](src/qnx_mcp/ops.py) runs `pidin` on the target and `parse_pidin` in [src/qnx_mcp/parsers.py](src/qnx_mcp/parsers.py) reads it. `logs` runs `slog2info`. Offline test: `test_pidin_parser` in [tests/test_units.py](tests/test_units.py). The first section of the observations file above compares the `pidin` path column with `DCMD_PROC_MAPDEBUG_BASE`.
+* Core files from dumper: `dumper_register` and `DCMD_DUMPER_NOTIFYEVENT` / `DCMD_DUMPER_GETPATH` in `qnx-mcp-run.c` get the exact core path. `get_crash` in [src/qnx_mcp/crash.py](src/qnx_mcp/crash.py) checks build ID, executable path and pid, and `core_exe_build_id` in `parsers.py` reads the `QNT_LINK_MAP` note. The SDP gdb (`gdb_for` in `target.py`) then prints the backtrace. Output: `"verified": true` and the `core_mismatch` refusal in `docs/evidence/test-run.log`, and the stale-core results in [docs/PROOF_TESTS.md](docs/PROOF_TESTS.md).
+* Tests that run on the QNX target: `test_crash_slice` in `tests/test_slice_e2e.py`, `test_orphan_count` in `tests/test_proof_orphan_count_e2e.py`, `test_stale_core_backtrace` in `tests/test_proof_stale_core_e2e.py`, and `test_crash_is_still_verified_as_run_as` in `tests/test_nonroot_e2e.py`. `scripts/live-tests.sh` runs them in order.
 
 ## Quickstart
 
@@ -167,7 +179,7 @@ Every run has a wall-clock deadline, capped output (truncation is reported), std
 
 ### Structured system state
 
-`processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` returns every thread's stack and the id of the thread that faulted.
+`processes` returns every thread with its QNX state (RECEIVE, REPLY, SEND, MUTEX, NANOSLEEP, ...), priority, policy and what it is blocked on; `get_crash` lists stacks for up to 64 threads, 16 frames each, and gives the id of the thread that faulted.
 
 ## Example (abridged)
 
@@ -230,7 +242,7 @@ Every tool returns JSON as MCP `structuredContent` (and as text). Success has `o
 | `build` | qcc, make or cmake with the SDP, for `arch` or for the architecture of `target`; `diagnostics[]` (file, line, column, severity, option), `artifacts[]` (arch, loader, build ID, debug info) |
 | `deploy_and_run` | Snapshot, verified upload, one run with deadline and caps; outcome `exited`, `crashed`, `killed`, `timeout`, `stopped` or `exec_failed`. With `remote_binary` (and no `binary`): a program already on the target, below `/tmp` or `/data`, never a shell or a system program |
 | `run_start` / `run_poll` / `run_stop` | Background runs with output cursors (`max_kb` up to 1024), lifetime limit, per-server ownership of run ids; stop goes through the owning runner's control FIFO. `run_start` also takes `remote_binary` |
-| `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, every thread's stack. For a `remote_binary` run, `run_id` plus the host build as `binary`; a binary whose build ID differs from the one the core records is refused with `core_mismatch` |
+| `get_crash` | Verified core, gdb/MI backtrace: faulting frame, first user frame, locals, source lines, and stacks for up to 64 threads with 16 frames each. For a `remote_binary` run, `run_id` plus the host build as `binary`; a binary whose build ID differs from the one the core records is refused with `core_mismatch`. Without a build ID the match is not verified (`verified: false`) |
 | `file_put` / `file_get` | One file each way, size and SHA-256 verified; no directory, symlink or symlinked-parent destinations; never replaces a file unless `overwrite` |
 | `file_list` | One target directory, read-only: name, type, size, mode, mtime, symlink target (links are never followed); sorted by name, at most `max_entries` (up to 1000), truncation reported |
 | `processes` | `pidin` as JSON, optionally per thread |
