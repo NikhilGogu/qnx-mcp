@@ -8,7 +8,9 @@ import contextlib
 import gzip
 import os
 import re
+import tempfile
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,12 @@ def _source_context(cfg: Config, path: str | None, line: int | None, radius: int
     return [{"line": n, "text": lines[n - 1], "current": n == line} for n in range(lo, hi + 1)]
 
 
+def _under(path: str, base: str) -> bool:
+    """True when path is base or lies inside it; a sibling such as base + '-app' does not count."""
+    base = base.rstrip("/") or "/"
+    return path == base or path.startswith(base if base == "/" else base + "/")
+
+
 def _frame(f: dict[str, Any], sdk_target: str) -> dict[str, Any]:
     if not isinstance(f, dict):
         raise QnxMcpError("gdb_failed", "malformed frame record from gdb")
@@ -53,7 +61,7 @@ def _frame(f: dict[str, Any], sdk_target: str) -> dict[str, Any]:
         "line": int(f["line"]) if str(f.get("line", "")).isdigit() else None,
         "address": f.get("addr"),
         "library": f.get("from"),
-        "user_code": bool(fullname and os.path.isfile(fullname) and not fullname.startswith(sdk_target)),
+        "user_code": bool(fullname and os.path.isfile(fullname) and not _under(fullname, sdk_target)),
     }
 
 
@@ -65,19 +73,32 @@ def _frames(rec: dict[str, Any], sdk_target: str) -> list[dict[str, Any]]:
 
 
 def _gunzip(src: Path, limit: int) -> Path:
+    """Decompress next to src into a private temporary file and rename it on success, so that a failure
+    never touches a file this call did not create. Only gzip format and truncation errors become core_not_found."""
     dst = src.with_suffix("")
+    tmp: Path | None = None
     total = 0
-    with gzip.open(src, "rb") as f, open(dst, "wb") as out:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > limit:
-                out.close()
-                dst.unlink()
-                raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
-            out.write(chunk)
+    try:
+        with gzip.open(src, "rb") as f:
+            fd, tmp_name = tempfile.mkstemp(dir=src.parent, prefix=".gunzip-")
+            tmp = Path(tmp_name)
+            with open(fd, "wb") as out:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > limit:
+                        raise QnxMcpError("core_too_large", f"decompressed core exceeds {limit >> 20} MiB", hint="Raise max_core_mb (up to 4096).")
+                    out.write(chunk)
+        os.replace(tmp, dst)
+    except BaseException as e:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+        if isinstance(e, (EOFError, gzip.BadGzipFile, zlib.error)):
+            raise QnxMcpError("core_not_found", f"{src.name} is not a complete gzip file ({type(e).__name__})", hint="Rerun the program to get a fresh core.") from None
+        raise
     return dst
 
 

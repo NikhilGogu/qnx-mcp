@@ -95,7 +95,6 @@
    "event": "result",
    "is_error": false,
    "num_turns": 3,
-   "duration_ms": 21639,
    "terminal_reason": "completed"
   }
  ]

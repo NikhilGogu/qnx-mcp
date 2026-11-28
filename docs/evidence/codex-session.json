@@ -1,7 +1,6 @@
 {
  "what": "codex exec (codex-cli 0.160.0, profile astra) using qnx-mcp on the build box over ssh -T; sanitized: thread id, reasoning and local config warnings removed",
  "command": "codex exec -p astra --skip-git-repo-check --ephemeral -c 'mcp_servers.qnx.command=\"ssh\"' -c 'mcp_servers.qnx.args=[\"-T\",\"qnx\",\"env\",\"QNX_MCP_TARGETS_DIR=/home/ubuntu/targets\",\"QNX_MCP_ALLOW_TARGETS=''tb,tb[0-9]*''\",\"/home/ubuntu/work/venv-qnx-mcp/bin/qnx-mcp\"]' -c 'mcp_servers.qnx.tool_timeout_sec=600' --json \"Call the qnx MCP tool target_status with name tb and report its state, ip and core_naming. Do not run shell commands and do not call any other tool.\"",
- "duration_s": 18.3,
  "events": [
   {
    "event": "agent_message",

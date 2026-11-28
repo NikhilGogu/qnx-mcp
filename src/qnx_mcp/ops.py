@@ -12,7 +12,6 @@ import posixpath
 import re
 import shutil
 import stat
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -43,22 +42,15 @@ SYSTEM_DIRS = ("/proc/boot", "/bin", "/sbin", "/usr", "/system")
 STOP_SIGNALS = ("TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "KILL")
 # remote_binary never starts these, wherever they are (QNX's own small shells included)
 SHELL_NAMES = ("sh", "ksh", "mksh", "pdksh", "bash", "dash", "ash", "zsh", "csh", "tcsh", "fish", "esh", "fesh", "uesh", "toybox", "busybox", "toysh")
-_sha_cache: dict[tuple[str, int, int], str] = {}
-_sha_lock = threading.Lock()
 
 
 def _sha256_file(p: Path) -> str:
-    st = p.stat()
-    key = (str(p), st.st_size, st.st_mtime_ns)
-    with _sha_lock:
-        if key in _sha_cache:
-            return _sha_cache[key]
+    """SHA-256 of the bytes on disk now. Not cached: a digest remembered for the same path, size and mtime says nothing
+    about a file that was changed with its mtime put back, and the cache would grow with every download."""
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
-    with _sha_lock:
-        _sha_cache[key] = h.hexdigest()
     return h.hexdigest()
 
 
@@ -235,9 +227,10 @@ def prepare(t: Target, ip: str, files: list[tuple[Path, str, str, int, str]], mk
     states = []
     for line in lines:
         try:
-            states.append(json.loads(line))
+            state = json.loads(line)
         except ValueError:
-            states.append({})
+            state = None
+        states.append(state if isinstance(state, dict) else {})
     if states[0].get("sha256") != runner_sha or states[0].get("mode") != "0755":
         _upload(t, ip, runner_local, runner_remote, runner_sha, runner_size, "0755", None)
     for (local, remote, sha, size, mode), st in zip(files, states[1:]):
@@ -524,13 +517,13 @@ def run_start(
         ip = t.require_ip()
         remote_run = f"{REMOTE_ROOT}/runs/{rid}"
         runner = _install_program(t, ip, prog, remote_run)
+        _reconcile_starts(t, ip, exclude=rid)  # before this call's record exists: its age and deadline start at the launch
         rec: dict[str, Any] = {
             "run_id": rid, "target": target, "kind": "background", "state": "starting", **_record_fields(prog), "remote_run_dir": remote_run,
             "args": args, "env_names": sorted((env or {}).keys()), "runner": runner, "started_at": time.time(),
             "deadline": time.time() + timeout_s, "run_as": _run_as_field(cfg),
         }
         save_record(t, rec)  # ownership is on disk before anything is launched
-        _reconcile_starts(t, ip, exclude=rid)
         try:
             r = t.ssh([runner, "-B", remote_run, *opts, *_program_argv(cfg, prog), "-R", remote_run, "--", prog["remote_path"], *args],
                       timeout=30, what="run_start", ip=ip, check=False)
@@ -545,7 +538,7 @@ def run_start(
             # Lost acknowledgement, timeout or cancellation: the daemon may be running. Stop it
             # through its control FIFO (bounded, independent of the cancelled call) and record the outcome.
             stopped = _stop_quietly(t, ip, runner, remote_run)
-            rec.update(state="failed", error=getattr(e, "code", type(e).__name__), cleanup=stopped)
+            rec.update(state=_state_after_stop(stopped), error=getattr(e, "code", type(e).__name__), cleanup=stopped)
             save_record(t, rec)
             raise
         rec.update(state="running", pid=res.get("pid"), runner_pid=res.get("runner_pid"))
@@ -568,11 +561,18 @@ def _stop_quietly(t: Target, ip: str, runner: str, remote_run: str) -> str:
             return f"stop failed: {e.code}"
 
 
+def _state_after_stop(cleanup: str) -> str:
+    """A start is failed only once the stop is confirmed (or nothing was running). Otherwise the daemon may be alive: the
+    record stays "starting", so that target_unregister keeps refusing and the next run_start tries the stop again."""
+    return "failed" if cleanup in ("stopped", "not running") else "starting"
+
+
 def _reconcile_starts(t: Target, ip: str, exclude: str) -> None:
     """A start whose outcome was never recorded (server killed mid-call) is stopped and marked failed."""
     for rec in all_records(t):
         if rec.get("state") == "starting" and rec["run_id"] != exclude and time.time() - rec.get("started_at", 0) > 60:
-            rec.update(state="failed", error="start not acknowledged", cleanup=_stop_quietly(t, ip, rec["runner"], rec["remote_run_dir"]))
+            stopped = _stop_quietly(t, ip, rec["runner"], rec["remote_run_dir"])
+            rec.update(state=_state_after_stop(stopped), error="start not acknowledged", cleanup=stopped)
             save_record(t, rec)
 
 
@@ -606,6 +606,8 @@ def _apply_poll(t: Target, rec: dict[str, Any], p: dict[str, Any]) -> str:
         return "finished"
     if p.get("alive"):
         return "running"
+    if rec.get("state") == "finished":  # seen to finish by an earlier poll; the target has since lost its copy of the status
+        return "finished"
     if rec.get("state") == "running":
         rec.update(state="lost", finished_at=time.time())
         save_record(t, rec)
@@ -646,6 +648,9 @@ def run_poll(cfg: Config, target: str, run_id: str, stdout_offset: int = 0, stde
         result["result"] = {k: v for k, v in status.items() if k not in ("runner", "version")}
         if status.get("core_path"):
             result["next_step"] = _crash_step(target, run_id, rec)
+    elif state == "finished":
+        result["outcome"] = rec.get("outcome")
+        result["note"] = "this run finished earlier; its final status is no longer available on the target (rebooted or the run directory was removed)"
     elif state == "lost":
         result["note"] = "the runner is gone without a final status (target rebooted or the run directory was removed)"
     more = out.get("next", 0) < (out.get("size") or 0) or err.get("next", 0) < (err.get("size") or 0)
@@ -828,6 +833,10 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
             t.fetch(runner, remote, staged, info["size"], timeout=300, ip=ip)
             if staged.stat().st_size != info["size"] or _sha256_file(staged) != info["sha256"]:
                 raise QnxMcpError("copy_failed", f"downloaded copy of {remote} does not match the target's file (it changed during the copy)")
+        text = None
+        if info["size"] <= INLINE_TEXT:  # read from the verified copy, never from the published path
+            with contextlib.suppress(UnicodeDecodeError, OSError):
+                text = staged.read_bytes().decode("utf-8")
         if parent is None:
             final = private_dir(cfg.state_dir / "files" / target / uuid.uuid4().hex[:12]) / os.path.basename(remote)
             os.replace(staged, final)
@@ -839,9 +848,8 @@ def file_get(cfg: Config, target: str, remote_path: str, local_path: str | None 
             staged.unlink()
     result: dict[str, Any] = {"ok": True, "target": target, "remote_path": remote, "local_path": str(final), "size": info["size"],
                               "sha256": info["sha256"], "mode": info.get("mode")}
-    if info["size"] <= INLINE_TEXT:
-        with contextlib.suppress(UnicodeDecodeError, OSError):
-            result["text"] = final.read_bytes().decode("utf-8")
+    if text is not None:
+        result["text"] = text
     return result
 
 
@@ -1000,12 +1008,14 @@ def unregister_target(cfg: Config, target: str) -> dict[str, Any]:
     """Forget an SSH-only target. A run still in flight would be left on a machine this server can no longer
     reach, so it is refused until the runs are stopped or have ended."""
     t = Target(cfg, target)
-    if t.kind == "ssh":
+
+    def refuse_if_busy() -> None:  # called with the exclusive lock held, so no run_start can still be recording a run
         live = _in_flight(t)
         if live:
             raise QnxMcpError("target_busy", f"{len(live)} run(s) are still in flight on {target}: {', '.join(r['run_id'] for r in live[:5])}",
                               hint="Stop them with run_stop (or wait for them to end), then call target_unregister again.")
-    return t.unregister()
+
+    return t.unregister(before=refuse_if_busy)
 
 
 def build_arch(cfg: Config, target: str | None, arch: str | None) -> str:

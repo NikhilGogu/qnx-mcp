@@ -1554,3 +1554,422 @@ def test_provenance_says_when_the_run_user_could_reach_the_core():
     assert ev["verified"] is True and ev["core_exposed"] == rec["core_exposed"], ev
     assert ev["evidence"].startswith("executable path and pid match; the run's user could reach the core") and "/data/home/qnxuser" in ev["evidence"]
     assert crash._provenance(Path("core"), Path("bin"), {}, "b" * 64, _RUN_REC, _mi(), _CORE_INFO)["core_exposed"] is None
+
+
+def _stub_file_get_transfer(monkeypatch, t, payload: bytes):
+    """file_get against a fake target whose file holds payload: the runner reports its hash, fetch writes the bytes."""
+    import hashlib
+    from qnx_mcp import ops
+    info = {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "mode": "0644"}
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    monkeypatch.setattr(ops, "prepare", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(ops, "_remote_hash", lambda *a, **k: dict(info))
+    monkeypatch.setattr(Target, "fetch", lambda self, runner, remote, local, size, **kw: Path(local).write_bytes(payload))
+    return info
+
+
+def test_file_get_text_comes_from_the_verified_download_not_the_published_path(fake_target, monkeypatch, tmp_path: Path):
+    """A file that replaces the output after the install must not change the "text" next to the size and sha256 of the download."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    _stub_file_get_transfer(monkeypatch, t, b"downloaded\n")
+    real_install = ops._install
+
+    def install_then_replace(src, parent, name, overwrite):
+        real_install(src, parent, name, overwrite)
+        (parent / name).write_bytes(b"replaced by another build\n" * 100)
+
+    monkeypatch.setattr(ops, "_install", install_then_replace)
+    out = tmp_path / "out"
+    out.mkdir()
+    r = ops.file_get(t.cfg, "tb1", "/tmp/x.txt", local_path=str(out / "x.txt"))
+    assert r["size"] == len(b"downloaded\n") and r["text"] == "downloaded\n", r
+
+
+def test_destroy_keeps_the_image_and_pid_file_when_qemu_survives_sigkill(fake_target, monkeypatch):
+    """If the verified pidfd never becomes readable after SIGTERM and SIGKILL, the process is alive: the PID file must
+    stay (it is the only way to find it again) and the image must not be deleted under it."""
+    from qnx_mcp import target as target_mod
+    t, _, _ = fake_target
+    (t.dir / "output").mkdir()
+    pidfile = t.dir / "output" / "qemu.pid"
+    pidfile.write_text("4242\n")
+    r, w = os.pipe()  # never readable: stands in for a pidfd of a process that does not exit
+    monkeypatch.setattr(Target, "qemu_pidfd", lambda self: (4242, os.dup(r)))  # each caller closes the descriptor it gets
+    monkeypatch.setattr(target_mod.signal, "pidfd_send_signal", lambda fd, sig: None, raising=False)  # absent off Linux
+    monkeypatch.setattr(target_mod.select, "select", lambda rl, wl, xl, timeout=None: ([], [], []))
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert "survived SIGKILL" in e.value.message, e.value.to_dict()
+        assert pidfile.read_text().strip() == "4242" and (t.dir / "local" / "options").is_file()
+    finally:
+        os.close(w)
+        os.close(r)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can remove anything")
+def test_destroy_does_not_report_removal_when_the_image_directory_cannot_be_deleted(fake_target):
+    """rmtree used to ignore errors: destroy said "removed" while part of the target was still there."""
+    t, _, _ = fake_target
+    locked = t.dir / "output" / "sub"
+    locked.mkdir(parents=True)
+    (locked / "disk").write_bytes(b"x")
+    locked.chmod(0o500)  # its entries cannot be unlinked
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert e.value.code == "internal_error" and str(t.dir) in e.value.message, e.value.to_dict()
+        assert (locked / "disk").is_file()
+    finally:
+        locked.chmod(0o700)
+
+
+def test_elf_info_survives_a_truncated_program_header_table(tmp_path: Path):
+    """A core cut short by a full disk can end before its program headers: that is not an internal error."""
+    hdr = bytearray(64)
+    hdr[:4] = b"\x7fELF"
+    hdr[4], hdr[5] = 2, 1  # 64-bit, little-endian
+    struct.pack_into("<HH", hdr, 16, 4, 62)  # core, x86_64
+    struct.pack_into("<Q", hdr, 32, 1 << 20)  # e_phoff far beyond the end of the file
+    struct.pack_into("<HHHHH", hdr, 54, 56, 3, 64, 0, 0)  # e_phentsize, e_phnum, ...
+    core = tmp_path / "core.cut"
+    core.write_bytes(bytes(hdr))
+    info = elf_info(str(core))
+    assert info is not None and info["type"] == "core" and info["arch"] == "x86_64" and info["interpreter"] is None, info
+
+
+def test_elf_info_never_blocks_on_a_fifo(tmp_path: Path):
+    """A build tree can hold a FIFO; opening one with no writer blocks forever, and that happens after the build ended."""
+    from qnx_mcp.sdk import _artifacts
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    out: dict[str, Any] = {}
+
+    def look():
+        out["info"] = elf_info(str(fifo))
+        out["arts"] = _artifacts([fifo], 0.0)
+
+    th = threading.Thread(target=look, daemon=True)
+    th.start()
+    th.join(5)
+    stuck = th.is_alive()
+    for _ in range(3):  # let a stuck open finish, so that no thread is left behind
+        if th.is_alive():
+            os.close(os.open(fifo, os.O_WRONLY))
+            th.join(2)
+    assert not stuck, "opening a FIFO blocked"
+    assert out == {"info": None, "arts": []}, out
+
+
+def test_sha256_file_reads_the_current_bytes_even_when_size_and_mtime_are_unchanged(tmp_path: Path):
+    """The snapshot check before gdb must hash what is on disk now, not a digest remembered for the same path, size and mtime."""
+    from qnx_mcp.ops import _sha256_file
+    p = tmp_path / "snap"
+    p.write_bytes(b"AAAA")
+    before = p.stat()
+    first = _sha256_file(p)
+    p.write_bytes(b"BBBB")
+    os.utime(p, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert p.stat().st_size == before.st_size and p.stat().st_mtime_ns == before.st_mtime_ns
+    assert _sha256_file(p) != first
+
+
+def _start_that_loses_its_acknowledgement(fake_target, monkeypatch, stop_reply: str):
+    """run_start whose ssh call fails after the daemon may have started; the quiet stop gets stop_reply."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    prog = {"binary": "/w/app", "binary_snapshot": None, "binary_sha256": "a" * 64, "build_id": None, "remote_path": "/tmp/qnx-mcp/apps/x/app",
+            "remote_binary": None, "remote_real_path": None}
+    monkeypatch.setattr(ops, "_program", lambda *a, **k: dict(prog))
+    monkeypatch.setattr(ops, "_install_program", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    answers: list[Any] = [QnxMcpError("ssh_failed", "connection lost"), _reply(stop_reply)]
+
+    def ssh(self, argv, **kw):  # run_start builds its own Target, so the fake goes on the class
+        a = answers.pop(0)
+        if isinstance(a, QnxMcpError):
+            raise a
+        return a
+
+    monkeypatch.setattr(Target, "ssh", ssh)
+    with pytest.raises(QnxMcpError):
+        ops.run_start(t.cfg, "tb1", binary="/w/app")
+    return t, ops
+
+
+def test_a_start_whose_stop_was_not_acknowledged_still_counts_as_in_flight(fake_target, monkeypatch):
+    """The daemon may be alive: target_unregister must keep refusing until a stop is confirmed or the deadline has long passed."""
+    t, ops = _start_that_loses_its_acknowledgement(fake_target, monkeypatch, _runner_json(acknowledged=False, was_running=True))
+    [rec] = ops.all_records(t)
+    assert rec["cleanup"] == "stop not acknowledged"
+    assert [r["run_id"] for r in ops._in_flight(t)] == [rec["run_id"]], rec
+
+
+def test_a_start_whose_stop_was_confirmed_is_failed_and_not_in_flight(fake_target, monkeypatch):
+    t, ops = _start_that_loses_its_acknowledgement(fake_target, monkeypatch, _runner_json(acknowledged=True, was_running=True))
+    [rec] = ops.all_records(t)
+    assert rec["state"] == "failed" and rec["cleanup"] == "stopped" and ops._in_flight(t) == []
+
+
+def test_run_start_reconciles_old_starts_before_it_publishes_its_own_record(fake_target, monkeypatch):
+    """While the stops of old starts run (each can take seconds), the new call's own record must not be on disk yet:
+    a concurrent run_start would see it age and reclaim it, and its deadline would be spent before the launch."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    old = {"run_id": "r-000000000030", "kind": "background", "state": "starting", "runner": "/tmp/qnx-mcp/bin/r", "started_at": time.time() - 300,
+           "remote_run_dir": "/tmp/qnx-mcp/runs/r-000000000030"}
+    ops.save_record(t, old)
+    prog = {"binary": "/w/app", "binary_snapshot": None, "binary_sha256": "a" * 64, "build_id": None, "remote_path": "/tmp/qnx-mcp/apps/x/app",
+            "remote_binary": None, "remote_real_path": None}
+    monkeypatch.setattr(ops, "_program", lambda *a, **k: dict(prog))
+    monkeypatch.setattr(ops, "_install_program", lambda *a, **k: "/tmp/qnx-mcp/bin/r")
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    seen: list[list[str]] = []
+
+    def stop(t_, ip, runner, d):
+        seen.append([r["run_id"] for r in ops.all_records(t_) if r["run_id"] != old["run_id"]])
+        return "stopped"
+
+    monkeypatch.setattr(ops, "_stop_quietly", stop)
+    monkeypatch.setattr(Target, "ssh", lambda self, argv, **kw: _reply(_runner_json(started=True, pid=7, runner_pid=6)))
+    r = ops.run_start(t.cfg, "tb1", binary="/w/app")
+    assert seen == [[]], seen
+    assert ops.load_record(t, r["run_id"])["state"] == "running"
+
+
+def test_a_finished_run_stays_finished_when_its_remote_directory_is_gone(fake_target, monkeypatch):
+    """The first poll saw the end of the run and recorded it. If the target later loses the run directory (pruned,
+    rebooted), poll must still say finished, with the recorded outcome, and not report the result as unknown."""
+    from qnx_mcp import ops
+    t, _, _ = fake_target
+    rec = {"run_id": "r-000000000040", "kind": "background", "state": "finished", "outcome": "crashed", "pid": 7, "started_at": time.time(),
+           "runner": "/tmp/qnx-mcp/bin/r", "remote_run_dir": "/tmp/qnx-mcp/runs/r-000000000040", "target": "tb1"}
+    ops.save_record(t, rec)
+    assert ops._apply_poll(t, dict(rec), {"alive": False, "status": None}) == "finished"
+    monkeypatch.setattr(ops, "_poll_once", lambda *a, **k: {"alive": False, "status": None})
+    monkeypatch.setattr(Target, "require_ip", lambda self: "10.0.0.1")
+    r = ops.run_poll(t.cfg, "tb1", rec["run_id"])
+    assert r["state"] == "finished" and r["outcome"] == "crashed" and "no longer" in r["note"] and "output" not in r["note"], r
+    assert ops.load_record(t, rec["run_id"])["state"] == "finished"
+
+
+def test_json_looking_log_lines_do_not_break_diagnostics():
+    """A build that prints a JSON list which is not gcc's diagnostics must not turn a good build into an internal error."""
+    out = "\n".join(['[{"locations":[null]}]', '[{"children":[1]}]', '[{"fixits":["x"]}]', "[1, 2]",
+                     "main.c:9:12: error: expected ';' before '}' token"])
+    d = parse_diagnostics(out, "/w")
+    assert [x["line"] for x in d if x["source"] == "gcc-text"] == [9]
+
+
+@pytest.mark.parametrize("line", ['~"a\\8b"', '~"a\\9"', '^done,x="a\\8"'])
+def test_mi_backslash_digit_that_is_not_octal_is_not_a_crash(line):
+    """gdb output with a backslash followed by 8 or 9 must come back as a record or as unparsed text, never as a ValueError."""
+    mi = parse_mi_output(line + "\n")
+    assert isinstance(mi["console"], list) and isinstance(mi["unparsed"], list)
+
+
+def test_lease_with_a_null_expiry_is_skipped_not_fatal():
+    mac = "52:54:00:00:00:01"
+    text = json.dumps([{"mac-address": mac, "ip-address": "10.0.0.5", "expiry-time": None},
+                       {"mac-address": mac, "ip-address": "10.0.0.6", "expiry-time": 0},
+                       {"mac-address": mac, "ip-address": "10.0.0.7", "expiry-time": [1]}])
+    assert parse_leases(text, mac, 1000.0) == ["10.0.0.6"]
+
+
+@pytest.mark.parametrize("lines", ["null\n[1]\n", "3\n\"x\"\n"], ids=["null-and-list", "number-and-string"])
+def test_prepare_treats_a_state_line_that_is_not_an_object_as_a_mismatch(fake_target, lines):
+    """Valid JSON that is not an object must lead to an upload like any other bad state line, not to an AttributeError."""
+    from qnx_mcp.ops import prepare
+    t, runner, app = fake_target
+    entry = _app_entry(app)
+    rsha, rsize = _sha(runner), runner.stat().st_size
+    fake = FakeRemote(t, [_reply(lines),
+                          _reply(), _reply(_runner_json(sha256=rsha, size=rsize, mode="0755")), _reply(),
+                          _reply(), _reply(_runner_json(sha256=entry[2], size=entry[3], mode="0755")), _reply()])
+    prepare(t, "10.0.0.1", [entry], [])
+    assert [c[1][0] for c in fake.calls if c[0] == "put"] == [str(runner), str(app)]
+
+
+def test_truncated_gzip_core_is_a_clean_error_and_leaves_no_partial_file(tmp_path: Path):
+    import gzip
+    from qnx_mcp.crash import _gunzip
+    raw = os.urandom(300_000)
+    blob = gzip.compress(raw)
+    for name, data in (("cut.core.gz", blob[: len(blob) // 2]), ("notgzip.core.gz", b"plain bytes, not gzip")):
+        src = tmp_path / name
+        src.write_bytes(data)
+        with pytest.raises(QnxMcpError) as e:
+            _gunzip(src, 1 << 30)
+        assert e.value.code == "core_not_found" and "gzip" in e.value.message, e.value.to_dict()
+        assert not src.with_suffix("").exists(), name
+    good = tmp_path / "good.core.gz"
+    good.write_bytes(blob)
+    assert _gunzip(good, 1 << 30).read_bytes() == raw
+
+
+@pytest.mark.parametrize("make_args", [["-j"], ["all", "-j"], ["-j", "all"], ["--jobs"], ["--jobs", "-k"]])
+def test_a_bare_jobs_option_that_means_unlimited_parallelism_is_refused(tmp_path: Path, make_args):
+    from qnx_mcp.sdk import build
+    cfg, ws, log = _fake_sdp(tmp_path)
+    (ws / "proj").mkdir(exist_ok=True)
+    (ws / "proj" / "Makefile").write_text("all:\n")
+    with pytest.raises(QnxMcpError) as e:
+        build(cfg, str(ws / "proj"), system="make", make_args=make_args)
+    assert e.value.code == "invalid_argument" and "make_args" in e.value.message, e.value.to_dict()
+    assert _recorded(log) == [], "nothing may run when an argument is refused"
+
+
+def test_failed_create_in_a_pre_existing_empty_directory_gives_the_directory_back(tmp_path: Path, monkeypatch):
+    targets = tmp_path / "targets"
+    cfg = Config.from_env({"QNX_MCP_TARGETS_DIR": str(targets), "QNX_MCP_STATE_DIR": str(tmp_path / "s"),
+                           "QNX_MCP_ALLOW_TARGETS": "tb*", "QNX_MCP_SSH_KEY": str(tmp_path / "id"), "QNX_MCP_WORKSPACE": str(tmp_path)})
+    (tmp_path / "id.pub").write_text("ssh-ed25519 AAAA test\n")
+    mine = targets / "tb9"
+    mine.mkdir(parents=True)
+    mine.chmod(0o750)
+
+    def fail(self, args, timeout):
+        raise QnxMcpError("mkqnximage_failed", "mkqnximage exited with 1")
+
+    monkeypatch.setattr(Target, "_mkqnximage", fail)
+    with pytest.raises(QnxMcpError) as e:
+        Target(cfg, "tb9", must_exist=False).create(arch="x86_64", ram="1G", cpus=1, options=[], boot_timeout=30)
+    assert e.value.code == "mkqnximage_failed"
+    assert mine.is_dir(), "the empty directory that the caller made was deleted"
+    assert stat.S_IMODE(mine.stat().st_mode) == 0o750 and list(mine.iterdir()) == []
+
+
+def test_a_source_directory_that_shares_a_prefix_with_the_sdk_is_still_user_code(tmp_path: Path):
+    from qnx_mcp.crash import _frame
+    sdk = tmp_path / "qnx800" / "target" / "qnx"
+    inside = sdk / "usr" / "include" / "stdio.h"
+    sibling = tmp_path / "qnx800" / "target" / "qnx-app" / "main.c"
+    for p in (inside, sibling):
+        p.parent.mkdir(parents=True)
+        p.write_text("x\n")
+    for sdk_target in (str(sdk), str(sdk) + "/"):
+        assert _frame({"fullname": str(inside), "level": "0"}, sdk_target)["user_code"] is False
+        assert _frame({"fullname": str(sibling), "level": "0"}, sdk_target)["user_code"] is True, sdk_target
+
+
+@pytest.mark.parametrize("line", ['6^done,a="1",', '6^done,a="1",b=[],', '6^done,a="1",,b="2"'])
+def test_mi_result_body_with_a_dangling_comma_is_malformed(line):
+    rec = parse_mi_output(line + "\n")["results"]["6"]
+    assert rec.get("malformed") is True, rec
+
+
+def test_build_steps_share_one_deadline_and_no_step_starts_after_it(tmp_path: Path, monkeypatch):
+    import types
+    from qnx_mcp import sdk
+    cfg, ws, log = _fake_sdp(tmp_path)
+    seen: list[float] = []
+    sdk.sdk_env(cfg)  # sourcing the SDP script uses the real run; only build steps are faked below
+    real = sdk.run
+
+    def slow_run(argv, timeout, **kw):
+        if "cmake" not in os.path.basename(str(argv[0])):
+            return real(argv, timeout=timeout, **kw)
+        seen.append(timeout)
+        time.sleep(0.3)
+        return types.SimpleNamespace(returncode=0, timed_out=False, out="", err="", duration_s=0.3, truncated=False)
+
+    monkeypatch.setattr(sdk, "run", slow_run)
+    r = sdk.build(cfg, str(ws / "proj"), system="cmake", timeout_s=0.2)
+    assert seen and seen[0] <= 0.2, f"the first step was given {seen[0]} s for a 0.2 s budget"
+    assert len(seen) == 1, "a second step started after the budget was used up"
+    assert r["ok"] is False and r["error"]["code"] == "timeout", r.get("error")
+
+
+def test_gunzip_never_deletes_a_file_it_did_not_create(tmp_path: Path):
+    from qnx_mcp.crash import _gunzip
+    keep = tmp_path / "x.core"
+    keep.write_bytes(b"someone else's file")
+    with pytest.raises(OSError):  # the compressed file is missing: a host error, not a gzip format error
+        _gunzip(tmp_path / "x.core.gz", 1 << 30)
+    assert keep.read_bytes() == b"someone else's file"
+    bad = tmp_path / "y.core.gz"
+    bad.write_bytes(b"not gzip at all")
+    (tmp_path / "y.core").write_bytes(b"previous good core")
+    with pytest.raises(QnxMcpError) as e:
+        _gunzip(bad, 1 << 30)
+    assert e.value.code == "core_not_found"
+    assert (tmp_path / "y.core").read_bytes() == b"previous good core", "a failed decompression replaced or removed an existing file"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["x.core", "y.core", "y.core.gz"], "a temporary file was left behind"
+
+
+def test_gunzip_host_write_error_is_not_reported_as_a_bad_core(tmp_path: Path, monkeypatch):
+    import errno
+    import gzip
+    from qnx_mcp.crash import _gunzip
+    src = tmp_path / "z.core.gz"
+    src.write_bytes(gzip.compress(b"core bytes" * 1000))
+    import builtins
+    from qnx_mcp import crash
+    real = builtins.open
+
+    class Full:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+        def write(self, b):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(crash, "open", lambda f, mode="r", *a, **k: Full(real(f, mode, *a, **k)), raising=False)
+    with pytest.raises(OSError) as e:
+        _gunzip(src, 1 << 30)
+    assert not isinstance(e.value, QnxMcpError) and e.value.errno == errno.ENOSPC
+    monkeypatch.undo()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["z.core.gz"], "a temporary file was left behind"
+
+
+def test_elf_info_does_not_leak_a_descriptor_when_given_a_directory(tmp_path: Path):
+    def open_fds() -> int:
+        return len(os.listdir("/dev/fd"))
+    d = tmp_path / "adir"
+    d.mkdir()
+    assert elf_info(str(d)) is None
+    before = open_fds()
+    for _ in range(50):
+        assert elf_info(str(d)) is None
+    assert open_fds() == before, "elf_info left descriptors open"
+
+
+def test_failed_image_removal_keeps_the_state_needed_to_retry(fake_target):
+    t, _, _ = fake_target
+    locked = t.dir / "output" / "sub"
+    locked.mkdir(parents=True)
+    (locked / "disk").write_bytes(b"x")
+    t.state.mkdir(parents=True, exist_ok=True)
+    (t.state / "known_hosts").write_text("pinned\n")
+    (t.state / "runs").mkdir()
+    (t.state / "runs" / "r1.json").write_text("{}")
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t.destroy()
+        assert e.value.code == "internal_error"
+        assert (t.state / "known_hosts").is_file() and (t.state / "runs" / "r1.json").is_file(), "state was erased before the image was gone"
+    finally:
+        locked.chmod(0o700)
+
+
+def test_state_file_that_cannot_be_unlinked_is_reported_not_ignored(fake_target):
+    t, _, _ = fake_target
+    t.state.mkdir(parents=True, exist_ok=True)
+    (t.state / "lock").touch()
+    (t.state / "known_hosts").write_text("pinned\n")
+    t.state.chmod(0o500)  # entries cannot be unlinked
+    try:
+        with pytest.raises(QnxMcpError) as e:
+            t._remove(created_dir=False)
+        assert e.value.code == "internal_error" and "known_hosts" in e.value.message, e.value.to_dict()
+        assert (t.state / "known_hosts").is_file()
+    finally:
+        t.state.chmod(0o700)

@@ -331,6 +331,63 @@ def test_unregister_removes_only_the_registration_and_refuses_while_runs_are_in_
     assert _code(ops.unregister_target, cfg, "ami1") == "target_not_found"
 
 
+@needs_keygen
+def test_unregister_checks_for_runs_only_after_it_holds_the_exclusive_lock(tmp_path, fake, host_key, monkeypatch):
+    """A run_start that holds the shared lock when unregister begins writes its record before it lets go; unregister
+    must see that record, so the busy check has to happen under the exclusive lock, not before it."""
+    import threading
+    cfg = _cfg(tmp_path, QNX_MCP_SSH_HOSTS=HOST)
+    _register(cfg, fingerprint=host_key.fp)
+    holder = Target(cfg, "ami1")
+    holding, checked = threading.Event(), threading.Event()
+    real = ops._in_flight
+
+    def spy(t):
+        checked.set()
+        return real(t)
+
+    monkeypatch.setattr(ops, "_in_flight", spy)
+    out: dict[str, Any] = {}
+
+    def run_start_like():
+        with holder.lock(exclusive=False):
+            holding.set()
+            checked.wait(1.0)  # with the check before the lock it happens now; otherwise nothing happens here
+            time.sleep(0.2)
+            ops.save_record(holder, {"run_id": "r-000000000001", "kind": "background", "state": "running", "started_at": time.time()})
+
+    def unregister():
+        try:
+            out["r"] = ops.unregister_target(cfg, "ami1")
+        except QnxMcpError as e:
+            out["code"] = e.code
+
+    a = threading.Thread(target=run_start_like)
+    a.start()
+    assert holding.wait(5)
+    b = threading.Thread(target=unregister)
+    b.start()
+    a.join(10)
+    b.join(10)
+    assert out.get("code") == "target_busy", out
+    assert (cfg.targets_dir / "ami1" / SSH_TARGET_FILE).is_file()
+
+
+@needs_keygen
+def test_stale_unregister_never_removes_a_replacement_registration(tmp_path, fake, host_key):
+    """A call that built its Target (and so cached the registration) and then waited for the lock must not remove a
+    registration that was replaced under the same name while it waited."""
+    cfg = _cfg(tmp_path, QNX_MCP_SSH_HOSTS=HOST)
+    _register(cfg, fingerprint=host_key.fp)
+    stale = Target(cfg, "ami1")  # what a waiting unregister holds
+    Target(cfg, "ami1").unregister()
+    _register(cfg, fingerprint=host_key.fp, port=2222)  # another call registers a new machine under the name
+    assert _code(stale.unregister) == "target_busy"
+    assert Target(cfg, "ami1").kind == "ssh" and (cfg.targets_dir / "ami1" / SSH_TARGET_FILE).is_file()
+    Target(cfg, "ami1").unregister()
+    assert _code(Target, cfg, "ami1") == "target_not_found"
+
+
 # ---------------------------------------------------------------- ssh command lines, privileges, non-root login
 
 @needs_keygen

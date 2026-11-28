@@ -545,7 +545,7 @@ async def target_list() -> Annotated[CallToolResult, TargetList]:
 @mcp.tool(
     title="Create and boot a QNX target",
     description="Build a new QNX OS 8.0 QEMU image with mkqnximage in its own directory and boot it headless (KVM when available), "
-    "then wait until root SSH works. Takes 20 s to 3 minutes. Fails with target_exists if the name is taken; a failed build or boot "
+    "then wait until root SSH works. Fails with target_exists if the name is taken; a failed build or boot "
     "is cleaned up (QEMU stopped, directory removed, mkqnximage log kept). The SSH host keys mkqnximage generates are pinned. "
     f"Extra mkqnximage options are restricted to: {', '.join(sorted(MKQNXIMAGE_OPTIONS))} (form --opt=value). "
     "The image runs dumper with sequential core names (unless --secpol is set), so crashing programs leave distinct core files.",

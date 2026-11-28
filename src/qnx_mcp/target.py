@@ -134,7 +134,7 @@ def parse_leases(text: str, mac: str, now: float) -> list[str]:
         try:
             expiry = int(lease.get("expiry-time", 0))
             ip = str(ipaddress.IPv4Address(str(lease.get("ip-address", ""))))
-        except ValueError:
+        except (ValueError, TypeError):
             continue
         if expiry != 0 and expiry <= now:
             continue
@@ -651,6 +651,7 @@ class Target:
             if os.path.lexists(self.dir) and (self.dir.is_symlink() or not self.dir.is_dir() or any(self.dir.iterdir())):
                 raise QnxMcpError("target_exists", f"target directory {self.dir} already exists and is not empty", hint="Use target_start, or pick a new name.")
             created = not os.path.lexists(self.dir)
+            old_mode = None if created else stat.S_IMODE(os.stat(self.dir).st_mode)
             self.dir.mkdir(parents=True, exist_ok=True)
             with contextlib.suppress(FileNotFoundError):
                 self.known_hosts.unlink()
@@ -674,7 +675,15 @@ class Target:
                     self.wait_ssh(boot_timeout)
                     break
             except BaseException as e:
-                cleanup = self._remove(created)
+                try:
+                    cleanup = self._remove(created)
+                except QnxMcpError as ce:
+                    cleanup = f"cleanup failed: {ce.message}"
+                if old_mode is not None and not os.path.lexists(self.dir):
+                    # The caller made this empty directory; the rollback removed it with the image, so give it back.
+                    with contextlib.suppress(OSError):
+                        self.dir.mkdir(mode=old_mode)
+                        os.chmod(self.dir, old_mode)
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise
@@ -689,14 +698,18 @@ class Target:
         if got is None:
             return False
         pid, fd = got
+        exited = False
         try:
             for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
                 with contextlib.suppress(ProcessLookupError):
                     signal.pidfd_send_signal(fd, sig)
                 if select.select([fd], [], [], wait)[0]:  # a pidfd becomes readable when the process exits
+                    exited = True
                     break
         finally:
             os.close(fd)
+        if not exited:  # keep the PID file: it is the only way to find the process again, and the image must stay
+            raise QnxMcpError("internal_error", f"QEMU for {self.name} (pid {pid}) survived SIGKILL", hint="Check the process on the build host, then retry.")
         with contextlib.suppress(OSError, ValueError):
             pidfile = self.dir / "output" / "qemu.pid"
             if int(pidfile.read_text().strip()) == pid:
@@ -704,18 +717,39 @@ class Target:
         return True
 
     def _remove(self, created_dir: bool) -> str:
-        """Failed create or destroy: stop QEMU, delete the image directory and the server state (not the lock)."""
+        """Failed create or destroy: stop QEMU, delete the image directory and the server state (not the lock).
+        Raises if something could not be deleted, so that nobody reports a removal that did not happen."""
         stopped = self._stop_qemu()
+        left: list[str] = []
+
+        def rmtree(path: Path) -> None:
+            try:
+                shutil.rmtree(path)  # fd-based on Linux: does not follow symlinks inside
+            except OSError as e:
+                if os.path.lexists(path):
+                    left.append(f"{path} ({e.strerror or type(e).__name__})")
+
+        def fail() -> QnxMcpError:
+            return QnxMcpError("internal_error", f"could not delete everything of {self.name}: {'; '.join(left[:3])}",
+                               hint="Fix the permissions of that path on the build host, then call the tool again.")
+
         if created_dir or (self.dir / "local" / "options").is_file() or (self.dir / "local" / "snippets").is_dir():
-            shutil.rmtree(self.dir, ignore_errors=True)  # fd-based on Linux: does not follow symlinks inside
+            rmtree(self.dir)
+            if left:  # keep the state (pinned host key, run records) while the image is still there
+                raise fail()
         for p in self.state.iterdir() if self.state.is_dir() else []:
             if p.name in ("lock", "records.lock", "mkqnximage.log"):
                 continue
             if p.is_dir() and not p.is_symlink():
-                shutil.rmtree(p, ignore_errors=True)
+                rmtree(p)
             else:
-                with contextlib.suppress(OSError):
+                try:
                     p.unlink()
+                except OSError as e:
+                    if os.path.lexists(p):
+                        left.append(f"{p} ({e.strerror or type(e).__name__})")
+        if left:
+            raise fail()
         return f"{'stopped QEMU, ' if stopped else ''}removed {self.dir}"
 
     def destroy(self) -> dict[str, Any]:
@@ -774,19 +808,32 @@ class Target:
                                       hint="Register it with the other arch (x86_64 or aarch64le).")
             except BaseException as e:
                 self._registering = False
-                cleanup = self._remove(True)
+                try:
+                    cleanup = self._remove(True)
+                except QnxMcpError as ce:
+                    cleanup = f"cleanup failed: {ce.message}"
                 if isinstance(e, QnxMcpError):
                     e.details["cleanup"] = cleanup
                 raise
         st["registered"] = True
         return st
 
-    def unregister(self) -> dict[str, Any]:
-        """Forget an SSH-only target: its registration, pinned key and run records on this host. The machine is not touched."""
+    def unregister(self, before: Callable[[], None] | None = None) -> dict[str, Any]:
+        """Forget an SSH-only target: its registration, pinned key and run records on this host. The machine is not touched.
+        before runs once the exclusive lock is held (no run_start can be between its check and its record), and may refuse."""
         if self._ssh is None:
             raise QnxMcpError("target_kind_unsupported", f"{self.name} is a QEMU target; target_unregister only removes SSH-only registrations",
                               hint="Use target_destroy to delete a QEMU target.")
         with self.lock(exclusive=True):
+            # this call may have waited for the lock while the name was unregistered and registered again
+            path = self.dir / SSH_TARGET_FILE
+            if not os.path.lexists(path):
+                raise QnxMcpError("target_not_found", f"{self.name} was unregistered while this call waited", hint="Call target_list to see what is registered.")
+            if load_ssh_config(path) != self._ssh:
+                raise QnxMcpError("target_busy", f"the registration of {self.name} changed while this call waited for the target lock",
+                                  hint="Call target_list, then call target_unregister again if you still mean to remove it.")
+            if before is not None:
+                before()
             detail = self._remove(created_dir=True)
         return {"name": self.name, "unregistered": True, "detail": detail,
                 "note": f"{self._ssh.user}@{self._ssh.host} was not touched; programs and files qnx-mcp put on it (/tmp/qnx-mcp) stay there"}

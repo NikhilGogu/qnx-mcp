@@ -136,7 +136,6 @@ test_slice_e2e.py::test_crash_slice
  "core_path": "/tmp/qnx-mcp/runs/r-412708ca3f98/crash_demo.core",
  "dumper_core_path": "/data/var/dumper/crash_demo.core",
  "remote_path": "/tmp/qnx-mcp/apps/9216f565e767f4b9/crash_demo",
- "duration_ms": 45,
  "core_ready_ms": 0,
  "group_clean": true,
  "next_step": "call get_crash with target='tb' and run_id='r-412708ca3f98' for a source-level backtrace"
@@ -308,17 +307,17 @@ test_slice_e2e.py::test_crash_slice
 ]
 
 --- MCP call log
-target_status(name='tb') -> is_error=False in 0.19s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo') -> is_error=False in 0.06s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', timeout_s=20) -> is_error=False in 0.90s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', cflags=['-g', '-O0', '-DREBUILT=1', '-fno-inline']) -> is_error=False in 0.04s
-get_crash(target='tb', run_id='r-412708ca3f98') -> is_error=False in 0.75s
-get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-412708ca3f98/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo') -> is_error=True in 0.69s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/nobid', ldflags=['-Wl,--build-id=none']) -> is_error=False in 0.04s
-get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-412708ca3f98/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/nobid') -> is_error=True in 0.69s
-get_crash(target='tb', run_id='r-412708ca3f98') -> is_error=True in 0.49s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', args=['0'], timeout_s=20) -> is_error=False in 0.83s
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/bad.c') -> is_error=True in 0.01s
+target_status(name='tb') -> is_error=False
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo') -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', timeout_s=20) -> is_error=False
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', cflags=['-g', '-O0', '-DREBUILT=1', '-fno-inline']) -> is_error=False
+get_crash(target='tb', run_id='r-412708ca3f98') -> is_error=False
+get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-412708ca3f98/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo') -> is_error=True
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/nobid', ldflags=['-Wl,--build-id=none']) -> is_error=False
+get_crash(target='tb', core_path='/tmp/qnx-mcp/runs/r-412708ca3f98/crash_demo.core', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/nobid') -> is_error=True
+get_crash(target='tb', run_id='r-412708ca3f98') -> is_error=True
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/crash_demo', args=['0'], timeout_s=20) -> is_error=False
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_crash_slice0/bad.c') -> is_error=True
 PASSED
 test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its host processes
 
@@ -334,7 +333,6 @@ test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its
  "outcome": "timeout",
  "timed_out": true,
  "signal_name": "SIGKILL",
- "duration_ms": 1503,
  "stdout": "start\n",
  "group_clean": true
 }
@@ -344,27 +342,26 @@ test_slice_e2e.py::test_runner_contract call cancelled by the client; killed its
  "run": {
   "outcome": "exited",
   "exit_code": 0,
-  "group_clean": true,
-  "duration_ms": 26
+  "group_clean": true
  },
  "child_pid": 156991511,
  "processes(pid=child).returned": 0
 }
 
---- cancellation: hang run cancelled after 3 s, no 'hang' process left after 0.6 s, next run ok
+--- cancellation: hang run cancelled after 3 s, no 'hang' process left, next run ok
 
 --- MCP call log
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs.c') -> is_error=False in 0.06s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['$(touch /tmp/qnx-mcp-pwned)', 'a b; touch /tmp/qnx-mcp-pwned', '`id`', "it's", '*', 'line1\nline2', '\u2028sep']) -> is_error=False in 0.85s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'], max_output_kb=1) -> is_error=False in 0.34s
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/hang.c') -> is_error=False in 0.04s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/hang', timeout_s=1.5) -> is_error=False in 2.34s
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/forker.c') -> is_error=False in 0.04s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/forker', timeout_s=10) -> is_error=False in 0.83s
-processes(target='tb', pid=156991511) -> is_error=False in 0.23s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', cwd='/nonexistent-dir') -> is_error=False in 0.39s
-processes(target='tb', name='hang') -> is_error=False in 0.22s
-deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['after-cancel'], timeout_s=10) -> is_error=False in 0.39s
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs.c') -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['$(touch /tmp/qnx-mcp-pwned)', 'a b; touch /tmp/qnx-mcp-pwned', '`id`', "it's", '*', 'line1\nline2', '\u2028sep']) -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'], max_output_kb=1) -> is_error=False
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/hang.c') -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/hang', timeout_s=1.5) -> is_error=False
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/forker.c') -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/forker', timeout_s=10) -> is_error=False
+processes(target='tb', pid=156991511) -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', cwd='/nonexistent-dir') -> is_error=False
+processes(target='tb', name='hang') -> is_error=False
+deploy_and_run(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_runner_contract0/echoargs', args=['after-cancel'], timeout_s=10) -> is_error=False
 PASSED
 test_slice_e2e.py::test_threads_crash 
 --- get_crash threads
@@ -475,7 +472,6 @@ test_slice_e2e.py::test_background_runs_and_inspection
    "timed_out": false,
    "disconnected": false,
    "runner_stopped_by": "SIGTERM",
-   "duration_ms": 2547,
    "group_clean": true,
    "capture_complete": true,
    "stdout_bytes": 94,
@@ -494,20 +490,20 @@ test_slice_e2e.py::test_background_runs_and_inspection
 }
 
 --- MCP call log
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/ticker.c') -> is_error=False in 0.07s
-run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/ticker', timeout_s=60) -> is_error=False in 0.84s
-run_poll(target='tb', run_id='r-f945756899a4', wait_s=2) -> is_error=False in 0.18s
-processes(target='tb', name='ticker', include_threads=True) -> is_error=False in 0.23s
-logs(target='tb', limit=5) -> is_error=False in 0.18s
-run_poll(target='tb', run_id='r-f945756899a4', stdout_offset=42) -> is_error=False in 0.17s
-run_stop(target='tb', run_id='r-f945756899a4') -> is_error=False in 0.34s
-run_poll(target='tb', run_id='r-f945756899a4', stdout_offset=86) -> is_error=False in 0.17s
-processes(target='tb', name='ticker') -> is_error=False in 0.22s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/crash_demo') -> is_error=False in 0.04s
-run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/crash_demo', timeout_s=30) -> is_error=False in 0.34s
-run_poll(target='tb', run_id='r-44886d7881e6', wait_s=10) -> is_error=False in 0.17s
-get_crash(target='tb', run_id='r-44886d7881e6') -> is_error=False in 0.74s
-run_stop(target='tb', run_id='r-0123456789ab') -> is_error=True in 0.00s
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/ticker.c') -> is_error=False
+run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/ticker', timeout_s=60) -> is_error=False
+run_poll(target='tb', run_id='r-f945756899a4', wait_s=2) -> is_error=False
+processes(target='tb', name='ticker', include_threads=True) -> is_error=False
+logs(target='tb', limit=5) -> is_error=False
+run_poll(target='tb', run_id='r-f945756899a4', stdout_offset=42) -> is_error=False
+run_stop(target='tb', run_id='r-f945756899a4') -> is_error=False
+run_poll(target='tb', run_id='r-f945756899a4', stdout_offset=86) -> is_error=False
+processes(target='tb', name='ticker') -> is_error=False
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/crash_demo') -> is_error=False
+run_start(target='tb', binary='/tmp/pytest-of-ubuntu/pytest-58/test_background_runs_and_inspe0/crash_demo', timeout_s=30) -> is_error=False
+run_poll(target='tb', run_id='r-44886d7881e6', wait_s=10) -> is_error=False
+get_crash(target='tb', run_id='r-44886d7881e6') -> is_error=False
+run_stop(target='tb', run_id='r-0123456789ab') -> is_error=True
 PASSED
 test_slice_e2e.py::test_file_transfer 
 --- file_put/file_get
@@ -719,8 +715,7 @@ test_shellfree_e2e.py::test_remote_binary_runs
  "remote_binary": true,
  "binary": null,
  "remote_path": "/tmp/qnx-mcp-test/r1059391/bin/echoargs",
- "binary_sha256": "b610c3606440f8f7c80590e8f4520b11396456b2277706e6c2a27d2ea05ae7d9",
- "duration_ms": 26
+ "binary_sha256": "b610c3606440f8f7c80590e8f4520b11396456b2277706e6c2a27d2ea05ae7d9"
 }
 
 --- deploy_and_run(remote_binary=crash_demo)
@@ -812,7 +807,6 @@ test_shellfree_e2e.py::test_process_stop
  "already_exiting": false,
  "sigkill_sent": false,
  "exited": true,
- "waited_ms": 21,
  "warnings": [],
  "still_running": false
 }
@@ -840,7 +834,6 @@ refused process_stop of ./sleep started in /system/bin: process 168026140 (sleep
   "already_exiting": false,
   "sigkill_sent": false,
   "exited": false,
-  "waited_ms": 1008,
   "warnings": [],
   "still_running": true,
   "next_step": "process 167673879 is still running after 1 s; call process_stop again with kill_after_grace=true (or signal='KILL'), or check its threads with processes(include_threads=true)"
@@ -861,7 +854,6 @@ refused process_stop of ./sleep started in /system/bin: process 168026140 (sleep
   "already_exiting": false,
   "sigkill_sent": true,
   "exited": true,
-  "waited_ms": 1008,
   "warnings": [],
   "still_running": false
  }
@@ -884,7 +876,7 @@ test_lifecycle_e2e.py::test_failed_create_is_cleaned_up
 }
 PASSED
 test_lifecycle_e2e.py::test_create_stop_start_destroy 
---- target_create 20s
+--- target_create
 {
  "name": "tb2",
  "state": "running",
@@ -911,9 +903,9 @@ test_lifecycle_e2e.py::test_create_stop_start_destroy
  }
 ]
 
---- target_stop issued 1 s into a 4 s run waited 3.68 s and stopped the target after the run ended (run outcome timeout)
+--- target_stop issued 1 s into a 4 s run waited and stopped the target after the run ended (run outcome timeout)
 
---- target_start 15s: ssh ok with StrictHostKeyChecking=yes against the keys pinned at creation
+--- target_start: ssh ok with StrictHostKeyChecking=yes against the keys pinned at creation
 
 --- target_destroy
 {
@@ -925,21 +917,21 @@ test_lifecycle_e2e.py::test_create_stop_start_destroy
 }
 
 --- MCP call log
-target_create(name='tb2', cpus=1, options=['--hostname=tb2'], boot_timeout_s=300) -> is_error=False in 20.02s
-target_create(name='tb2') -> is_error=True in 0.00s
-build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 0.06s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/crash_demo') -> is_error=False in 1.39s
-get_crash(target='tb2', run_id='r-26d64764cde2') -> is_error=False in 0.60s
-get_crash(target='tb2', run_id='r-749fc1c0368d') -> is_error=False in 0.58s
-build(path='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang.c') -> is_error=False in 0.02s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang', timeout_s=4) -> is_error=False in 4.59s
-deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang') -> is_error=True in 0.00s
-target_start(name='tb2', boot_timeout_s=240) -> is_error=False in 15.44s
-target_destroy(name='tb2', confirm='tb2') -> is_error=False in 0.07s
-target_list() -> is_error=False in 0.02s
+target_create(name='tb2', cpus=1, options=['--hostname=tb2'], boot_timeout_s=300) -> is_error=False
+target_create(name='tb2') -> is_error=True
+build(path='/home/ubuntu/work/qnx-mcp/examples/crash_demo', output='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/crash_demo') -> is_error=False
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/crash_demo') -> is_error=False
+get_crash(target='tb2', run_id='r-26d64764cde2') -> is_error=False
+get_crash(target='tb2', run_id='r-749fc1c0368d') -> is_error=False
+build(path='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang.c') -> is_error=False
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang', timeout_s=4) -> is_error=False
+deploy_and_run(target='tb2', binary='/tmp/pytest-of-ubuntu/pytest-58/test_create_stop_start_destroy0/hang') -> is_error=True
+target_start(name='tb2', boot_timeout_s=240) -> is_error=False
+target_destroy(name='tb2', confirm='tb2') -> is_error=False
+target_list() -> is_error=False
 PASSED
 test_lifecycle_e2e.py::test_inspection_during_a_run 
---- agent B listed agent A's running 'hang' (pid 170696726) in 0.24 s while A's run was active
+--- agent B listed agent A's running 'hang' (pid 170696726) while A's run was active
 PASSED
 
-======================== 92 passed in 161.11s (0:02:41) ========================
+======================== 92 passed ========================

@@ -14,7 +14,7 @@ QNX publishes Markdown agent skills ([qnx/qnx-agent-skills](https://github.com/q
 | Did it crash? | parse `Memory fault (core dumped)` and `$?` | `outcome: crashed`, `signal_name`, exact core path from dumper, `core_ready_ms` |
 | Which core? | guess `/data/var/dumper/<name>.core` | dumper's own answer (`DCMD_DUMPER_NOTIFYEVENT` pulse, `DCMD_DUMPER_GETPATH`), core moved into the run's directory |
 | Is it the right core? | not checked | build ID, deployed path and pid checked against the run; `core_mismatch` otherwise |
-| Backtrace | copy core, pick gdb, set sysroot, read text | `get_crash`: faulting frame, first user frame, locals, source, every thread |
+| Backtrace | copy core, pick gdb, set sysroot, read text | `get_crash`: faulting frame, first user frame, locals, source, stacks for up to 64 threads with 16 frames each |
 | Services | `nohup`, then tail files by hand | `run_start` / `run_poll` (byte cursors) / `run_stop` |
 | Which target? | whatever IP the agent typed | named targets, allowlist, per-target lock, pinned host key |
 
@@ -134,7 +134,7 @@ The agent is treated as capable, fallible and possibly prompt-injected (it reads
 
 The server binary is `qnx-mcp` from the venv (`pip install -e .`). Environment variables are listed in the README. Tested clients (sanitized transcripts in `docs/evidence/`):
 
-* **Claude Code 2.1.312**: `claude mcp add -s project qnx -- ssh -T <box> env "QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*'" QNX_MCP_TARGETS_DIR=... <venv>/bin/qnx-mcp`, then a headless `claude -p` session: the init event showed the server `connected` with 17 `mcp__qnx__*` tools, the model listed them and called `target_status` (26.7 s for the whole session).
+* **Claude Code 2.1.312**: `claude mcp add -s project qnx -- ssh -T <box> env "QNX_MCP_ALLOW_TARGETS='tb,tb[0-9]*'" QNX_MCP_TARGETS_DIR=... <venv>/bin/qnx-mcp`, then a headless `claude -p` session: the init event showed the server `connected` with 17 `mcp__qnx__*` tools, the model listed them and called `target_status`.
 * **Codex CLI 0.160.0**: `codex exec` with `-c mcp_servers.qnx.command="ssh"` and `-c mcp_servers.qnx.args=[...]`; the transcript shows an `mcp_tool_call` to `target_status` with structured content.
 * **Cursor and VS Code**: config snippets in the README; untested.
 

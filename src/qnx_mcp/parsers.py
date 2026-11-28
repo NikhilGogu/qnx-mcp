@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import struct
 from typing import Any
 
@@ -82,7 +83,10 @@ def parse_diagnostics(output: str, base_dir: str | None = None) -> list[dict[str
             except ValueError:
                 items = None
             if isinstance(items, list):
-                diags.extend(_from_gcc_json(items, base_dir))
+                try:
+                    diags.extend(_from_gcc_json(items, base_dir))
+                except (AttributeError, TypeError, KeyError, IndexError):
+                    pass  # a JSON list from the build's own output, not gcc's diagnostics
                 continue
         m = _IN_FUNCTION.match(line)
         if m:
@@ -159,7 +163,7 @@ def _mi_cstring(s: str, i: int) -> tuple[str, int]:
                 buf.append(esc[nxt])
                 i += 2
                 continue
-            if nxt.isdigit():  # octal escape
+            if nxt in "01234567":  # octal escape
                 j = i + 1
                 while j < len(s) and j < i + 4 and s[j] in "01234567":
                     j += 1
@@ -237,6 +241,8 @@ def parse_mi_results(body: str) -> dict[str, Any]:
                 if body[i] != ",":
                     raise MIParseError(f"expected ',' at {i}")
                 i += 1
+                if i >= len(body):
+                    raise MIParseError("dangling ',' at the end of the record")
     except IndexError:
         raise MIParseError("record ends in the middle of a value") from None
     return res
@@ -389,8 +395,14 @@ _MACHINES = {62: "x86_64", 183: "aarch64le", 3: "x86", 40: "arm"}
 def elf_info(path: str) -> dict[str, Any] | None:
     """Minimal ELF reader: architecture, type, interpreter and debug info presence."""
     try:
-        with open(path, "rb") as f:
-            data = f.read()
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)  # a FIFO with no writer must not block the open
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                data = f.read()
+        finally:
+            os.close(fd)
     except OSError:
         return None
     if len(data) < 64 or data[:4] != b"\x7fELF":
@@ -405,15 +417,18 @@ def elf_info(path: str) -> dict[str, Any] | None:
         e_phoff, e_shoff = struct.unpack_from(end + "II", data, 28)
         e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx = struct.unpack_from(end + "HHHHH", data, 42)
     interp = None
-    for i in range(e_phnum):
-        off = e_phoff + i * e_phentsize
-        p_type = struct.unpack_from(end + "I", data, off)[0]
-        if p_type == 3:  # PT_INTERP
-            if is64:
-                p_offset, _, _, p_filesz = struct.unpack_from(end + "QQQQ", data, off + 8)
-            else:
-                p_offset, _, _, p_filesz = struct.unpack_from(end + "IIII", data, off + 4)
-            interp = data[p_offset : p_offset + p_filesz].rstrip(b"\0").decode("ascii", "replace")
+    try:
+        for i in range(e_phnum):
+            off = e_phoff + i * e_phentsize
+            p_type = struct.unpack_from(end + "I", data, off)[0]
+            if p_type == 3:  # PT_INTERP
+                if is64:
+                    p_offset, _, _, p_filesz = struct.unpack_from(end + "QQQQ", data, off + 8)
+                else:
+                    p_offset, _, _, p_filesz = struct.unpack_from(end + "IIII", data, off + 4)
+                interp = data[p_offset : p_offset + p_filesz].rstrip(b"\0").decode("ascii", "replace")
+    except struct.error:  # the program header table runs past the end of a truncated file
+        pass
     names: list[str] = []
     build_id = None
     try:
